@@ -10,14 +10,14 @@ declaration is honest before a single line runs.
 > The slogan: **AI proposes, the compiler disposes.**
 
 LOOM is a ~150-line s-expression language: a parser, a **static effect checker**, and an
-interpreter. It is a research kernel — small on purpose — and it is **self-verified by 61
+interpreter. It is a research kernel — small on purpose — and it is **self-verified by 66
 checks** that the language can only ever grow *greener* (every new feature must keep them all
 passing).
 
-```
+```console
 $ python3 run_tests.py
 ...
-PASS — 61/61 citadel checks
+PASS — 66/66 citadel checks
 ```
 
 ## The idea in one screen
@@ -80,10 +80,18 @@ the caller's declaration.
 ## What's inside
 
 Effect rows + superset rule · checked seams · effect handlers (`handle` discharges,
-`with` reinterprets) · `if` / `let` · recursion · pure list primitives · first-class
-functions with row-polymorphism · anonymous lambdas & closures · and a hard soundness rule:
-**an unverifiable call is rejected, never assumed pure**. The static checker's vocabulary is
-kept identical to the interpreter's, so nothing type-checks that can't actually run.
+`with` reinterprets) · **capability seams for effect-opaque FFI** · `if` / `let` · recursion ·
+pure list primitives · first-class functions with row-polymorphism · anonymous lambdas &
+closures · and a hard soundness rule: **an unverifiable call is rejected, never assumed
+pure**. The static checker's vocabulary is kept identical to the interpreter's, so nothing
+type-checks that can't actually run.
+
+**Capability seams** are how LOOM stays sound across a boundary it cannot see into. An opaque
+foreign call `(ffi name arg..)` has **no ambient authority** — un-wrapped, it is *refused*. A
+seam is the only thing that grants it authority, and the seam's declared row **is** exactly the
+authority handed across. The runtime enforces it: `(seam (Pure) (ffi untrusted))` makes the
+foreign code's IO/Net **physically impossible**, not merely undeclared. Soundness stops resting
+on trusting an annotation — *no capability granted ⇒ no effect possible*.
 
 - [`loom.py`](loom.py) — parser, effect checker, interpreter.
 - [`run_tests.py`](run_tests.py) — the self-verifying suite (61 checks: it accepts honest
@@ -91,7 +99,7 @@ kept identical to the interpreter's, so nothing type-checks that can't actually 
 
 ## Run it
 
-```
+```console
 python3 run_tests.py
 ```
 

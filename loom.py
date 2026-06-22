@@ -14,6 +14,12 @@ BUILTIN_EFF = {"print": {"IO"}, "net": {"Net"}, "alloc": {"Alloc"}}
 PURE_OPS = {"+", "-", "*", "=", "<", ">",          # pure ops the interpreter runs; legitimate heads, zero effect
             "list", "cons", "head", "tail", "empty"}  # pure list primitives (map/fold are then DEFINABLE in LOOM)
 OP = {"IO": "print", "Net": "net", "Alloc": "alloc"}   # which builtin operation a `with`-handler reinterprets
+_CAPS = []                                              # runtime capability stack: each seam pushes the authority it grants
+def _cap_ok(eff): return (not _CAPS) or (eff in _CAPS[-1])  # top-level host is unrestricted; a seam SANDBOXES its body
+def _foreign_logger(args, out):                        # opaque foreign code that WANTS IO; emits ONLY if IO was granted
+    if _cap_ok("IO"): out.append("foreign:" + str(args[0]))
+    return args[0]
+FOREIGN = {"logger": _foreign_logger}                  # registry of effect-opaque foreign functions reached via (ffi ..)
 
 
 def pname(p): return p[0] if isinstance(p, list) else p          # a param is `name` (value) or `(name eff..)` (fn)
@@ -85,9 +91,15 @@ def infer(node, fns, errs, penv=None):
     if not isinstance(node, list) or not node: return set()
     h = node[0]
     if h == "fn": return set()                          # DEFINING a lambda performs nothing (its cost is at the call)
-    if h == "seam":                                     # (seam (E..) expr..) — CHECKED boundary: cost made explicit
-        decl = set(node[1]); inner = set()
+    if h == "ffi":                                      # (ffi name arg..) — effect-OPAQUE foreign call; '?' = unbounded
+        eff = set()                                     # foreign authority. Only a SEAM (the FFI contract) may cover it,
+        for a in node[2:]: eff |= infer(a, fns, errs, penv)  # so the seam's granted row IS the capability handed across.
+        return eff | {"?"}
+    if h == "seam":                                     # (seam (E..) expr..) — CHECKED boundary == CAPABILITY GRANT:
+        decl = set(node[1]) - {"Pure"}                  # the row it declares is exactly the authority handed to the body
+        inner = set()                                   # (incl. opaque foreign code). 'Pure' names the EMPTY grant.
         for x in node[2:]: inner |= infer(x, fns, errs, penv)
+        inner.discard("?")                              # the seam is WHERE you take responsibility for opaque foreign code
         if inner - decl:
             errs.append(f"seam under-declares: wraps {sorted(inner)} but contract says {sorted(decl)}")
         return decl
@@ -139,8 +151,12 @@ def check(program):
     errors = []
     for n, i in fns.items():
         for b in i["fn"][2:]: infer(b, fns, errors, i["penv"])   # collect seam/handle/with/lambda/unresolved violations
-        if i["eff"] - i["decl"]:
-            errors.append(f"{n}: performs undeclared {sorted(i['eff']-i['decl'])} (declared {sorted(i['decl'])})")
+        eff = i["eff"]
+        if "?" in eff:                                  # an opaque foreign 'ffi' that no seam ever granted authority to
+            errors.append(f"{n}: foreign 'ffi' call has no capability seam (wrap it: (seam (..) ...))")
+            eff = eff - {"?"}
+        if eff - i["decl"]:
+            errors.append(f"{n}: performs undeclared {sorted(eff - i['decl'])} (declared {sorted(i['decl'])})")
         unknown = {e for e in i["decl"] if e not in EFFECTS and not is_var(e)}  # vars ok; uppercase unknowns are not
         if unknown:
             errors.append(f"{n}: unknown effect {sorted(unknown)}")
@@ -166,10 +182,18 @@ def ev(node, env, fns, out, handlers=None):
     if isinstance(node, str): return env.get(node, node)
     h = node[0]
     if h == "fn": return Closure(node[1], node[2:], env)   # a lambda literal evaluates to a closure over env
-    if h == "seam":
-        r = None
-        for x in node[2:]: r = ev(x, env, fns, out, handlers)
+    if h == "seam":                                     # narrow runtime authority to exactly the granted row, then run
+        _CAPS.append(set(node[1]) - {"Pure"})
+        try:
+            r = None
+            for x in node[2:]: r = ev(x, env, fns, out, handlers)
+        finally:
+            _CAPS.pop()
         return r
+    if h == "ffi":                                      # foreign call: run the registered fn under the current grant
+        f = FOREIGN.get(node[1])
+        if f is None: raise LoomError(f"unknown foreign fn: {node[1]}")
+        return f([ev(x, env, fns, out, handlers) for x in node[2:]], out)
     if h == "handle":                                   # honest discharge: handled IO captured locally, never emitted
         sink = [] if "IO" in set(node[1]) else out
         r = None
@@ -208,9 +232,15 @@ def ev(node, env, fns, out, handlers=None):
     if h == "empty": return 1 if len(a[0]) == 0 else 0
     if h in OP.values() and h in handlers:              # a reinterpreted operation -> route to its handler fn
         return call_fn(handlers[h], a, fns, out, {k: v for k, v in handlers.items() if k != h})  # no self-recursion
-    if h == "print": out.append(str(a[0])); return a[0]
-    if h == "net": return f"<net {a[0]}>"
-    if h == "alloc": return list(range(a[0])) if a else []
+    if h == "print":
+        if not _cap_ok("IO"): raise LoomError("capability denied: IO not granted by enclosing seam")
+        out.append(str(a[0])); return a[0]
+    if h == "net":
+        if not _cap_ok("Net"): raise LoomError("capability denied: Net not granted by enclosing seam")
+        return f"<net {a[0]}>"
+    if h == "alloc":
+        if not _cap_ok("Alloc"): raise LoomError("capability denied: Alloc not granted by enclosing seam")
+        return list(range(a[0])) if a else []
     fv = None                                           # resolve the head to a function: name, var->name, or closure
     if isinstance(h, str):
         if h in fns: fv = fns[h]
@@ -236,5 +266,6 @@ def run_call(program_src, call_src):
     """Static-check a program, then evaluate one call against it. Rejects if it fails the effect checker."""
     fns, errs = check(parse(program_src))
     if errs: raise LoomError("; ".join(errs))
+    _CAPS.clear()
     out = []
     return ev(parse(call_src)[0], {}, fns, out), out

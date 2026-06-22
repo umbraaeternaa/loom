@@ -69,6 +69,11 @@ CASES = [
     ("map over list, pure","(defx sq () (fn (x) (* x x))) (defx map (e) (fn ((f e) xs) (if (empty xs) (list) (cons (f (head xs)) (map f (tail xs)))))) (defx demo () (fn () (map sq (list 1 2 3))))", True),
     ("map propagates IO","(defx lg (IO) (fn (x) (print x))) (defx map (e) (fn ((f e) xs) (if (empty xs) (list) (cons (f (head xs)) (map f (tail xs)))))) (defx dio () (fn () (map lg (list 1 2 3))))", False),
     ("map IO declared","(defx lg (IO) (fn (x) (print x))) (defx map (e) (fn ((f e) xs) (if (empty xs) (list) (cons (f (head xs)) (map f (tail xs)))))) (defx dio (IO) (fn () (map lg (list 1 2 3))))", True),
+    # --- grown 2026-06-22: CAPABILITY SEAMS for effect-opaque FFI (no ambient authority; the grant IS the contract) ---
+    ("ffi has no ambient authority", '(defx raw () (fn (x) (ffi "logger" x)))', False),       # opaque foreign call un-seamed -> REFUSED
+    ("ffi under capability seam",    '(defx fa (IO) (fn (x) (seam (IO) (ffi "logger" x))))', True),   # granted IO, declared IO
+    ("ffi sandboxed to pure",        '(defx fb () (fn (x) (seam (Pure) (ffi "logger" x))))', True),    # grant nothing -> provably pure
+    ("ffi grant must surface",       '(defx fc () (fn (x) (seam (IO) (ffi "logger" x))))', False),     # grant IO but hide it -> REFUSED
 ]
 
 
@@ -153,7 +158,14 @@ def main():
         print(f"  {'ok  ' if r16 else 'FAIL'} runtime lists: (suml 1..4)={v16} | map sq=>{v17} | map lg emits {o18}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime lists: {e}")
-    total = len(CASES) + 10
+    try:                                               # runtime: the SAME opaque foreign call, bounded by its seam's grant
+        v19, o19 = run_call('(defx fa (IO) (fn (x) (seam (IO) (ffi "logger" x))))', "(fa 7)")
+        v20, o20 = run_call('(defx fb () (fn (x) (seam (Pure) (ffi "logger" x))))', "(fb 7)")
+        r19 = (v19 == 7 and o19 == ["foreign:7"] and v20 == 7 and o20 == []); ok += r19
+        print(f"  {'ok  ' if r19 else 'FAIL'} runtime ffi: IO-granted emits {o19} | sandboxed-to-pure emits {o20}")
+    except (LoomError, RecursionError) as e:
+        print(f"  FAIL runtime ffi: {e}")
+    total = len(CASES) + 11
     print(f"{'PASS' if ok == total else 'FAIL'} — {ok}/{total} citadel checks")
 
 
