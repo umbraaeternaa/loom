@@ -71,26 +71,50 @@ def latent_of(arg, fns, penv, errs):
     return set()
 
 
-def _uses(node, op):
-    """Count performances of operation `op` along ONE runtime path (for affine/use-once seams).
-    `if` runs only one branch -> max of the two; a `fn` literal is latent (not performed here) -> 0.
-    NB: counts only DIRECT operation heads, not Net/IO reached through a callee — the bounded first probe."""
-    if not isinstance(node, list) or not node: return 0
-    h = node[0]
-    if h == "fn": return 0
-    if h == "if": return _uses(node[1], op) + max(_uses(node[2], op), _uses(node[3], op))
-    return (1 if h == op else 0) + sum(_uses(a, op) for a in node[1:])
+# use-count lattice for AFFINE (use-once) seams: 0 (unused) < 1 (once) < "M" (many). add saturates; lub picks the higher.
+def _uadd(a, b): return b if a == 0 else a if b == 0 else "M"          # 1+1, 1+M, M+x -> M (>=2 uses = many)
+def _ulub(a, b): o = {0: 0, 1: 1, "M": 2}; return a if o[a] >= o[b] else b   # for if-branches: only one runs
+_OPEFF = {op: E for E, op in OP.items()}                              # reverse of OP: net->Net, print->IO, alloc->Alloc
 
 
-def _calls_effect(node, fns, penv, E):
-    """True if effect E is performed THROUGH a call (user fn or fn-typed param) anywhere in node — a use the
-    direct use-counter can't see. Under a linear seam1 that makes the count unverifiable, so we refuse it."""
-    if not isinstance(node, list) or not node: return False
+def _ucount(node, fns, penv):
+    """Abstract use-count {effect: 0/1/'M'} performed along ONE path — threaded through the fixpoint via fns[h]['uc'],
+    so reuse via a CALLEE or RECURSION (not just a direct op) reaches 'many'. The basis of sound move-only tracking."""
+    out = {}
+    def add(dd):
+        for e, c in dd.items(): out[e] = _uadd(out.get(e, 0), c)
+    if not isinstance(node, list) or not node: return out
     h = node[0]
-    if isinstance(h, str):
-        if h in fns and E in fns[h].get("eff", set()): return True
-        if penv and h in penv and E in penv[h]: return True
-    return any(_calls_effect(a, fns, penv, E) for a in node[1:])
+    if h == "fn": return out                            # a lambda literal is latent (counted when called)
+    if h == "if":
+        add(_ucount(node[1], fns, penv))                # the condition always runs
+        tc, ec = _ucount(node[2], fns, penv), _ucount(node[3], fns, penv)
+        for e in set(tc) | set(ec): out[e] = _uadd(out.get(e, 0), _ulub(tc.get(e, 0), ec.get(e, 0)))
+        return out
+    if h == "let":
+        add(_ucount(node[1][1], fns, penv))
+        for x in node[2:]: add(_ucount(x, fns, penv))
+        return out
+    if h in ("seam", "seam1"):                          # a grant is pass-through for counting (the check happens AT seam1)
+        for x in node[2:]: add(_ucount(x, fns, penv))
+        return out
+    if h == "handle":                                   # handled effects discharged locally -> 0 uses escape upward
+        for x in node[2:]: add(_ucount(x, fns, penv))
+        for e in set(node[1]): out[e] = 0
+        return out
+    if h == "with":                                     # reinterpreted effect discharged upward (handler effect: v0 skip)
+        for x in node[3:]: add(_ucount(x, fns, penv))
+        out[node[1]] = 0
+        return out
+    for a in node[1:]: add(_ucount(a, fns, penv))       # operands
+    if h in _OPEFF: out[_OPEFF[h]] = _uadd(out.get(_OPEFF[h], 0), 1)   # a direct effectful op = one use
+    elif h == "ffi": out["FFI"] = _uadd(out.get("FFI", 0), 1)
+    elif h in fns:
+        for e, c in fns[h].get("uc", {}).items(): out[e] = _uadd(out.get(e, 0), c)   # add the callee's per-call usage
+    elif penv and h in penv:
+        for e in penv[h]:
+            if not is_var(e): out[e] = "M"              # through a fn-param: unknown multiplicity -> conservatively many
+    return out
 
 
 def instantiate(callee, args, fns, penv, errs):
@@ -124,16 +148,13 @@ def infer(node, fns, errs, penv=None):
         inner.discard("?")                              # the seam is WHERE you take responsibility for opaque foreign code
         if inner - decl:
             errs.append(f"seam under-declares: wraps {sorted(inner)} but contract says {sorted(decl)}")
-        if h == "seam1":                                # affinity rides AS A PER-SEAM MULTIPLICITY — the row stays a
-            for E in sorted(decl):                      # flat idempotent SET (superset inference untouched); we only
-                op = OP.get(E) or ("ffi" if E == "FFI" else None)   # additionally count uses of the granted capability.
-                if any(_calls_effect(x, fns, penv, E) for x in node[2:]):   # SOUND: a use through a call/recursion
-                    errs.append(f"linear capability {E} used through a call — not statically countable; use it directly")
-                    continue                            # is uncountable -> refuse it (unknown = reject), not silently allow
-                if op is None: continue
-                n = sum(_uses(x, op) for x in node[2:])
-                if n > 1:
-                    errs.append(f"linear capability {E} used {n}x (granted once)")
+        if h == "seam1":                                # affinity rides AS A PER-SEAM MULTIPLICITY — the row stays a flat
+            uc = {}                                     # idempotent SET (superset inference untouched); we additionally
+            for x in node[2:]:                          # carry a use-count LATTICE (0/1/many) that flows THROUGH calls
+                for e, c in _ucount(x, fns, penv).items(): uc[e] = _uadd(uc.get(e, 0), c)   # + recursion (whole-program)
+            for E in sorted(decl):
+                if uc.get(E, 0) == "M":
+                    errs.append(f"linear capability {E} used more than once (incl. via a call or recursion)")
         return decl
     if h == "handle":                                   # (handle (E..) expr..) — DISCHARGE effects E locally (drop)
         hdl = set(node[1])
@@ -175,11 +196,15 @@ def check(program):
         if isinstance(top, list) and top and top[0] == "defx":
             fn = top[3]
             penv = {pname(p): platent(p) for p in fn[1] if platent(p) is not None}
-            fns[top[1]] = {"decl": set(top[2]), "fn": fn, "params": fn[1], "penv": penv, "eff": set()}
-    for _ in range(len(fns) + 2):                       # fixpoint over callee effects (also instantiates effect vars)
+            fns[top[1]] = {"decl": set(top[2]), "fn": fn, "params": fn[1], "penv": penv, "eff": set(), "uc": {}}
+    for _ in range(len(fns) + 2):                       # fixpoint over callee effects + use-counts (both monotone)
         for i in fns.values():
             body = i["fn"][2:]; tmp = []
             i["eff"] = set().union(*[infer(b, fns, tmp, i["penv"]) for b in body]) if body else set()
+            uc = {}                                     # per-function use-count {effect: 0/1/'M'} for affine tracking
+            for b in body:
+                for e, c in _ucount(b, fns, i["penv"]).items(): uc[e] = _uadd(uc.get(e, 0), c)
+            i["uc"] = uc
     errors = []
     for n, i in fns.items():
         for b in i["fn"][2:]: infer(b, fns, errors, i["penv"])   # collect seam/handle/with/lambda/unresolved violations

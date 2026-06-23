@@ -85,6 +85,9 @@ CASES = [
     ("affine: indirect via callee refused", '(defx hit (Net) (fn (u) (net u))) (defx f5 (Net) (fn (u) (seam1 (Net) (hit u) (hit u))))', False),
     ("affine: indirect via recursion refused", '(defx lp (Net) (fn (n) (if (< n 1) 0 (let (z (net n)) (lp (- n 1)))))) (defx f6 (Net) (fn (n) (seam1 (Net) (lp n))))', False),
     ("affine: single direct use still ok", '(defx pure1 () (fn (x) (* x x))) (defx f7 (Net) (fn (u) (seam1 (Net) (let (a (pure1 u)) (net a)))))', True),
+    # --- grown 2026-06-23: USE-COUNT LATTICE (0/1/many) through the fixpoint — whole-program affine tracking, precise ---
+    ("affine: single call use ok", '(defx hit (Net) (fn (u) (net u))) (defx f8 (Net) (fn (u) (seam1 (Net) (hit u))))', True),       # callee uses Net once -> total 1 -> OK (precision: not over-rejected)
+    ("affine: if-branch calls not summed", '(defx hit (Net) (fn (u) (net u))) (defx f9 (Net) (fn (u c) (seam1 (Net) (if c (hit u) (hit u)))))', True),  # one branch runs -> 1
 ]
 
 
