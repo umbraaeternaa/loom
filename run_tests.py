@@ -235,13 +235,14 @@ def main():
         pairs = [('(defx sq () (fn (x) (* x x)))', "(sq 9)"),
                  ('(defx fact () (fn (n) (if (< n 2) 1 (* n (fact (- n 1))))))', "(fact 6)"),
                  (MAP + ' (defx demo () (fn () (map sq (list 1 2 3 4))))', "(demo)"),
-                 ('(defx g () (fn () (get (record (a 10) (b 20)) b)))', "(g)")]
+                 ('(defx g () (fn () (get (record (a 10) (b 20)) b)))', "(g)"),
+                 ('(defx g (IO) (fn (x) (print x)))', "(g 7)")]   # EFFECTFUL: prints 7, returns 7 (value AND output must match)
         allok = True
         for prog, call in pairs:
-            interp = run_call(prog, call)[0]; comp = run_compiled(prog, call)
-            if interp != comp: allok = False; print(f"  FAIL codegen: {call} interp={interp} compiled={comp}")
+            cval, cout = run_compiled(prog, call); ival, iout = run_call(prog, call)
+            if (cval, cout) != (ival, iout): allok = False; print(f"  FAIL codegen: {call} compiled=({cval},{cout}) interp=({ival},{iout})")
         ok += allok
-        print(f"  {'ok  ' if allok else 'FAIL'} backend: compiled Python == interpreter ({len(pairs)} programs)")
+        print(f"  {'ok  ' if allok else 'FAIL'} backend: compiled Python == interpreter, value+output ({len(pairs)} programs)")
     except Exception as e:
         print(f"  FAIL backend: {e}")
     try:                                               # SECOND TARGET (JS): Node output must match the interpreter
@@ -251,9 +252,10 @@ def main():
         if shutil.which("node"):
             jok = True
             for prog, call in pairs:
-                if run_js(prog, call) != run_call(prog, call)[0]: jok = False; print(f"  FAIL js: {call}")
+                jval, jout = run_js(prog, call); ival, iout = run_call(prog, call)
+                if (jval, jout) != (ival, iout): jok = False; print(f"  FAIL js: {call} node=({jval},{jout}) interp=({ival},{iout})")
             ok += jok
-            print(f"  {'ok  ' if jok else 'FAIL'} backend(JS): Node output == interpreter ({len(pairs)} programs)")
+            print(f"  {'ok  ' if jok else 'FAIL'} backend(JS): Node value+output == interpreter ({len(pairs)} programs)")
         else:
             ok += 1; print("  ok   backend(JS): compile_js emits source (node absent -> exec check skipped)")
     except Exception as e:

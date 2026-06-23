@@ -441,15 +441,16 @@ def _emit(node):
     if h == "fn": return f"(lambda {','.join(pname(p) for p in node[1])}: {_emit(node[2:][-1])})"
     if h in ("seam", "seam1", "resource"): return _emit(node[2:][-1])   # value-transparent (effects are a static layer)
     if h == "use": return "'<used>'"
-    if h in ("print", "net", "alloc", "ffi", "handle", "with", "variant", "match"):
-        raise LoomError(f"codegen v0 does not cover effectful '{h}' yet (computational core only)")
+    if h == "print": return f"_p({_emit(node[1])})"                     # IO: print AND return the value (as the interpreter)
+    if h in ("net", "alloc", "ffi", "handle", "with", "variant", "match"):
+        raise LoomError(f"codegen v0 does not cover '{h}' yet")
     return f"{h}(" + ",".join(_emit(a) for a in node[1:]) + ")"          # call: a user fn, or a closure-valued name
 
 def compile_py(program_src):
     """Compile a CHECKED LOOM program to portable Python source (one def per defx). Rejects if it fails the checker."""
     fns, errs = check(parse(program_src))
     if errs: raise LoomError("; ".join(errs))
-    lines = []
+    lines = ["def _p(x):\n    print(x); return x"]                       # IO prelude: print performs + returns the value
     for top in parse(program_src):
         if isinstance(top, list) and top and top[0] == "defx":
             fn = top[3]; ps = ",".join(pname(p) for p in fn[1]); body = _emit(fn[2:][-1]) if fn[2:] else "None"
@@ -457,9 +458,12 @@ def compile_py(program_src):
     return "\n".join(lines)
 
 def run_compiled(program_src, call_src):
-    """Compile to Python, run it, return the call's value — proof the emitted code MATCHES the interpreter."""
-    ns = {}; exec(compile_py(program_src), ns)
-    return eval(_emit(parse(call_src)[0]), ns)
+    """Compile to Python, run it; return (value, output-lines) — proof the emitted code MATCHES the interpreter."""
+    import io, contextlib
+    ns = {}; exec(compile_py(program_src), ns); buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        val = eval(_emit(parse(call_src)[0]), ns)
+    return val, buf.getvalue().splitlines()
 
 
 # ---- SECOND TARGET: JavaScript. Same emit pattern -> a DIFFERENT platform (browser / Node / any OS) => cross-platform. ----
@@ -485,15 +489,16 @@ def _emit_js(node):
     if h == "fn": return f"(({','.join(pname(p) for p in node[1])})=>{_emit_js(node[2:][-1])})"
     if h in ("seam", "seam1", "resource"): return _emit_js(node[2:][-1])
     if h == "use": return "'<used>'"
-    if h in ("print", "net", "alloc", "ffi", "handle", "with", "variant", "match"):
-        raise LoomError(f"JS codegen v0 does not cover effectful '{h}' yet")
+    if h == "print": return f"_p({_emit_js(node[1])})"                  # IO: print AND return the value
+    if h in ("net", "alloc", "ffi", "handle", "with", "variant", "match"):
+        raise LoomError(f"JS codegen v0 does not cover '{h}' yet")
     return f"{h}(" + ",".join(_emit_js(a) for a in node[1:]) + ")"
 
 def compile_js(program_src):
     """Compile a CHECKED LOOM program to portable JavaScript source (one function per defx)."""
     fns, errs = check(parse(program_src))
     if errs: raise LoomError("; ".join(errs))
-    lines = []
+    lines = ["function _p(x){ console.log(x); return x; }"]              # IO prelude
     for top in parse(program_src):
         if isinstance(top, list) and top and top[0] == "defx":
             fn = top[3]; ps = ",".join(pname(p) for p in fn[1]); body = _emit_js(fn[2:][-1]) if fn[2:] else "null"
@@ -501,12 +506,16 @@ def compile_js(program_src):
     return "\n".join(lines)
 
 def run_js(program_src, call_src):
-    """Compile to JS, run it through Node, return the parsed value — proof the JS target matches the interpreter. Needs node."""
+    """Compile to JS, run through Node; return (value, output-lines) — proof the JS target matches the interpreter. Needs node."""
     import subprocess, json as _json
-    js = compile_js(program_src) + "\nconsole.log(JSON.stringify(" + _emit_js(parse(call_src)[0]) + "))"
+    js = compile_js(program_src) + "\nconsole.log('__R__'+JSON.stringify(" + _emit_js(parse(call_src)[0]) + "))"
     r = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=15)
     if r.returncode != 0: raise LoomError("node: " + r.stderr.strip()[:200])
-    return _json.loads(r.stdout.strip())
+    lines = r.stdout.splitlines(); val = None; out = []
+    for ln in lines:
+        if ln.startswith("__R__"): val = _json.loads(ln[5:])
+        else: out.append(ln)
+    return val, out
 
 
 # ---- CLI: turn the kernel into a usable TOOL. `python3 loom.py <check|run|build> file.loom [call] [--target py|js]` ----

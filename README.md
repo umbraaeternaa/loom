@@ -82,7 +82,7 @@ the caller's declaration.
 Effect rows + superset rule · checked seams · effect handlers (`handle` discharges,
 `with` reinterprets) · **capability seams for effect-opaque FFI** · **affine (use-once) seams** + **linear resources** + **linear params** (use-exactly-once, carried across call boundaries) · typed resources can also carry an effect — open-once, use performs it, close-once · records (product data) · sum types + pattern matching · `if` / `let` · recursion ·
 pure list primitives · first-class functions with row-polymorphism · anonymous lambdas &
-closures · a BACKEND that compiles checked code to portable source — one verified program runs on both Python AND JavaScript (same pattern -> C/WASM) · and a hard soundness rule: **an unverifiable call is rejected, never assumed
+closures · a BACKEND that compiles checked code to portable source — one verified program — even one that does I/O — runs on both Python AND JavaScript with identical output (same pattern -> C/WASM) · and a hard soundness rule: **an unverifiable call is rejected, never assumed
 pure**. The static checker's vocabulary is kept identical to the interpreter's, so nothing
 type-checks that can't actually run.
 
