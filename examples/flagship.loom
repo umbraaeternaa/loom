@@ -1,0 +1,28 @@
+; flagship.loom — the whole point of LOOM in one small program.
+;
+;   python3 loom.py check examples/flagship.loom   # the compiler PROVES it is safe
+;   python3 loom.py run   examples/flagship.loom   # => 42
+;
+; The story: run an UNTRUSTED step (think: a snippet an AI or a 3rd party wrote)
+; through (1) a capability sandbox that makes its I/O physically impossible, and
+; (2) a LINEAR resource that must be opened and closed exactly once — and return
+; a TYPED result. Nothing here is trusted on its word; the checker proves it all.
+
+; The untrusted step WANTS to reach the outside world (ffi "logger").
+; We wrap it in a seam that grants it NOTHING (Pure) — so at runtime its I/O
+; cannot happen, and the checker confirms this whole function is Pure.
+(defx untrusted () (fn (x) (seam (Pure) (ffi "logger" x))))
+
+; Process one item: open a LINEAR resource `conn`, use it exactly once, run the
+; sandboxed step, and wrap the outcome in a typed result (Ok value).
+(defx process () (fn (item)
+  (resource conn
+    (let (r (use conn))
+      (variant Ok (untrusted item))))))
+
+; main matches on the typed result. The compiler has already proven: the untrusted
+; code could not touch the network/I/O, and the resource cannot leak or double-close.
+(defx main () (fn ()
+  (match (process 42)
+    ((Ok v) v)
+    ((Err e) 0))))

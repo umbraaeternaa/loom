@@ -118,6 +118,18 @@ python3 loom.py build examples/demo.loom --target js   # compile the checked pro
 The same verified program runs in the interpreter, compiles to **Python**, and compiles to
 **JavaScript** (Node / browser / any OS) — one checked source, many platforms.
 
+## The whole idea in one program
+
+[`examples/flagship.loom`](examples/flagship.loom) runs an **untrusted** step (think: code an AI
+or a third party wrote) through a **capability sandbox** that makes its I/O *physically impossible*,
+across a **linear resource** that must be opened and closed exactly once, and returns a **typed
+result** — and the checker *proves* it is all safe before it runs:
+
+```console
+python3 loom.py check examples/flagship.loom   # the compiler proves it is safe
+python3 loom.py run   examples/flagship.loom   # => 42  (the untrusted step emitted nothing — sandboxed)
+```
+
 ## Honest status & prior art
 
 This is **alpha** — a v0 research kernel, deliberately tiny. It is grown incrementally; every

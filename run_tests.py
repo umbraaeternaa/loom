@@ -114,6 +114,8 @@ CASES = [
     ("match nullary arm", '(defx m2 () (fn () (match (variant None 0) ((Some x) x) ((None) 7))))', True),
     ("match arm effect surfaces", '(defx m3 () (fn (e) (match e ((Some x) (print x)) ((None) 0))))', False),
     ("match arm effect declared ok", '(defx m4 (IO) (fn (e) (match e ((Some x) (print x)) ((None) 0))))', True),
+    # --- flagship 2026-06-23: untrusted code sandboxed (capability seam) + linear resource + typed result, all PROVEN ---
+    ("flagship: sandboxed + linear + typed", '(defx untrusted () (fn (x) (seam (Pure) (ffi "logger" x)))) (defx process () (fn (item) (resource conn (let (r (use conn)) (variant Ok (untrusted item)))))) (defx main () (fn () (match (process 42) ((Ok v) v) ((Err e) 0))))', True),
 ]
 
 
@@ -267,7 +269,14 @@ def main():
         print(f"  {'ok  ' if r26 else 'FAIL'} runtime match: (Some 5)={v26} (None)={v27}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime match: {e}")
-    total = len(CASES) + 18
+    try:                                               # FLAGSHIP: it runs to 42 AND the untrusted step emits nothing (sandboxed)
+        FLAG = '(defx untrusted () (fn (x) (seam (Pure) (ffi "logger" x)))) (defx process () (fn (item) (resource conn (let (r (use conn)) (variant Ok (untrusted item)))))) (defx main () (fn () (match (process 42) ((Ok v) v) ((Err e) 0))))'
+        v28, o28 = run_call(FLAG, "(main)")
+        r28 = (v28 == 42 and o28 == []); ok += r28   # empty output => the untrusted ffi was physically sandboxed
+        print(f"  {'ok  ' if r28 else 'FAIL'} flagship: (main)={v28}, untrusted output={o28} (sandboxed)")
+    except (LoomError, RecursionError) as e:
+        print(f"  FAIL flagship: {e}")
+    total = len(CASES) + 19
     print(f"{'PASS' if ok == total else 'FAIL'} — {ok}/{total} citadel checks")
 
 
