@@ -483,3 +483,38 @@ def run_js(program_src, call_src):
     r = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=15)
     if r.returncode != 0: raise LoomError("node: " + r.stderr.strip()[:200])
     return _json.loads(r.stdout.strip())
+
+
+# ---- CLI: turn the kernel into a usable TOOL. `python3 loom.py <check|run|build> file.loom [call] [--target py|js]` ----
+def _cli(argv):
+    flags, pos, i = {}, [], 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--target" and i + 1 < len(argv): flags["target"] = argv[i+1]; i += 2
+        elif a.startswith("--target="): flags["target"] = a.split("=", 1)[1]; i += 1
+        else: pos.append(a); i += 1
+    if len(pos) < 2:
+        print("usage: python3 loom.py <check|run|build> FILE [call] [--target py|js]"); return 2
+    cmd, path = pos[0], pos[1]; call = pos[2] if len(pos) > 2 else "(main)"
+    try: src = open(path).read()
+    except OSError as e: print("cannot read file: " + str(e)); return 2
+    if cmd == "check":
+        _, errs = check(parse(src))
+        if errs:
+            print("REJECTED:"); [print("  - " + e) for e in errs]; return 1
+        print(f"OK — checked, all effects honest"); return 0
+    if cmd == "run":
+        try: val, out = run_call(src, call)
+        except LoomError as e: print("REJECTED: " + str(e)); return 1
+        for line in out: print(line)
+        print("=> " + repr(val)); return 0
+    if cmd == "build":
+        tgt = flags.get("target", "py")
+        try: print(compile_js(src) if tgt == "js" else compile_py(src))
+        except LoomError as e: print("REJECTED: " + str(e)); return 1
+        return 0
+    print("unknown command: " + cmd); return 2
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(_cli(sys.argv[1:]))

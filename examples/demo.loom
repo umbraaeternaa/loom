@@ -1,0 +1,16 @@
+; LOOM demo — a tiny program you can actually run. Try (from the repo root):
+;   python3 loom.py check examples/demo.loom
+;   python3 loom.py run   examples/demo.loom
+;   python3 loom.py build examples/demo.loom --target js
+;
+; Every function declares its effects; the checker proves it honest before anything runs.
+
+(defx square () (fn (x) (* x x)))
+
+; map is DEFINED in LOOM (not built in) — and the effect of `f` flows through it.
+(defx map (e) (fn ((f e) xs)
+  (if (empty xs) (list) (cons (f (head xs)) (map f (tail xs))))))
+
+; main squares a list. It's pure, so it runs in the interpreter AND compiles,
+; unchanged, to both Python and JavaScript.
+(defx main () (fn () (map square (list 1 2 3 4 5))))

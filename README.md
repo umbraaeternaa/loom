@@ -105,6 +105,19 @@ python3 run_tests.py
 
 No dependencies — pure Python 3.
 
+## Use it as a tool
+
+LOOM ships a small CLI — write a `.loom` file and run it:
+
+```console
+python3 loom.py check examples/demo.loom            # prove every effect is honest (else REJECTED)
+python3 loom.py run   examples/demo.loom            # => [1, 4, 9, 16, 25]
+python3 loom.py build examples/demo.loom --target js   # compile the checked program to JavaScript
+```
+
+The same verified program runs in the interpreter, compiles to **Python**, and compiles to
+**JavaScript** (Node / browser / any OS) — one checked source, many platforms.
+
 ## Honest status & prior art
 
 This is **alpha** — a v0 research kernel, deliberately tiny. It is grown incrementally; every
