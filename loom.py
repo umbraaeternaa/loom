@@ -391,3 +391,48 @@ def run_call(program_src, call_src):
     _CAPS.clear()
     out = []
     return ev(parse(call_src)[0], {}, fns, out), out
+
+
+# ---- BACKEND: compile CHECKED LOOM to portable target source (v0 target = Python; same emit pattern -> JS/C/WASM).
+# "AI proposes -> the compiler DISPOSES -> and EMITS verified code that runs anywhere." Covers the computational core.
+def _emit(node):
+    if isinstance(node, int): return str(node)
+    if isinstance(node, str): return node                              # variable / symbol
+    h = node[0]
+    if h == "+": return "(" + "+".join(_emit(a) for a in node[1:]) + ")"
+    if h == "-": return f"({_emit(node[1])}-{_emit(node[2])})"
+    if h == "*": return "(" + "*".join(_emit(a) for a in node[1:]) + ")"
+    if h == "=": return f"(1 if ({_emit(node[1])}=={_emit(node[2])}) else 0)"
+    if h == "<": return f"(1 if ({_emit(node[1])}<{_emit(node[2])}) else 0)"
+    if h == ">": return f"(1 if ({_emit(node[1])}>{_emit(node[2])}) else 0)"
+    if h == "if": return f"({_emit(node[2])} if ({_emit(node[1])}!=0) else {_emit(node[3])})"
+    if h == "let": return f"(lambda {node[1][0]}: {_emit(node[2:][-1])})({_emit(node[1][1])})"
+    if h == "list": return "[" + ",".join(_emit(a) for a in node[1:]) + "]"
+    if h == "cons": return f"([{_emit(node[1])}]+{_emit(node[2])})"
+    if h == "head": return f"({_emit(node[1])}[0])"
+    if h == "tail": return f"({_emit(node[1])}[1:])"
+    if h == "empty": return f"(1 if len({_emit(node[1])})==0 else 0)"
+    if h == "record": return "{" + ",".join(f"{fld[0]!r}:{_emit(fld[1])}" for fld in node[1:] if isinstance(fld, list)) + "}"
+    if h == "get": return f"({_emit(node[1])}[{node[2]!r}])"
+    if h == "fn": return f"(lambda {','.join(pname(p) for p in node[1])}: {_emit(node[2:][-1])})"
+    if h in ("seam", "seam1", "resource"): return _emit(node[2:][-1])   # value-transparent (effects are a static layer)
+    if h == "use": return "'<used>'"
+    if h in ("print", "net", "alloc", "ffi", "handle", "with"):
+        raise LoomError(f"codegen v0 does not cover effectful '{h}' yet (computational core only)")
+    return f"{h}(" + ",".join(_emit(a) for a in node[1:]) + ")"          # call: a user fn, or a closure-valued name
+
+def compile_py(program_src):
+    """Compile a CHECKED LOOM program to portable Python source (one def per defx). Rejects if it fails the checker."""
+    fns, errs = check(parse(program_src))
+    if errs: raise LoomError("; ".join(errs))
+    lines = []
+    for top in parse(program_src):
+        if isinstance(top, list) and top and top[0] == "defx":
+            fn = top[3]; ps = ",".join(pname(p) for p in fn[1]); body = _emit(fn[2:][-1]) if fn[2:] else "None"
+            lines.append(f"def {top[1]}({ps}): return {body}")
+    return "\n".join(lines)
+
+def run_compiled(program_src, call_src):
+    """Compile to Python, run it, return the call's value — proof the emitted code MATCHES the interpreter."""
+    ns = {}; exec(compile_py(program_src), ns)
+    return eval(_emit(parse(call_src)[0]), ns)

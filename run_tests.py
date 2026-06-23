@@ -4,7 +4,7 @@
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
-from loom import parse, check, run_call, LoomError
+from loom import parse, check, run_call, run_compiled, LoomError
 
 # (name, source, should_be_accepted)
 CASES = [
@@ -225,7 +225,21 @@ def main():
         print(f"  {'ok  ' if r24 else 'FAIL'} runtime records: (get a)={v24} (get b)={v25}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime records: {e}")
-    total = len(CASES) + 15
+    try:                                               # BACKEND: compiled (Python codegen) must match the interpreter
+        MAP = '(defx sq () (fn (x) (* x x))) (defx map (e) (fn ((f e) xs) (if (empty xs) (list) (cons (f (head xs)) (map f (tail xs))))))'
+        pairs = [('(defx sq () (fn (x) (* x x)))', "(sq 9)"),
+                 ('(defx fact () (fn (n) (if (< n 2) 1 (* n (fact (- n 1))))))', "(fact 6)"),
+                 (MAP + ' (defx demo () (fn () (map sq (list 1 2 3 4))))', "(demo)"),
+                 ('(defx g () (fn () (get (record (a 10) (b 20)) b)))', "(g)")]
+        allok = True
+        for prog, call in pairs:
+            interp = run_call(prog, call)[0]; comp = run_compiled(prog, call)
+            if interp != comp: allok = False; print(f"  FAIL codegen: {call} interp={interp} compiled={comp}")
+        ok += allok
+        print(f"  {'ok  ' if allok else 'FAIL'} backend: compiled Python == interpreter ({len(pairs)} programs)")
+    except Exception as e:
+        print(f"  FAIL backend: {e}")
+    total = len(CASES) + 16
     print(f"{'PASS' if ok == total else 'FAIL'} — {ok}/{total} citadel checks")
 
 
