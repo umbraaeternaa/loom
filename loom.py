@@ -16,6 +16,7 @@ PURE_OPS = {"+", "-", "*", "=", "<", ">",          # pure ops the interpreter ru
 OP = {"IO": "print", "Net": "net", "Alloc": "alloc"}   # which builtin operation a `with`-handler reinterprets
 _CAPS = []                                              # runtime capability stack: each seam pushes the authority it grants
 def _cap_ok(eff): return (not _CAPS) or (eff in _CAPS[-1])  # top-level host is unrestricted; a seam SANDBOXES its body
+_RENV = []                                              # static stack of {resource-name: effect-set} for typed resources
 def _foreign_logger(args, out):                        # opaque foreign code that WANTS IO; emits ONLY if IO was granted
     if _cap_ok("IO"): out.append("foreign:" + str(args[0]))
     return args[0]
@@ -94,7 +95,8 @@ def _ucount(node, fns, penv):
     if h == "use": return {node[1]: 1}                  # consume a LINEAR resource once (keyed by its name)
     if h == "resource":                                 # (resource r body..) — r is scoped; count then drop at the edge
         for x in node[2:]: add(_ucount(x, fns, penv))
-        out.pop(node[1], None); return out
+        rname = node[1][0] if isinstance(node[1], list) else node[1]
+        out.pop(rname, None); return out
     if h == "if":
         add(_ucount(node[1], fns, penv))                # the condition always runs
         tc, ec = _ucount(node[2], fns, penv), _ucount(node[3], fns, penv)
@@ -184,17 +186,28 @@ def infer(node, fns, errs, penv=None):
         inner = set()
         for x in node[3:]: inner |= infer(x, fns, errs, penv)
         return (inner - {E}) | hlat
-    if h == "use": return set()                         # consume a linear resource — pure; the discipline is the count
-    if h == "resource":                                 # (resource r body..) — body must use r EXACTLY once (linear)
-        r = node[1]; eff = set()
-        for x in node[2:]: eff |= infer(x, fns, errs, penv)
+    if h == "use":                                      # consume a linear resource; its USE performs the resource's effect
+        for frame in reversed(_RENV):                   # (a typed resource unifies linear use-once WITH an effect)
+            if node[1] in frame: return set(frame[node[1]])
+        return set()
+    if h == "resource":                                 # (resource r body) or (resource (r E..) body): LINEAR + effect E
+        spec = node[1]
+        rname, reffs = (spec[0], set(spec[1:])) if isinstance(spec, list) else (spec, set())
+        bad = {e for e in reffs if e not in EFFECTS and not is_var(e)}
+        if bad: errs.append(f"resource {rname} declares unknown effect {sorted(bad)}")
+        _RENV.append({rname: reffs})                    # in scope, (use rname) performs reffs
+        try:
+            eff = set()
+            for x in node[2:]: eff |= infer(x, fns, errs, penv)
+        finally:
+            _RENV.pop()
         uc = {}
         for x in node[2:]:
             for e, c in _ucount(x, fns, penv).items(): uc[e] = _uadd(uc.get(e, 0), c)
-        cnt = uc.get(r, 0)
-        if cnt == 0: errs.append(f"linear resource {r} never used (must be used exactly once)")
-        elif cnt == "M": errs.append(f"linear resource {r} used more than once")
-        return eff
+        cnt = uc.get(rname, 0)
+        if cnt == 0: errs.append(f"linear resource {rname} never used (must be used exactly once)")
+        elif cnt == "M": errs.append(f"linear resource {rname} used more than once")
+        return eff                                       # the resource's effect ESCAPES (using it really performs it)
     if h == "if":                                       # (if cond then else) — SOUND: union of all branches
         return infer(node[1], fns, errs, penv) | infer(node[2], fns, errs, penv) | infer(node[3], fns, errs, penv)
     if h == "let":                                      # (let (name val) body..) — bind a local, then run body

@@ -99,6 +99,12 @@ CASES = [
     ("linear param: used twice", '(defx u3 () (fn ((lin r)) (let (a (use r)) (use r))))', False),
     ("resource crosses call boundary ok", '(defx u1 () (fn ((lin r)) (use r))) (defx top1 () (fn () (resource res (u1 res))))', True),
     ("resource passed twice across calls", '(defx u1 () (fn ((lin r)) (use r))) (defx top2 () (fn () (resource res (let (a (u1 res)) (u1 res)))))', False),
+    # --- grown 2026-06-23: TYPED EFFECTFUL RESOURCES — (resource (r E..) ..): linear use-once AND its use performs E ---
+    ("typed resource: effect declared ok", '(defx tr1 (Net) (fn () (resource (r Net) (use r))))', True),
+    ("typed resource: effect must surface", '(defx tr2 () (fn () (resource (r Net) (use r))))', False),
+    ("typed resource: two effects ok", '(defx tr3 (IO Net) (fn () (resource (r IO Net) (use r))))', True),
+    ("typed resource: unknown effect", '(defx tr4 (Magic) (fn () (resource (r Magic) (use r))))', False),
+    ("typed resource: linear + effect (leak)", '(defx tr5 (Net) (fn () (resource (r Net) 0)))', False),
 ]
 
 
@@ -202,7 +208,13 @@ def main():
         print(f"  {'ok  ' if r22 else 'FAIL'} runtime linear param: (top1) = {v22}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime linear param: {e}")
-    total = len(CASES) + 13
+    try:                                               # runtime: a typed effectful resource runs (use performs + consumes)
+        v23, _ = run_call('(defx tr1 (Net) (fn () (resource (r Net) (use r))))', "(tr1)")
+        r23 = (v23 == "<used:r>"); ok += r23
+        print(f"  {'ok  ' if r23 else 'FAIL'} runtime typed resource: (tr1) = {v23}")
+    except (LoomError, RecursionError) as e:
+        print(f"  FAIL runtime typed resource: {e}")
+    total = len(CASES) + 14
     print(f"{'PASS' if ok == total else 'FAIL'} — {ok}/{total} citadel checks")
 
 
