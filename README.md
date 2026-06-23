@@ -11,6 +11,8 @@ declaration is honest before a single line runs.
 
 [![Donate · Monobank](https://img.shields.io/badge/%E2%98%95_Donate-Monobank_jar-FFC400?style=for-the-badge)](https://send.monobank.ua/jar/AHaziFXjYX) &nbsp; built solo, in the open, from Ukraine 🇺🇦 — [support it](#support-this-work)
 
+🎬 **[Watch — LOOM in 30 seconds »](media/LOOM_intro.mp4)**
+
 LOOM is a small (~553-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript**. It is a research
 kernel — small on purpose — and it is **self-verified by 105 checks** that the language can only ever
@@ -156,6 +158,10 @@ resonates and you'd like to help it keep growing, a small donation goes a long w
 Or scan the jar:
 
 <img src="monobank_qr.png" alt="Monobank donation jar — send.monobank.ua/jar/AHaziFXjYX" width="190">
+
+**🎬 The mission in 30 seconds** (or [open the clip](media/LOOM_intro.mp4)):
+
+https://github.com/umbraaeternaa/loom/raw/main/media/LOOM_intro.mp4
 
 You can also use the **Sponsor** button at the top of the repo (same Monobank jar), and a
 **⭐ Star** helps just as much — it brings more eyes to the project. Thank you. 🙏
