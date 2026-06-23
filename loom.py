@@ -86,6 +86,10 @@ def _ucount(node, fns, penv):
     if not isinstance(node, list) or not node: return out
     h = node[0]
     if h == "fn": return out                            # a lambda literal is latent (counted when called)
+    if h == "use": return {node[1]: 1}                  # consume a LINEAR resource once (keyed by its name)
+    if h == "resource":                                 # (resource r body..) — r is scoped; count then drop at the edge
+        for x in node[2:]: add(_ucount(x, fns, penv))
+        out.pop(node[1], None); return out
     if h == "if":
         add(_ucount(node[1], fns, penv))                # the condition always runs
         tc, ec = _ucount(node[2], fns, penv), _ucount(node[3], fns, penv)
@@ -171,6 +175,17 @@ def infer(node, fns, errs, penv=None):
         inner = set()
         for x in node[3:]: inner |= infer(x, fns, errs, penv)
         return (inner - {E}) | hlat
+    if h == "use": return set()                         # consume a linear resource — pure; the discipline is the count
+    if h == "resource":                                 # (resource r body..) — body must use r EXACTLY once (linear)
+        r = node[1]; eff = set()
+        for x in node[2:]: eff |= infer(x, fns, errs, penv)
+        uc = {}
+        for x in node[2:]:
+            for e, c in _ucount(x, fns, penv).items(): uc[e] = _uadd(uc.get(e, 0), c)
+        cnt = uc.get(r, 0)
+        if cnt == 0: errs.append(f"linear resource {r} never used (must be used exactly once)")
+        elif cnt == "M": errs.append(f"linear resource {r} used more than once")
+        return eff
     if h == "if":                                       # (if cond then else) — SOUND: union of all branches
         return infer(node[1], fns, errs, penv) | infer(node[2], fns, errs, penv) | infer(node[3], fns, errs, penv)
     if h == "let":                                      # (let (name val) body..) — bind a local, then run body
@@ -262,6 +277,11 @@ def ev(node, env, fns, out, handlers=None):
         nh = {**handlers, op: hf} if op else handlers
         r = None
         for x in node[3:]: r = ev(x, env, fns, out, nh)
+        return r
+    if h == "use": return f"<used:{node[1]}>"           # consume the linear resource (runtime token)
+    if h == "resource":
+        r = None
+        for x in node[2:]: r = ev(x, env, fns, out, handlers)
         return r
     if h == "if":
         c = ev(node[1], env, fns, out, handlers)

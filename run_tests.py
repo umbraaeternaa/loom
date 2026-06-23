@@ -88,6 +88,11 @@ CASES = [
     # --- grown 2026-06-23: USE-COUNT LATTICE (0/1/many) through the fixpoint — whole-program affine tracking, precise ---
     ("affine: single call use ok", '(defx hit (Net) (fn (u) (net u))) (defx f8 (Net) (fn (u) (seam1 (Net) (hit u))))', True),       # callee uses Net once -> total 1 -> OK (precision: not over-rejected)
     ("affine: if-branch calls not summed", '(defx hit (Net) (fn (u) (net u))) (defx f9 (Net) (fn (u c) (seam1 (Net) (if c (hit u) (hit u)))))', True),  # one branch runs -> 1
+    # --- grown 2026-06-23: LINEAR RESOURCES — (resource r body) must use r EXACTLY once (open -> use once -> close) ---
+    ("linear resource: used once ok", '(defx r1 () (fn () (resource r (use r))))', True),
+    ("linear resource: never used = leak", '(defx r2 () (fn () (resource r 0)))', False),
+    ("linear resource: used twice", '(defx r3 () (fn () (resource r (let (a (use r)) (use r)))))', False),
+    ("linear resource: if-branch single use ok", '(defx r4 () (fn (c) (resource r (if c (use r) (use r)))))', True),
 ]
 
 
@@ -179,7 +184,13 @@ def main():
         print(f"  {'ok  ' if r19 else 'FAIL'} runtime ffi: IO-granted emits {o19} | sandboxed-to-pure emits {o20}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime ffi: {e}")
-    total = len(CASES) + 11
+    try:                                               # runtime: a linear resource program actually runs
+        v21, _ = run_call('(defx r1 () (fn () (resource r (use r))))', "(r1)")
+        r21 = (v21 == "<used:r>"); ok += r21
+        print(f"  {'ok  ' if r21 else 'FAIL'} runtime linear resource: (r1) = {v21}")
+    except (LoomError, RecursionError) as e:
+        print(f"  FAIL runtime resource: {e}")
+    total = len(CASES) + 12
     print(f"{'PASS' if ok == total else 'FAIL'} — {ok}/{total} citadel checks")
 
 
