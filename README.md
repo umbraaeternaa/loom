@@ -9,15 +9,15 @@ declaration is honest before a single line runs.
 
 > The slogan: **AI proposes, the compiler disposes.**
 
-LOOM is a small (~502-line) s-expression language: a parser, a **static effect checker**, and an
-interpreter. It is a research kernel — small on purpose — and it is **self-verified by 103
-checks** that the language can only ever grow *greener* (every new feature must keep them all
-passing).
+LOOM is a small (~553-line) s-expression language: a parser, a **static effect checker**, an
+interpreter, and **backends that compile checked code to Python and JavaScript**. It is a research
+kernel — small on purpose — and it is **self-verified by 105 checks** that the language can only ever
+grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 103/103 citadel checks
+PASS — 105/105 citadel checks
 ```
 
 ## The idea in one screen
@@ -137,7 +137,7 @@ feature is added only with an adversarial test and must keep all checks green.
 
 The individual building blocks are **not new**: effect rows, algebraic effect handlers, and
 capability-style reasoning come from prior work like Koka, Eff, Unison, and OCaml 5's effects.
-LOOM does not claim to invent them — that's *why* the kernel fits in ~150 lines. What it
+LOOM does not claim to invent them — that's *why* the kernel still fits in ~550 lines. What it
 explores is the **synthesis and framing**: one legible signature channel, checked at a trusted
 gate, as a **trust layer for AI-generated code**, with *reinterpreting handlers* as the
 primitive for containing untrusted effects. Feedback and criticism are very welcome —
