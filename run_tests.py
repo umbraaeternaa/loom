@@ -93,6 +93,12 @@ CASES = [
     ("linear resource: never used = leak", '(defx r2 () (fn () (resource r 0)))', False),
     ("linear resource: used twice", '(defx r3 () (fn () (resource r (let (a (use r)) (use r)))))', False),
     ("linear resource: if-branch single use ok", '(defx r4 () (fn (c) (resource r (if c (use r) (use r)))))', True),
+    # --- grown 2026-06-23: LINEAR PARAMS — (lin r) carries a linear resource ACROSS a call (open here -> close there) ---
+    ("linear param: used once ok", '(defx u1 () (fn ((lin r)) (use r)))', True),
+    ("linear param: never used = leak", '(defx u2 () (fn ((lin r)) 0))', False),
+    ("linear param: used twice", '(defx u3 () (fn ((lin r)) (let (a (use r)) (use r))))', False),
+    ("resource crosses call boundary ok", '(defx u1 () (fn ((lin r)) (use r))) (defx top1 () (fn () (resource res (u1 res))))', True),
+    ("resource passed twice across calls", '(defx u1 () (fn ((lin r)) (use r))) (defx top2 () (fn () (resource res (let (a (u1 res)) (u1 res)))))', False),
 ]
 
 
@@ -190,7 +196,13 @@ def main():
         print(f"  {'ok  ' if r21 else 'FAIL'} runtime linear resource: (r1) = {v21}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime resource: {e}")
-    total = len(CASES) + 12
+    try:                                               # runtime: a resource passed across a call boundary runs
+        v22, _ = run_call('(defx u1 () (fn ((lin r)) (use r))) (defx top1 () (fn () (resource res (u1 res))))', "(top1)")
+        r22 = (v22 == "<used:r>"); ok += r22
+        print(f"  {'ok  ' if r22 else 'FAIL'} runtime linear param: (top1) = {v22}")
+    except (LoomError, RecursionError) as e:
+        print(f"  FAIL runtime linear param: {e}")
+    total = len(CASES) + 13
     print(f"{'PASS' if ok == total else 'FAIL'} — {ok}/{total} citadel checks")
 
 

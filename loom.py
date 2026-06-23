@@ -22,8 +22,13 @@ def _foreign_logger(args, out):                        # opaque foreign code tha
 FOREIGN = {"logger": _foreign_logger}                  # registry of effect-opaque foreign functions reached via (ffi ..)
 
 
-def pname(p): return p[0] if isinstance(p, list) else p          # a param is `name` (value) or `(name eff..)` (fn)
-def platent(p): return set(p[1:]) if isinstance(p, list) else None  # fn-param's latent effects; None = value param
+def plin(p): return p[1] if (isinstance(p, list) and len(p) >= 2 and p[0] == "lin") else None   # (lin r) = LINEAR param
+def pname(p):                                                    # a param is `name` (value) · `(name eff..)` (fn) · `(lin r)` (linear)
+    if isinstance(p, list): return p[1] if p and p[0] == "lin" else p[0]
+    return p
+def platent(p):                                                 # fn-param's latent effects; None for value / linear params
+    if isinstance(p, list) and p and p[0] == "lin": return None
+    return set(p[1:]) if isinstance(p, list) else None
 def is_var(e): return isinstance(e, str) and e not in EFFECTS and e[:1].islower()  # lowercase token = effect variable
 def is_fn_expr(e, fns, penv):                                    # does this expression denote a function?
     return (isinstance(e, list) and len(e) > 0 and e[0] == "fn") or (isinstance(e, str) and (e in fns or e in penv))
@@ -114,7 +119,11 @@ def _ucount(node, fns, penv):
     if h in _OPEFF: out[_OPEFF[h]] = _uadd(out.get(_OPEFF[h], 0), 1)   # a direct effectful op = one use
     elif h == "ffi": out["FFI"] = _uadd(out.get("FFI", 0), 1)
     elif h in fns:
-        for e, c in fns[h].get("uc", {}).items(): out[e] = _uadd(out.get(e, 0), c)   # add the callee's per-call usage
+        for e, c in fns[h].get("uc", {}).items():
+            if e in EFFECTS: out[e] = _uadd(out.get(e, 0), c)   # propagate EFFECT counts; resource counts stay local
+        for idx in fns[h].get("lin", set()):            # passing a resource to a callee's LINEAR param consumes it once
+            if idx < len(node)-1 and isinstance(node[idx+1], str):
+                out[node[idx+1]] = _uadd(out.get(node[idx+1], 0), 1)
     elif penv and h in penv:
         for e in penv[h]:
             if not is_var(e): out[e] = "M"              # through a fn-param: unknown multiplicity -> conservatively many
@@ -211,7 +220,8 @@ def check(program):
         if isinstance(top, list) and top and top[0] == "defx":
             fn = top[3]
             penv = {pname(p): platent(p) for p in fn[1] if platent(p) is not None}
-            fns[top[1]] = {"decl": set(top[2]), "fn": fn, "params": fn[1], "penv": penv, "eff": set(), "uc": {}}
+            lin = {idx for idx, p in enumerate(fn[1]) if plin(p)}   # positions of LINEAR params (carry a resource in)
+            fns[top[1]] = {"decl": set(top[2]), "fn": fn, "params": fn[1], "penv": penv, "lin": lin, "eff": set(), "uc": {}}
     for _ in range(len(fns) + 2):                       # fixpoint over callee effects + use-counts (both monotone)
         for i in fns.values():
             body = i["fn"][2:]; tmp = []
@@ -232,6 +242,12 @@ def check(program):
         unknown = {e for e in i["decl"] if e not in EFFECTS and not is_var(e)}  # vars ok; uppercase unknowns are not
         if unknown:
             errors.append(f"{n}: unknown effect {sorted(unknown)}")
+        for p in i["params"]:                           # LINEAR params must be used EXACTLY once in the body
+            rn = plin(p)
+            if rn:
+                cnt = i["uc"].get(rn, 0)
+                if cnt == 0: errors.append(f"{n}: linear param {rn} never used (must be used exactly once)")
+                elif cnt == "M": errors.append(f"{n}: linear param {rn} used more than once")
     return fns, errors
 
 
