@@ -74,6 +74,17 @@ CASES = [
     ("ffi under capability seam",    '(defx fa (IO) (fn (x) (seam (IO) (ffi "logger" x))))', True),   # granted IO, declared IO
     ("ffi sandboxed to pure",        '(defx fb () (fn (x) (seam (Pure) (ffi "logger" x))))', True),    # grant nothing -> provably pure
     ("ffi grant must surface",       '(defx fc () (fn (x) (seam (IO) (ffi "logger" x))))', False),     # grant IO but hide it -> REFUSED
+    # --- grown 2026-06-23: AFFINE / USE-ONCE seams (signals: Okosa2/ion-lang "move-only ownership";
+    #     hyperpolymath/affinescript "affine-typed, the effect row is the abstraction"). Probe: can linearity
+    #     ride on the FLAT-SET row without forcing a multiset / breaking superset inference? (seam1 = grant once) ---
+    ("affine seam: one use ok",   '(defx f1 (Net) (fn (u) (seam1 (Net) (net u))))', True),               # use granted cap once
+    ("affine seam: reuse refused",'(defx f2 (Net) (fn (u) (seam1 (Net) (let (a (net u)) (net u)))))', False),  # 2nd use = move-after-move
+    ("affine: if-branches not double",'(defx f3 (Net) (fn (u c) (seam1 (Net) (if c (net u) (net u)))))', True),  # one branch runs -> single use
+    ("plain seam still reuses",   '(defx f4 (Net) (fn (u) (seam (Net) (let (a (net u)) (net u)))))', True),    # non-linear row UNTOUCHED
+    # --- hardened 2026-06-23: a linear cap used INDIRECTLY (through a call / recursion) is uncountable -> REFUSE ---
+    ("affine: indirect via callee refused", '(defx hit (Net) (fn (u) (net u))) (defx f5 (Net) (fn (u) (seam1 (Net) (hit u) (hit u))))', False),
+    ("affine: indirect via recursion refused", '(defx lp (Net) (fn (n) (if (< n 1) 0 (let (z (net n)) (lp (- n 1)))))) (defx f6 (Net) (fn (n) (seam1 (Net) (lp n))))', False),
+    ("affine: single direct use still ok", '(defx pure1 () (fn (x) (* x x))) (defx f7 (Net) (fn (u) (seam1 (Net) (let (a (pure1 u)) (net a)))))', True),
 ]
 
 

@@ -71,6 +71,28 @@ def latent_of(arg, fns, penv, errs):
     return set()
 
 
+def _uses(node, op):
+    """Count performances of operation `op` along ONE runtime path (for affine/use-once seams).
+    `if` runs only one branch -> max of the two; a `fn` literal is latent (not performed here) -> 0.
+    NB: counts only DIRECT operation heads, not Net/IO reached through a callee — the bounded first probe."""
+    if not isinstance(node, list) or not node: return 0
+    h = node[0]
+    if h == "fn": return 0
+    if h == "if": return _uses(node[1], op) + max(_uses(node[2], op), _uses(node[3], op))
+    return (1 if h == op else 0) + sum(_uses(a, op) for a in node[1:])
+
+
+def _calls_effect(node, fns, penv, E):
+    """True if effect E is performed THROUGH a call (user fn or fn-typed param) anywhere in node — a use the
+    direct use-counter can't see. Under a linear seam1 that makes the count unverifiable, so we refuse it."""
+    if not isinstance(node, list) or not node: return False
+    h = node[0]
+    if isinstance(h, str):
+        if h in fns and E in fns[h].get("eff", set()): return True
+        if penv and h in penv and E in penv[h]: return True
+    return any(_calls_effect(a, fns, penv, E) for a in node[1:])
+
+
 def instantiate(callee, args, fns, penv, errs):
     """Callee's effect row with its effect VARIABLES replaced by the actual function arguments' latent effects."""
     subst = {}
@@ -95,13 +117,23 @@ def infer(node, fns, errs, penv=None):
         eff = set()                                     # foreign authority. Only a SEAM (the FFI contract) may cover it,
         for a in node[2:]: eff |= infer(a, fns, errs, penv)  # so the seam's granted row IS the capability handed across.
         return eff | {"?"}
-    if h == "seam":                                     # (seam (E..) expr..) — CHECKED boundary == CAPABILITY GRANT:
-        decl = set(node[1]) - {"Pure"}                  # the row it declares is exactly the authority handed to the body
-        inner = set()                                   # (incl. opaque foreign code). 'Pure' names the EMPTY grant.
-        for x in node[2:]: inner |= infer(x, fns, errs, penv)
+    if h == "seam" or h == "seam1":                     # (seam (E..) expr..) — CHECKED boundary == CAPABILITY GRANT;
+        decl = set(node[1]) - {"Pure"}                  # (seam1 ..) = LINEAR/AFFINE grant: each cap usable AT MOST ONCE.
+        inner = set()                                   # the row it declares is exactly the authority handed to the body
+        for x in node[2:]: inner |= infer(x, fns, errs, penv)  # (incl. opaque foreign code). 'Pure' = the EMPTY grant.
         inner.discard("?")                              # the seam is WHERE you take responsibility for opaque foreign code
         if inner - decl:
             errs.append(f"seam under-declares: wraps {sorted(inner)} but contract says {sorted(decl)}")
+        if h == "seam1":                                # affinity rides AS A PER-SEAM MULTIPLICITY — the row stays a
+            for E in sorted(decl):                      # flat idempotent SET (superset inference untouched); we only
+                op = OP.get(E) or ("ffi" if E == "FFI" else None)   # additionally count uses of the granted capability.
+                if any(_calls_effect(x, fns, penv, E) for x in node[2:]):   # SOUND: a use through a call/recursion
+                    errs.append(f"linear capability {E} used through a call — not statically countable; use it directly")
+                    continue                            # is uncountable -> refuse it (unknown = reject), not silently allow
+                if op is None: continue
+                n = sum(_uses(x, op) for x in node[2:])
+                if n > 1:
+                    errs.append(f"linear capability {E} used {n}x (granted once)")
         return decl
     if h == "handle":                                   # (handle (E..) expr..) — DISCHARGE effects E locally (drop)
         hdl = set(node[1])
@@ -182,7 +214,7 @@ def ev(node, env, fns, out, handlers=None):
     if isinstance(node, str): return env.get(node, node)
     h = node[0]
     if h == "fn": return Closure(node[1], node[2:], env)   # a lambda literal evaluates to a closure over env
-    if h == "seam":                                     # narrow runtime authority to exactly the granted row, then run
+    if h == "seam" or h == "seam1":                     # narrow runtime authority to exactly the granted row, then run
         _CAPS.append(set(node[1]) - {"Pure"})
         try:
             r = None
