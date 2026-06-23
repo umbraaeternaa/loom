@@ -9,7 +9,7 @@ declaration is honest before a single line runs.
 
 > The slogan: **AI proposes, the compiler disposes.**
 
-LOOM is a ~150-line s-expression language: a parser, a **static effect checker**, and an
+LOOM is a small (~502-line) s-expression language: a parser, a **static effect checker**, and an
 interpreter. It is a research kernel — small on purpose — and it is **self-verified by 103
 checks** that the language can only ever grow *greener* (every new feature must keep them all
 passing).
