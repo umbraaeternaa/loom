@@ -105,6 +105,10 @@ CASES = [
     ("typed resource: two effects ok", '(defx tr3 (IO Net) (fn () (resource (r IO Net) (use r))))', True),
     ("typed resource: unknown effect", '(defx tr4 (Magic) (fn () (resource (r Magic) (use r))))', False),
     ("typed resource: linear + effect (leak)", '(defx tr5 (Net) (fn () (resource (r Net) 0)))', False),
+    # --- grown 2026-06-23: RECORDS — (record (k v)..) product data; building performs field effects, (get r k) access ---
+    ("record: build + get pure", '(defx rc1 () (fn () (get (record (a 1) (b 2)) a)))', True),
+    ("record: field effect surfaces", '(defx rc2 () (fn (u) (record (a (net u)) (b 2))))', False),
+    ("record: field effect declared ok", '(defx rc3 (Net) (fn (u) (record (a (net u)) (b 2))))', True),
 ]
 
 
@@ -214,7 +218,14 @@ def main():
         print(f"  {'ok  ' if r23 else 'FAIL'} runtime typed resource: (tr1) = {v23}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime typed resource: {e}")
-    total = len(CASES) + 14
+    try:                                               # runtime: records build + field access
+        v24, _ = run_call('(defx rc1 () (fn () (get (record (a 1) (b 2)) a)))', "(rc1)")
+        v25, _ = run_call('(defx rcb () (fn () (get (record (a 10) (b 20)) b)))', "(rcb)")
+        r24 = (v24 == 1 and v25 == 20); ok += r24
+        print(f"  {'ok  ' if r24 else 'FAIL'} runtime records: (get a)={v24} (get b)={v25}")
+    except (LoomError, RecursionError) as e:
+        print(f"  FAIL runtime records: {e}")
+    total = len(CASES) + 15
     print(f"{'PASS' if ok == total else 'FAIL'} — {ok}/{total} citadel checks")
 
 

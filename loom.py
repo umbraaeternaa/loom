@@ -97,6 +97,11 @@ def _ucount(node, fns, penv):
         for x in node[2:]: add(_ucount(x, fns, penv))
         rname = node[1][0] if isinstance(node[1], list) else node[1]
         out.pop(rname, None); return out
+    if h == "record":
+        for fld in node[1:]:
+            if isinstance(fld, list) and len(fld) >= 2: add(_ucount(fld[1], fns, penv))
+        return out
+    if h == "get": return _ucount(node[1], fns, penv)
     if h == "if":
         add(_ucount(node[1], fns, penv))                # the condition always runs
         tc, ec = _ucount(node[2], fns, penv), _ucount(node[3], fns, penv)
@@ -208,6 +213,12 @@ def infer(node, fns, errs, penv=None):
         if cnt == 0: errs.append(f"linear resource {rname} never used (must be used exactly once)")
         elif cnt == "M": errs.append(f"linear resource {rname} used more than once")
         return eff                                       # the resource's effect ESCAPES (using it really performs it)
+    if h == "record":                                   # (record (k v)..) — a product value; BUILDING performs field effects
+        eff = set()
+        for fld in node[1:]:
+            if isinstance(fld, list) and len(fld) >= 2: eff |= infer(fld[1], fns, errs, penv)
+        return eff
+    if h == "get": return infer(node[1], fns, errs, penv)   # (get r k) — field access is pure; effects come from r
     if h == "if":                                       # (if cond then else) — SOUND: union of all branches
         return infer(node[1], fns, errs, penv) | infer(node[2], fns, errs, penv) | infer(node[3], fns, errs, penv)
     if h == "let":                                      # (let (name val) body..) — bind a local, then run body
@@ -312,6 +323,11 @@ def ev(node, env, fns, out, handlers=None):
         r = None
         for x in node[2:]: r = ev(x, env, fns, out, handlers)
         return r
+    if h == "record":                                   # build a product value (a dict of field -> value)
+        return {fld[0]: ev(fld[1], env, fns, out, handlers) for fld in node[1:] if isinstance(fld, list) and len(fld) >= 2}
+    if h == "get":
+        rec = ev(node[1], env, fns, out, handlers)
+        return rec[node[2]] if isinstance(rec, dict) and node[2] in rec else None
     if h == "if":
         c = ev(node[1], env, fns, out, handlers)
         live = (c != 0) if isinstance(c, int) else bool(c)
