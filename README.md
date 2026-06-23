@@ -159,9 +159,9 @@ Or scan the jar:
 
 <img src="monobank_qr.png" alt="Monobank donation jar — send.monobank.ua/jar/AHaziFXjYX" width="190">
 
-**🎬 The mission in 30 seconds** (or [open the clip](media/LOOM_intro.mp4)):
+**🎬 The mission in 30 seconds** — plays right here · ▶ [watch with sound](media/LOOM_intro.mp4):
 
-https://github.com/umbraaeternaa/loom/raw/main/media/LOOM_intro.mp4
+![LOOM — 30-second intro](media/LOOM_intro.gif)
 
 You can also use the **Sponsor** button at the top of the repo (same Monobank jar), and a
 **⭐ Star** helps just as much — it brings more eyes to the project. Thank you. 🙏
