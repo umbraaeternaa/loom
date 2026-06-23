@@ -4,7 +4,7 @@
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
-from loom import parse, check, run_call, run_compiled, LoomError
+from loom import parse, check, run_call, run_compiled, run_js, compile_js, LoomError
 
 # (name, source, should_be_accepted)
 CASES = [
@@ -239,7 +239,21 @@ def main():
         print(f"  {'ok  ' if allok else 'FAIL'} backend: compiled Python == interpreter ({len(pairs)} programs)")
     except Exception as e:
         print(f"  FAIL backend: {e}")
-    total = len(CASES) + 16
+    try:                                               # SECOND TARGET (JS): Node output must match the interpreter
+        import shutil
+        for prog, call in pairs:                       # same 4 programs compile to valid JS source
+            assert isinstance(compile_js(prog), str) and compile_js(prog)
+        if shutil.which("node"):
+            jok = True
+            for prog, call in pairs:
+                if run_js(prog, call) != run_call(prog, call)[0]: jok = False; print(f"  FAIL js: {call}")
+            ok += jok
+            print(f"  {'ok  ' if jok else 'FAIL'} backend(JS): Node output == interpreter ({len(pairs)} programs)")
+        else:
+            ok += 1; print("  ok   backend(JS): compile_js emits source (node absent -> exec check skipped)")
+    except Exception as e:
+        print(f"  FAIL backend(JS): {e}")
+    total = len(CASES) + 17
     print(f"{'PASS' if ok == total else 'FAIL'} — {ok}/{total} citadel checks")
 
 

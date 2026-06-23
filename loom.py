@@ -436,3 +436,50 @@ def run_compiled(program_src, call_src):
     """Compile to Python, run it, return the call's value — proof the emitted code MATCHES the interpreter."""
     ns = {}; exec(compile_py(program_src), ns)
     return eval(_emit(parse(call_src)[0]), ns)
+
+
+# ---- SECOND TARGET: JavaScript. Same emit pattern -> a DIFFERENT platform (browser / Node / any OS) => cross-platform. ----
+def _emit_js(node):
+    if isinstance(node, int): return str(node)
+    if isinstance(node, str): return node
+    h = node[0]
+    if h == "+": return "(" + "+".join(_emit_js(a) for a in node[1:]) + ")"
+    if h == "-": return f"({_emit_js(node[1])}-{_emit_js(node[2])})"
+    if h == "*": return "(" + "*".join(_emit_js(a) for a in node[1:]) + ")"
+    if h == "=": return f"(({_emit_js(node[1])}==={_emit_js(node[2])})?1:0)"
+    if h == "<": return f"(({_emit_js(node[1])}<{_emit_js(node[2])})?1:0)"
+    if h == ">": return f"(({_emit_js(node[1])}>{_emit_js(node[2])})?1:0)"
+    if h == "if": return f"(({_emit_js(node[1])}!==0)?{_emit_js(node[2])}:{_emit_js(node[3])})"
+    if h == "let": return f"(({node[1][0]})=>{_emit_js(node[2:][-1])})({_emit_js(node[1][1])})"
+    if h == "list": return "[" + ",".join(_emit_js(a) for a in node[1:]) + "]"
+    if h == "cons": return f"([{_emit_js(node[1])}].concat({_emit_js(node[2])}))"
+    if h == "head": return f"({_emit_js(node[1])}[0])"
+    if h == "tail": return f"({_emit_js(node[1])}.slice(1))"
+    if h == "empty": return f"(({_emit_js(node[1])}.length===0)?1:0)"
+    if h == "record": return "({" + ",".join(f"{fld[0]!r}:{_emit_js(fld[1])}" for fld in node[1:] if isinstance(fld, list)) + "})"
+    if h == "get": return f"({_emit_js(node[1])}[{node[2]!r}])"
+    if h == "fn": return f"(({','.join(pname(p) for p in node[1])})=>{_emit_js(node[2:][-1])})"
+    if h in ("seam", "seam1", "resource"): return _emit_js(node[2:][-1])
+    if h == "use": return "'<used>'"
+    if h in ("print", "net", "alloc", "ffi", "handle", "with"):
+        raise LoomError(f"JS codegen v0 does not cover effectful '{h}' yet")
+    return f"{h}(" + ",".join(_emit_js(a) for a in node[1:]) + ")"
+
+def compile_js(program_src):
+    """Compile a CHECKED LOOM program to portable JavaScript source (one function per defx)."""
+    fns, errs = check(parse(program_src))
+    if errs: raise LoomError("; ".join(errs))
+    lines = []
+    for top in parse(program_src):
+        if isinstance(top, list) and top and top[0] == "defx":
+            fn = top[3]; ps = ",".join(pname(p) for p in fn[1]); body = _emit_js(fn[2:][-1]) if fn[2:] else "null"
+            lines.append(f"function {top[1]}({ps}){{ return {body}; }}")
+    return "\n".join(lines)
+
+def run_js(program_src, call_src):
+    """Compile to JS, run it through Node, return the parsed value — proof the JS target matches the interpreter. Needs node."""
+    import subprocess, json as _json
+    js = compile_js(program_src) + "\nconsole.log(JSON.stringify(" + _emit_js(parse(call_src)[0]) + "))"
+    r = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=15)
+    if r.returncode != 0: raise LoomError("node: " + r.stderr.strip()[:200])
+    return _json.loads(r.stdout.strip())
