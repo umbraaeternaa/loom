@@ -94,8 +94,8 @@ foreign code's IO/Net **physically impossible**, not merely undeclared. Soundnes
 on trusting an annotation — *no capability granted ⇒ no effect possible*.
 
 - [`loom.py`](loom.py) — parser, effect checker, interpreter.
-- [`run_tests.py`](run_tests.py) — the self-verifying suite (61 checks: it accepts honest
-  programs, rejects every flavor of lie, and runs real programs).
+- [`run_tests.py`](run_tests.py) — the self-verifying suite: it accepts honest programs,
+  rejects every flavor of lie, and runs real programs.
 
 ## Run it
 
