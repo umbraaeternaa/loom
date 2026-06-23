@@ -9,6 +9,8 @@ declaration is honest before a single line runs.
 
 > The slogan: **AI proposes, the compiler disposes.**
 
+[![Donate · Monobank](https://img.shields.io/badge/%E2%98%95_Donate-Monobank_jar-FFC400?style=for-the-badge)](https://send.monobank.ua/jar/AHaziFXjYX) &nbsp; built solo, in the open, from Ukraine 🇺🇦 — [support it](#support-this-work)
+
 LOOM is a small (~553-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript**. It is a research
 kernel — small on purpose — and it is **self-verified by 105 checks** that the language can only ever
@@ -142,6 +144,21 @@ explores is the **synthesis and framing**: one legible signature channel, checke
 gate, as a **trust layer for AI-generated code**, with *reinterpreting handlers* as the
 primitive for containing untrusted effects. Feedback and criticism are very welcome —
 especially where the model is wrong.
+
+## Support this work
+
+LOOM is built **solo, in the open, from Ukraine 🇺🇦** — no company and no funding behind it,
+just one person trying to make AI-written code something you can actually trust. If that
+resonates and you'd like to help it keep growing, a small donation goes a long way.
+
+[![Donate · Monobank](https://img.shields.io/badge/%E2%98%95_Donate-Monobank_jar-FFC400?style=for-the-badge)](https://send.monobank.ua/jar/AHaziFXjYX)
+
+Or scan the jar:
+
+<img src="monobank_qr.png" alt="Monobank donation jar — send.monobank.ua/jar/AHaziFXjYX" width="190">
+
+You can also use the **Sponsor** button at the top of the repo (same Monobank jar), and a
+**⭐ Star** helps just as much — it brings more eyes to the project. Thank you. 🙏
 
 ## About
 
