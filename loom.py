@@ -102,6 +102,15 @@ def _ucount(node, fns, penv):
             if isinstance(fld, list) and len(fld) >= 2: add(_ucount(fld[1], fns, penv))
         return out
     if h == "get": return _ucount(node[1], fns, penv)
+    if h == "variant": return _ucount(node[2], fns, penv)
+    if h == "match":                                    # scrutinee runs + exactly ONE arm -> lub over arms (like if)
+        add(_ucount(node[1], fns, penv))
+        acs = [_ucount(arm[1], fns, penv) for arm in node[2:] if isinstance(arm, list) and len(arm) >= 2]
+        for e in set().union(*[set(c) for c in acs]) if acs else set():
+            m = 0
+            for c in acs: m = _ulub(m, c.get(e, 0))
+            out[e] = _uadd(out.get(e, 0), m)
+        return out
     if h == "if":
         add(_ucount(node[1], fns, penv))                # the condition always runs
         tc, ec = _ucount(node[2], fns, penv), _ucount(node[3], fns, penv)
@@ -219,6 +228,12 @@ def infer(node, fns, errs, penv=None):
             if isinstance(fld, list) and len(fld) >= 2: eff |= infer(fld[1], fns, errs, penv)
         return eff
     if h == "get": return infer(node[1], fns, errs, penv)   # (get r k) — field access is pure; effects come from r
+    if h == "variant": return infer(node[2], fns, errs, penv)   # (variant Tag payload) — building performs payload effects
+    if h == "match":                                    # (match e (pat body)..) — SOUND: union of all arm bodies
+        eff = infer(node[1], fns, errs, penv)
+        for arm in node[2:]:
+            if isinstance(arm, list) and len(arm) >= 2: eff |= infer(arm[1], fns, errs, penv)
+        return eff
     if h == "if":                                       # (if cond then else) — SOUND: union of all branches
         return infer(node[1], fns, errs, penv) | infer(node[2], fns, errs, penv) | infer(node[3], fns, errs, penv)
     if h == "let":                                      # (let (name val) body..) — bind a local, then run body
@@ -328,6 +343,15 @@ def ev(node, env, fns, out, handlers=None):
     if h == "get":
         rec = ev(node[1], env, fns, out, handlers)
         return rec[node[2]] if isinstance(rec, dict) and node[2] in rec else None
+    if h == "variant": return (node[1], ev(node[2], env, fns, out, handlers))   # tagged value (Tag, payload)
+    if h == "match":
+        tag, val = ev(node[1], env, fns, out, handlers)
+        for arm in node[2:]:
+            pat, body = arm[0], arm[1]
+            if pat[0] == tag:
+                loc = ({**env, pat[1]: val} if len(pat) >= 2 else env)
+                return ev(body, loc, fns, out, handlers)
+        raise LoomError(f"no match arm for tag {tag!r}")
     if h == "if":
         c = ev(node[1], env, fns, out, handlers)
         live = (c != 0) if isinstance(c, int) else bool(c)
@@ -417,7 +441,7 @@ def _emit(node):
     if h == "fn": return f"(lambda {','.join(pname(p) for p in node[1])}: {_emit(node[2:][-1])})"
     if h in ("seam", "seam1", "resource"): return _emit(node[2:][-1])   # value-transparent (effects are a static layer)
     if h == "use": return "'<used>'"
-    if h in ("print", "net", "alloc", "ffi", "handle", "with"):
+    if h in ("print", "net", "alloc", "ffi", "handle", "with", "variant", "match"):
         raise LoomError(f"codegen v0 does not cover effectful '{h}' yet (computational core only)")
     return f"{h}(" + ",".join(_emit(a) for a in node[1:]) + ")"          # call: a user fn, or a closure-valued name
 
@@ -461,7 +485,7 @@ def _emit_js(node):
     if h == "fn": return f"(({','.join(pname(p) for p in node[1])})=>{_emit_js(node[2:][-1])})"
     if h in ("seam", "seam1", "resource"): return _emit_js(node[2:][-1])
     if h == "use": return "'<used>'"
-    if h in ("print", "net", "alloc", "ffi", "handle", "with"):
+    if h in ("print", "net", "alloc", "ffi", "handle", "with", "variant", "match"):
         raise LoomError(f"JS codegen v0 does not cover effectful '{h}' yet")
     return f"{h}(" + ",".join(_emit_js(a) for a in node[1:]) + ")"
 

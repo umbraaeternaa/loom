@@ -10,14 +10,14 @@ declaration is honest before a single line runs.
 > The slogan: **AI proposes, the compiler disposes.**
 
 LOOM is a ~150-line s-expression language: a parser, a **static effect checker**, and an
-interpreter. It is a research kernel — small on purpose — and it is **self-verified by 98
+interpreter. It is a research kernel — small on purpose — and it is **self-verified by 103
 checks** that the language can only ever grow *greener* (every new feature must keep them all
 passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 98/98 citadel checks
+PASS — 103/103 citadel checks
 ```
 
 ## The idea in one screen
@@ -80,7 +80,7 @@ the caller's declaration.
 ## What's inside
 
 Effect rows + superset rule · checked seams · effect handlers (`handle` discharges,
-`with` reinterprets) · **capability seams for effect-opaque FFI** · **affine (use-once) seams** + **linear resources** + **linear params** (use-exactly-once, carried across call boundaries) · typed resources can also carry an effect — open-once, use performs it, close-once · records (typed product data) · `if` / `let` · recursion ·
+`with` reinterprets) · **capability seams for effect-opaque FFI** · **affine (use-once) seams** + **linear resources** + **linear params** (use-exactly-once, carried across call boundaries) · typed resources can also carry an effect — open-once, use performs it, close-once · records (product data) · sum types + pattern matching · `if` / `let` · recursion ·
 pure list primitives · first-class functions with row-polymorphism · anonymous lambdas &
 closures · a BACKEND that compiles checked code to portable source — one verified program runs on both Python AND JavaScript (same pattern -> C/WASM) · and a hard soundness rule: **an unverifiable call is rejected, never assumed
 pure**. The static checker's vocabulary is kept identical to the interpreter's, so nothing

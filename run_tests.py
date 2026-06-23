@@ -109,6 +109,11 @@ CASES = [
     ("record: build + get pure", '(defx rc1 () (fn () (get (record (a 1) (b 2)) a)))', True),
     ("record: field effect surfaces", '(defx rc2 () (fn (u) (record (a (net u)) (b 2))))', False),
     ("record: field effect declared ok", '(defx rc3 (Net) (fn (u) (record (a (net u)) (b 2))))', True),
+    # --- grown 2026-06-23: SUM TYPES + PATTERN MATCH — (variant Tag v) + (match e (pat body)..); arm effects = union ---
+    ("variant + match value", '(defx m1 () (fn () (match (variant Some 5) ((Some x) x) ((None) 0))))', True),
+    ("match nullary arm", '(defx m2 () (fn () (match (variant None 0) ((Some x) x) ((None) 7))))', True),
+    ("match arm effect surfaces", '(defx m3 () (fn (e) (match e ((Some x) (print x)) ((None) 0))))', False),
+    ("match arm effect declared ok", '(defx m4 (IO) (fn (e) (match e ((Some x) (print x)) ((None) 0))))', True),
 ]
 
 
@@ -253,7 +258,14 @@ def main():
             ok += 1; print("  ok   backend(JS): compile_js emits source (node absent -> exec check skipped)")
     except Exception as e:
         print(f"  FAIL backend(JS): {e}")
-    total = len(CASES) + 17
+    try:                                               # runtime: variant + match extracts the payload / picks the arm
+        v26, _ = run_call('(defx m1 () (fn () (match (variant Some 5) ((Some x) x) ((None) 0))))', "(m1)")
+        v27, _ = run_call('(defx m2 () (fn () (match (variant None 0) ((Some x) x) ((None) 7))))', "(m2)")
+        r26 = (v26 == 5 and v27 == 7); ok += r26
+        print(f"  {'ok  ' if r26 else 'FAIL'} runtime match: (Some 5)={v26} (None)={v27}")
+    except (LoomError, RecursionError) as e:
+        print(f"  FAIL runtime match: {e}")
+    total = len(CASES) + 18
     print(f"{'PASS' if ok == total else 'FAIL'} — {ok}/{total} citadel checks")
 
 
