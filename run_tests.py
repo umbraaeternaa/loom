@@ -167,6 +167,18 @@ CASES = [
     ("rand: handle discharges it",      '(defx f () (fn () (handle (Rand) (rand))))', True),
     ("rand: with reinterprets to pure", '(defx rr (Rand) (fn () (rand))) (defx mk () (fn () 4)) (defx t () (fn () (with Rand mk (rr))))', True),
     ("rand: flows through a call",      '(defx g (Rand) (fn () (rand))) (defx h () (fn () (g)))', False),  # h calls g (Rand) yet declares Pure
+    # --- grown 2026-06-24: D10 — independence by ROLES. (by ROLE WHO e) tags who performed a role; (trust (r..) e) demands
+    #     each required role be covered by a non-ai author AND >= 2 DISTINCT authors total — defends CIRCULAR trust where one
+    #     author owns code+spec+proof. A count of anchors (D9.1) can't see role distribution; this can.
+    ("D10 roles: two roles two authors ok", '(defx f () (fn () (trust (roles code proof) (by code human (by proof trace 1)))))', True),
+    ("D10 roles: a role only by ai refused", '(defx f () (fn () (trust (roles code proof) (by code ai (by proof trace 1)))))', False),    # code covered only by ai -> not covered
+    ("D10 roles: single author all roles refused", '(defx f () (fn () (trust (roles code proof) (by code human (by proof human 1)))))', False),  # one author owns code+proof -> self-certifying
+    ("D10 roles: missing role refused", '(defx f () (fn () (trust (roles code spec proof) (by code human (by proof trace 1)))))', False),   # spec role absent
+    ("D10 roles: three roles three authors ok", '(defx f () (fn () (trust (roles code spec proof) (by code human (by spec audit (by proof trace 1))))))', True),
+    ("D10: by-tag alone is free",       '(defx f () (fn () (by code human 1)))', True),                       # tagging never bites; only trust gates
+    ("D10 roles: effects still flow",   '(defx f (Net) (fn (u) (trust (roles code proof) (by code human (by proof trace (net u))))))', True),     # role gate orthogonal to effects
+    ("D10 roles: under-declared effect still caught", '(defx f () (fn (u) (trust (roles code proof) (by code human (by proof trace (net u))))))', False),  # Net undeclared -> REJECTED
+    ("D10: by-author feeds the count form", '(defx f () (fn () (trust 2 (by code human (by proof trace 1)))))', True),   # by-authors are anchors for D9.1 too
 ]
 
 
@@ -341,7 +353,14 @@ def main():
         print(f"  {'ok  ' if rr1 else 'FAIL'} runtime Rand: (rr)={vr1} | with-mock (t)={vr2}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime Rand: {e}")
-    total = len(CASES) + 21
+    try:                                               # runtime: D10 `by` / role-trust are TRANSPARENT — the gate is static
+        vd1, _ = run_call('(defx t () (fn () (trust (roles code proof) (by code human (by proof trace 9)))))', "(t)")
+        vd2, _ = run_call('(defx t () (fn () (by code human 7)))', "(t)")
+        rd1 = (vd1 == 9 and vd2 == 7); ok += rd1
+        print(f"  {'ok  ' if rd1 else 'FAIL'} runtime D10 roles: (trust (code proof) ..)={vd1} | (by code human 7)={vd2}")
+    except (LoomError, RecursionError) as e:
+        print(f"  FAIL runtime D10 roles: {e}")
+    total = len(CASES) + 22
     print(f"{'PASS' if ok == total else 'FAIL'} — {ok}/{total} citadel checks")
 
 

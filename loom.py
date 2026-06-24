@@ -163,14 +163,29 @@ def instantiate(callee, args, fns, penv, errs):
 
 def prov_of(node):
     """Provenance set gathered under a node (who authored the values) — a channel SEPARATE from effects.
-    (prov P x) injects P; everything else unions its children. 'ai' is the only non-anchoring provenance."""
+    (prov P x) injects P; (by ROLE WHO x) injects WHO; everything else unions its children. 'ai' never anchors."""
     if not isinstance(node, list) or not node: return set()
     if node[0] == "prov":
         s = {node[1]}
         for x in node[2:]: s |= prov_of(x)
         return s
+    if node[0] == "by":                                  # D10: (by ROLE WHO x) — WHO is also an independent anchor
+        s = {node[2]}
+        for x in node[3:]: s |= prov_of(x)
+        return s
     s = set()
     for a in node[1:]: s |= prov_of(a)
+    return s
+
+def roles_of(node):
+    """Role->author pairs under a node: (by ROLE WHO x) asserts ROLE was performed by WHO (D10 role quorum)."""
+    if not isinstance(node, list) or not node: return set()
+    if node[0] == "by":
+        s = {(node[1], node[2])}
+        for x in node[3:]: s |= roles_of(x)
+        return s
+    s = set()
+    for a in node[1:]: s |= roles_of(a)
     return s
 
 def infer(node, fns, errs, penv=None):
@@ -259,13 +274,32 @@ def infer(node, fns, errs, penv=None):
         eff = set()                                     # SEPARATE from effects: prov flows up, effects pass through unchanged
         for x in node[2:]: eff |= infer(x, fns, errs, penv)
         return eff
-    if h == "trust":                                    # (trust [N] expr) — D9 GATE vs CIRCULAR / under-corroborated trust:
-        has_n = len(node) > 1 and isinstance(node[1], int)   # the value must carry >= N DISTINCT INDEPENDENT anchors
-        need = node[1] if has_n else 1                       # (provenance != 'ai'). N defaults to 1 (the binary D9 form).
-        body = node[2:] if has_n else node[1:]               # independence is a QUANTITY = count of distinct non-ai sources;
-        independent = {p for x in body for p in prov_of(x)} - {"ai"}  # a SET, so repeating a source does NOT inflate it
-        if len(independent) < need:
-            errs.append(f"trust gate: need >= {need} independent anchor(s), got {len(independent)} {sorted(independent) or '(none)'} — value too self-referential / under-corroborated")
+    if h == "by":                                       # (by ROLE WHO expr) — role-tagged provenance; effects pass through
+        eff = set()
+        for x in node[3:]: eff |= infer(x, fns, errs, penv)
+        return eff
+    if h == "trust":                                    # (trust SPEC? expr) — D9/D10 GATE vs CIRCULAR / under-corroborated trust
+        spec = node[1] if len(node) > 1 else None
+        is_roles = isinstance(spec, list) and len(spec) > 0 and spec[0] == "roles"
+        if is_roles:                                     # D10 ROLE-QUORUM: (trust (roles r1 r2 ..) e) — each role by a non-ai
+            roles_req = set(spec[1:]); body = node[2:]   #   author, and the required roles span >= 2 DISTINCT authors
+            pairs = set()
+            for x in body: pairs |= roles_of(x)
+            pairs = {(r, w) for (r, w) in pairs if w != "ai"}            # 'ai' never anchors a role
+            covered = {r for (r, w) in pairs}
+            authors = {w for (r, w) in pairs if r in roles_req}
+            missing = roles_req - covered
+            if missing:
+                errs.append(f"trust gate (roles): role(s) {sorted(missing)} not independently covered (need a non-ai author) — self-certified")
+            elif len(authors) < 2:
+                errs.append(f"trust gate (roles): required roles satisfied by a single author {sorted(authors)} — circular trust (one author owns code+spec+proof)")
+        else:                                            # D9 COUNT form: (trust [N] e) — value must carry >= N DISTINCT
+            has_n = isinstance(spec, int)                #                 INDEPENDENT anchors (provenance != 'ai'); N defaults 1
+            need = spec if has_n else 1
+            body = node[2:] if has_n else node[1:]       # independence is a QUANTITY = count of distinct non-ai sources;
+            independent = {p for x in body for p in prov_of(x)} - {"ai"} # a SET, so repeating a source does NOT inflate it
+            if len(independent) < need:
+                errs.append(f"trust gate: need >= {need} independent anchor(s), got {len(independent)} {sorted(independent) or '(none)'} — value too self-referential / under-corroborated")
         eff = set()
         for x in body: eff |= infer(x, fns, errs, penv)
         return eff
@@ -375,9 +409,16 @@ def ev(node, env, fns, out, handlers=None):
         r = None
         for x in node[2:]: r = ev(x, env, fns, out, handlers)
         return r
-    if h == "trust":                                    # trust gate — runtime-transparent (already checked at check-time)
+    if h == "by":                                       # role-tagged provenance — runtime-transparent (static gate)
         r = None
-        for x in node[1:]: r = ev(x, env, fns, out, handlers)
+        for x in node[3:]: r = ev(x, env, fns, out, handlers)
+        return r
+    if h == "trust":                                    # trust gate — runtime-transparent (already checked at check-time)
+        spec = node[1] if len(node) > 1 else None        # skip the SPEC arg (N or (roles ..)); eval only the body
+        is_spec = isinstance(spec, int) or (isinstance(spec, list) and len(spec) > 0 and spec[0] == "roles")
+        body = node[2:] if is_spec else node[1:]
+        r = None
+        for x in body: r = ev(x, env, fns, out, handlers)
         return r
     if h == "record":                                   # build a product value (a dict of field -> value)
         return {fld[0]: ev(fld[1], env, fns, out, handlers) for fld in node[1:] if isinstance(fld, list) and len(fld) >= 2}
@@ -484,6 +525,7 @@ def _emit(node):
     if h == "get": return f"({_emit(node[1])}[{node[2]!r}])"
     if h == "fn": return f"(lambda {','.join(pname(p) for p in node[1])}: {_emit(node[2:][-1])})"
     if h in ("seam", "seam1", "resource", "prov"): return _emit(node[2:][-1])   # value-transparent (effects/prov are static layers)
+    if h == "by": return _emit(node[3:][-1])                           # value-transparent (role tag is a static layer)
     if h == "trust": return _emit(node[1:][-1])                        # value-transparent (the trust gate is a static check)
     if h == "use": return "'<used>'"
     if h == "print": return f"_p({_emit(node[1])})"                     # IO: print AND return the value (as the interpreter)
@@ -533,6 +575,7 @@ def _emit_js(node):
     if h == "get": return f"({_emit_js(node[1])}[{node[2]!r}])"
     if h == "fn": return f"(({','.join(pname(p) for p in node[1])})=>{_emit_js(node[2:][-1])})"
     if h in ("seam", "seam1", "resource", "prov"): return _emit_js(node[2:][-1])
+    if h == "by": return _emit_js(node[3:][-1])
     if h == "trust": return _emit_js(node[1:][-1])
     if h == "use": return "'<used>'"
     if h == "print": return f"_p({_emit_js(node[1])})"                  # IO: print AND return the value

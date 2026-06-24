@@ -1,0 +1,26 @@
+; roles.loom — D10: independence by ROLES (the role quorum).
+;
+; D9 asked "is this value anchored at all?"  D9.1 asked "by how many independents?"
+; D10 asks the question the whole project is about: across the ROLES that matter
+; (who wrote the code, who wrote the spec, who produced the proof) — by DIFFERENT people?
+;
+; (by ROLE WHO e)            tags that ROLE was performed by WHO.
+; (trust (roles r..) e)      accepts only if every role has a non-ai author AND
+;                            the required roles are covered by >= 2 DISTINCT authors.
+;
+; Accepted here: the code is ratified by a human, the proof is a real execution trace —
+; two roles, two independent authors. The circular case (one author, or ai-only) is rejected.
+
+(defx result ()
+  (fn ()
+    (trust (roles code proof)
+      (by code human                 ; the code was ratified by a person
+        (by proof trace              ; the proof is an independent execution trace
+          42)))))
+
+(defx main () (fn () (result)))
+
+; Rejected variants (uncomment any one => REJECTED at `check`, before it can run):
+;   (trust (roles code proof) (by code ai    (by proof trace 42)))   ; code only by ai      -> not covered
+;   (trust (roles code proof) (by code human (by proof human 42)))   ; one author both roles -> circular
+;   (trust (roles code spec proof) (by code human (by proof trace 42)))  ; spec role missing
