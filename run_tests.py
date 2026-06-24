@@ -242,6 +242,14 @@ CASES = [
     ("D18 taint: faithful, does not fabricate", '(defx f () (fn () (trust 2 (let (a (prov human 1)) a))))', False),   # only {human} = 1 < 2; taint flows, never invents
     ("D18 taint: roles flow through let",   '(defx f () (fn () (trust (roles code review) (let (x (by code human 1)) (by review alice x)))))', True),  # x carries (code,human)
     ("D18 taint: ai taint still refused",   '(defx f () (fn () (trust (let (y (prov ai 1)) y))))', False),   # y carries {ai}; ai never anchors -> refused
+    # --- grown 2026-06-24: D19 — CROSS-STATEMENT taint. A `let` OUTSIDE the gate now flows its provenance INTO the gate: the
+    #     checker threads a taint env (_TAINT_PROV/_TAINT_ROLE) through infer, updated at every `let` (scoped, shadowing-safe).
+    #     This is the pattern that actually matters: bind an authored value, THEN trust a use of it later in scope.
+    ("D19 cross-stmt: let outside trust flows in", '(defx f () (fn () (let (y (prov human 5)) (trust y))))', True),
+    ("D19 cross-stmt: ai bound then trusted refused", '(defx f () (fn () (let (y (prov ai 5)) (trust y))))', False),
+    ("D19 cross-stmt: count across two lets", '(defx f () (fn () (let (a (prov human 1)) (let (b (prov audit 2)) (trust 2 (+ a b))))))', True),
+    ("D19 cross-stmt: roles flow across lets", '(defx f () (fn () (let (x (by code human 1)) (trust (roles code review) (by review alice x)))))', True),
+    ("D19 cross-stmt: shadowing hides outer taint", '(defx f () (fn () (let (y (prov human 1)) (let (y 5) (trust y)))))', False),  # inner y is untainted -> refused (no leak)
 ]
 
 
@@ -472,7 +480,13 @@ def main():
         print(f"  {'ok  ' if rt1 else 'FAIL'} runtime D18 taint: (trust (let (y (prov human 5)) y)) => {vt1}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime D18 taint: {e}")
-    total = len(CASES) + 30
+    try:                                               # runtime: D19 cross-statement taint is STATIC — let/prov transparent at runtime
+        vx1, _ = run_call('(defx t () (fn () (let (y (prov human 9)) (trust y))))', "(t)")
+        rx1 = (vx1 == 9); ok += rx1
+        print(f"  {'ok  ' if rx1 else 'FAIL'} runtime D19 cross-stmt: (let (y (prov human 9)) (trust y)) => {vx1}")
+    except (LoomError, RecursionError) as e:
+        print(f"  FAIL runtime D19 cross-stmt: {e}")
+    total = len(CASES) + 31
     print(f"{'PASS' if ok == total else 'FAIL'} — {ok}/{total} citadel checks")
 
 

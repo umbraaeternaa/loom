@@ -20,6 +20,9 @@ def _cap_ok(eff): return (not _CAPS) or (eff in _CAPS[-1])  # top-level host is 
 _POLICY = {"rank": {}, "require": {}, "forbid": set()}   # D15/D16 program-wide trust policy (STATIC): (rank LOW HIGH) global subsumption;
 #   require[EFF] = {role..} every seam granting EFF must vouch; forbid = {EFF..} the effect may not escape any function's row. check() RESETS it.
 _RENV = []                                              # static stack of {resource-name: effect-set} for typed resources
+_MISS = object()                                        # sentinel for scoped save/restore
+_TAINT_PROV = {}                                        # D19 cross-statement TAINT: var -> provenance set (built by `let` in infer,
+_TAINT_ROLE = {}                                        #   read by the gates) so a (let (y (prov ai ..)) ..) flows into a trust LATER in scope
 def _foreign_logger(args, out):                        # opaque foreign code that WANTS IO; emits ONLY if IO was granted
     if _cap_ok("IO"): out.append("foreign:" + str(args[0]))
     return args[0]
@@ -209,17 +212,18 @@ def roles_of(node, penv=None):
     for a in node[1:]: s |= roles_of(a, penv)
     return s
 
-def _quorum_check(roles_req, up, body):
+def _quorum_check(roles_req, up, body, penv=None):
     """D10 role quorum + D11 lattice over `body`. up[LOW]={HIGH..}: a HIGHer role stands in for a LOWer requirement.
     Returns (missing_roles, satisfying_authors): a required role is covered by a non-ai anchor at that role OR any role
-    that transitively subsumes it; authors are the non-ai authors that cover the required roles (>= 2 means independent)."""
+    that transitively subsumes it; authors are the non-ai authors that cover the required roles (>= 2 means independent).
+    penv = D19 cross-statement taint env (var -> role-pairs), forwarded to roles_of."""
     def fillers(r):                                        # r plus every role transitively above it (iterative, no recursion)
         seen = {r}; stk = [r]
         while stk:
             for hi in up.get(stk.pop(), ()):
                 if hi not in seen: seen.add(hi); stk.append(hi)
         return seen
-    pairs = {(rr, w) for x in body for (rr, w) in roles_of(x) if w != "ai"}   # 'ai' never anchors a role
+    pairs = {(rr, w) for x in body for (rr, w) in roles_of(x, penv) if w != "ai"}   # 'ai' never anchors a role
     covered = set(); authors = set()
     for req in roles_req:
         fr = fillers(req)
@@ -270,7 +274,7 @@ def infer(node, fns, errs, penv=None):
         if inner - decl:
             errs.append(f"seam under-declares: wraps {sorted(inner)} but contract says {sorted(decl)}")
         if role_spec is not None:                       # D12: grant the dangerous effect ONLY to independently-vouched code
-            missing, authors = _quorum_check(set(role_spec[1:]), up, body)
+            missing, authors = _quorum_check(set(role_spec[1:]), up, body, _TAINT_ROLE)
             if missing:
                 errs.append(f"seam grant denied: capability {sorted(decl)} requires role(s) {sorted(missing)} — not independently vouched (need a non-ai author, or a subsuming role)")
             elif len(authors) < 2:
@@ -278,15 +282,15 @@ def infer(node, fns, errs, penv=None):
         for (eff, role) in needs:                       # D13: a SPECIFIC effect is granted only if its OWN role vouches for it
             if eff not in decl:
                 errs.append(f"seam: (needs {eff} {role}) names {eff}, not granted by this seam {sorted(decl)}")
-            elif _quorum_check({role}, up, body)[0]:    # missing non-empty => role not covered (by a non-ai author or a subsuming role)
+            elif _quorum_check({role}, up, body, _TAINT_ROLE)[0]:    # missing non-empty => role not covered (by a non-ai author or a subsuming role)
                 errs.append(f"seam grant denied: effect {eff} requires role '{role}' — not vouched by a non-ai author (or a subsuming role)")
         for eff in sorted(decl):                        # D15/D17: program-wide (require EFF spec) per granted effect
             for spec in sorted(_POLICY["require"].get(eff, ()), key=str):
                 if isinstance(spec, int):               # D17: the grant needs >= N DISTINCT independent (non-ai) authors
-                    independent = {p for x in body for p in prov_of(x)} - {"ai"}
+                    independent = {p for x in body for p in prov_of(x, _TAINT_PROV)} - {"ai"}
                     if len(independent) < spec:
                         errs.append(f"policy: effect {eff} requires >= {spec} independent authors (program-wide (require {eff} {spec})), got {len(independent)} {sorted(independent) or '(none)'}")
-                elif _quorum_check({spec}, up, body)[0]:  # D15: a SPECIFIC role must be covered (subsumption applies)
+                elif _quorum_check({spec}, up, body, _TAINT_ROLE)[0]:  # D15: a SPECIFIC role must be covered (subsumption applies)
                     errs.append(f"policy: effect {eff} requires role '{spec}' (program-wide (require {eff} {spec})) — not vouched by a non-ai author")
         if h == "seam1":                                # affinity rides AS A PER-SEAM MULTIPLICITY — the row stays a flat
             uc = {}                                     # idempotent SET (superset inference untouched); we additionally
@@ -351,7 +355,13 @@ def infer(node, fns, errs, penv=None):
         name, val = node[1][0], node[1][1]
         eff = infer(val, fns, errs, penv)               # the bound value's OWN effects (defining a lambda = none)
         bp = {**penv, name: latent_of(val, fns, penv, errs)} if is_fn_expr(val, fns, penv) else penv
-        for x in node[2:]: eff |= infer(x, fns, errs, bp)   # a let-bound function becomes callable in the body
+        sp = _TAINT_PROV.get(name, _MISS); sr = _TAINT_ROLE.get(name, _MISS)   # D19: bind name's provenance for the body's scope
+        _TAINT_PROV[name] = prov_of(val, _TAINT_PROV); _TAINT_ROLE[name] = roles_of(val, _TAINT_ROLE)   # (chained lets resolve)
+        try:
+            for x in node[2:]: eff |= infer(x, fns, errs, bp)   # a let-bound function becomes callable; the gate sees the taint
+        finally:                                        # restore (shadowing-safe), so the binding never leaks past its scope
+            (_TAINT_PROV.__setitem__(name, sp) if sp is not _MISS else _TAINT_PROV.pop(name, None))
+            (_TAINT_ROLE.__setitem__(name, sr) if sr is not _MISS else _TAINT_ROLE.pop(name, None))
         return eff
     if h == "prov":                                     # (prov P expr) — tag PROVENANCE P (who authored it); a channel
         eff = set()                                     # SEPARATE from effects: prov flows up, effects pass through unchanged
@@ -367,7 +377,7 @@ def infer(node, fns, errs, penv=None):
         if is_roles:                                     # D10 ROLE-QUORUM + D11 role LATTICE: (trust (roles ..) (sub LOW HIGH).. e)
             _, up, _, body = _roleclauses(node[1:])       # node[1] IS the (roles ..) spec — consume it + any (sub LOW HIGH) clauses
             roles_req = set(spec[1:])                     # up[LOW] = {HIGH..}: a higher role can STAND IN FOR a lower one (D11)
-            missing, authors = _quorum_check(roles_req, _with_policy_rank(up), body)   # D15: + program-wide ranks
+            missing, authors = _quorum_check(roles_req, _with_policy_rank(up), body, _TAINT_ROLE)   # D15: ranks; D19: taint env
             if missing:
                 errs.append(f"trust gate (roles): role(s) {sorted(missing)} not independently covered (need a non-ai author, or a role that subsumes it) — self-certified")
             elif len(authors) < 2:
@@ -376,7 +386,7 @@ def infer(node, fns, errs, penv=None):
             has_n = isinstance(spec, int)                #                 INDEPENDENT anchors (provenance != 'ai'); N defaults 1
             need = spec if has_n else 1
             body = node[2:] if has_n else node[1:]       # independence is a QUANTITY = count of distinct non-ai sources;
-            independent = {p for x in body for p in prov_of(x)} - {"ai"} # a SET, so repeating a source does NOT inflate it
+            independent = {p for x in body for p in prov_of(x, _TAINT_PROV)} - {"ai"} # SET; D19: taint env so bound vars carry prov
             if len(independent) < need:
                 errs.append(f"trust gate: need >= {need} independent anchor(s), got {len(independent)} {sorted(independent) or '(none)'} — value too self-referential / under-corroborated")
         eff = set()
@@ -395,6 +405,7 @@ def infer(node, fns, errs, penv=None):
 def check(program):
     """Returns (fns, errors). errors empty == program type/effect-checks (is accepted)."""
     _POLICY["rank"] = {}; _POLICY["require"] = {}; _POLICY["forbid"] = set()   # D15/D16: RESET policy first (never leaks between programs)
+    _TAINT_PROV.clear(); _TAINT_ROLE.clear()             # D19: RESET cross-statement taint env
     for top in program:                                  # collect (rank LOW HIGH) / (require EFF role) / (forbid EFF) BEFORE inference
         if isinstance(top, list) and len(top) >= 3 and top[0] == "rank":
             _POLICY["rank"].setdefault(top[1], set()).add(top[2])
