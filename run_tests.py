@@ -149,6 +149,15 @@ CASES = [
     ("prov tag alone is free",        '(defx f () (fn () (prov ai 1)))', True),                         # tagging never bites; only `trust` gates
     ("trust: effects still flow",     '(defx f (Net) (fn (u) (trust (prov human (net u)))))', True),    # provenance is orthogonal to effects
     ("trust: under-declared effect still caught", '(defx f () (fn (u) (trust (prov human (net u)))))', False),  # human-anchored, yet Net undeclared -> REJECTED
+    # --- grown 2026-06-24: D9.1 — independence as a QUANTITY. (trust N e) demands >= N DISTINCT independent anchors
+    #     (provenance != 'ai'); N defaults to 1 (the D9 binary form). Answers NOSTROMO's open question: independence is a
+    #     checkable NUMBER, not a binary. Provenance is a SET -> repeating a source does NOT count (needs real corroboration). ---
+    ("trust N=2: two distinct anchors ok", '(defx f () (fn () (trust 2 (prov human (prov audit 1)))))', True),
+    ("trust N=2: only one anchor refused",  '(defx f () (fn () (trust 2 (prov human 1))))', False),
+    ("trust N=2: ai does not count",        '(defx f () (fn () (trust 2 (prov human (prov ai 1)))))', False),       # {human,ai}-ai = 1 < 2
+    ("trust N=2: same source twice = 1",    '(defx f () (fn () (trust 2 (prov human (prov human 1)))))', False),    # set: distinct sources only
+    ("trust N=3: three distinct ok",        '(defx f () (fn () (trust 3 (prov human (prov audit (prov trace 1))))))', True),
+    ("trust N=1 explicit (backward-compat)",'(defx f () (fn () (trust 1 (prov human 1))))', True),
 ]
 
 

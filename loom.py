@@ -259,12 +259,15 @@ def infer(node, fns, errs, penv=None):
         eff = set()                                     # SEPARATE from effects: prov flows up, effects pass through unchanged
         for x in node[2:]: eff |= infer(x, fns, errs, penv)
         return eff
-    if h == "trust":                                    # (trust expr) — D9 GATE vs CIRCULAR trust: the value must carry at
-        anchors = prov_of(node)                         # least one INDEPENDENT anchor (any provenance that is NOT 'ai').
-        if not (anchors - {"ai"}):                      # purely-ai or unprovenanced = self-referential / unanchored -> REFUSE
-            errs.append(f"trust gate: value is purely AI-authored/unanchored {sorted(anchors) or '(no provenance)'} — needs an independent anchor (human/trace/...)")
+    if h == "trust":                                    # (trust [N] expr) — D9 GATE vs CIRCULAR / under-corroborated trust:
+        has_n = len(node) > 1 and isinstance(node[1], int)   # the value must carry >= N DISTINCT INDEPENDENT anchors
+        need = node[1] if has_n else 1                       # (provenance != 'ai'). N defaults to 1 (the binary D9 form).
+        body = node[2:] if has_n else node[1:]               # independence is a QUANTITY = count of distinct non-ai sources;
+        independent = {p for x in body for p in prov_of(x)} - {"ai"}  # a SET, so repeating a source does NOT inflate it
+        if len(independent) < need:
+            errs.append(f"trust gate: need >= {need} independent anchor(s), got {len(independent)} {sorted(independent) or '(none)'} — value too self-referential / under-corroborated")
         eff = set()
-        for x in node[1:]: eff |= infer(x, fns, errs, penv)
+        for x in body: eff |= infer(x, fns, errs, penv)
         return eff
     eff = set()
     for a in node[1:]: eff |= infer(a, fns, errs, penv)
