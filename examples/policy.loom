@@ -1,0 +1,18 @@
+; policy.loom — D15: declare the trust POLICY once, at the top; every gate inherits it.
+;
+; Trust stops being a pattern you repeat on every seam and becomes a property of the codebase:
+;   (rank LOW HIGH)     a global role lattice edge — HIGH outranks LOW, in every gate
+;   (require EFF role)  a global mandate — every seam that grants EFF must carry that role
+
+(rank review audit)            ; an audit outranks a review, everywhere in this program
+(require Net review)           ; any seam that grants Net must be independently reviewed
+
+(defx fetch (Net)
+  (fn (url)
+    (seam (Net)                ; no inline clause needed — the program-wide policy applies here
+      (by audit bob            ; an audit satisfies the (require Net review) via (rank review audit)
+        (net url)))))
+
+(defx main (Net) (fn () (fetch "https://api")))
+
+; Drop the (by audit bob ...) anchor and Net is DENIED at check — the policy mandates a review for Net.

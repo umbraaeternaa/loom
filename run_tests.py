@@ -210,6 +210,15 @@ CASES = [
     ("D14 comment: parens in inline comment ignored", '(defx f (IO) (fn (x)\n  ; danger (net x) (ffi y) mentioned here\n  (print x)))', True),  # would have slurped (net x)/(ffi y) before
     ("D14 comment: does NOT mask a real lie", '(defx f () (fn (x) (print x))) ; trailing (print x) is just a comment\n', False),   # f really does IO, declares none -> still REJECTED
     ("D14 comment: semicolon inside a string is not a comment", '(defx f (IO) (fn () (print "a;b")))', True),   # the ';' lives in the string, not a comment
+    # --- grown 2026-06-24: D15 — program-wide trust POLICY declared once at top level. (rank LOW HIGH) is a global subsumption
+    #     edge merged into every gate; (require EFF role) mandates that every seam granting EFF carries that role. The policy is
+    #     reset per program (never leaks). Trust stops being a repeated per-gate pattern and becomes a property of the codebase.
+    ("D15 rank: global rank fills a lower requirement", '(rank reviewer auditor) (defx f () (fn () (trust (roles code reviewer) (by code human (by auditor alice 1)))))', True),
+    ("D15 rank: does NOT leak to a program without it", '(defx f () (fn () (trust (roles code reviewer) (by code human (by auditor alice 1)))))', False),  # no (rank) here -> auditor != reviewer
+    ("D15 require: mandates a vouch on the effect", '(require Net review) (defx f (Net) (fn (u) (seam (Net) (by review alice (net u)))))', True),
+    ("D15 require: rejects an un-vouched grant", '(require Net review) (defx f (Net) (fn (u) (seam (Net) (net u))))', False),   # Net granted, no review anchor -> policy violation
+    ("D15 require: does NOT leak (plain seam ok)", '(defx f (Net) (fn (u) (seam (Net) (net u))))', True),   # no policy -> ordinary capability seam
+    ("D15: require honors global rank", '(rank review audit) (require Net review) (defx f (Net) (fn (u) (seam (Net) (by audit bob (net u)))))', True),  # audit subsumes review
 ]
 
 
@@ -416,7 +425,13 @@ def main():
         print(f"  {'ok  ' if rc1 else 'FAIL'} runtime D14 comments: string ';' kept={vc1} | commented run={vc2}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime D14 comments: {e}")
-    total = len(CASES) + 26
+    try:                                               # runtime: D15 policy forms are STATIC — inert at runtime, program runs normally
+        vp1, _ = run_call('(rank reviewer auditor) (require Net review) (defx t () (fn () 42))', "(t)")
+        rp1 = (vp1 == 42); ok += rp1
+        print(f"  {'ok  ' if rp1 else 'FAIL'} runtime D15 policy: program with (rank)/(require) runs => {vp1}")
+    except (LoomError, RecursionError) as e:
+        print(f"  FAIL runtime D15 policy: {e}")
+    total = len(CASES) + 27
     print(f"{'PASS' if ok == total else 'FAIL'} — {ok}/{total} citadel checks")
 
 

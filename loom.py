@@ -17,6 +17,8 @@ PURE_OPS = {"+", "-", "*", "=", "<", ">",          # pure ops the interpreter ru
 OP = {"IO": "print", "Net": "net", "Alloc": "alloc", "Rand": "rand"}   # which builtin operation a `with`-handler reinterprets
 _CAPS = []                                              # runtime capability stack: each seam pushes the authority it grants
 def _cap_ok(eff): return (not _CAPS) or (eff in _CAPS[-1])  # top-level host is unrestricted; a seam SANDBOXES its body
+_POLICY = {"rank": {}, "require": {}}                   # D15 program-wide trust policy (STATIC): (rank LOW HIGH) global subsumption
+#   rank[LOW] = {HIGH..} merged into every gate's lattice; require[EFF] = {role..} every seam granting EFF must vouch. check() RESETS it.
 _RENV = []                                              # static stack of {resource-name: effect-set} for typed resources
 def _foreign_logger(args, out):                        # opaque foreign code that WANTS IO; emits ONLY if IO was granted
     if _cap_ok("IO"): out.append("foreign:" + str(args[0]))
@@ -226,6 +228,13 @@ def _roleclauses(tail):
         rest = rest[1:]
     return role_spec, up, needs, rest
 
+def _with_policy_rank(up):
+    """D15: fold the program-wide (rank LOW HIGH) edges into a gate's local subsumption map (purely additive)."""
+    if not _POLICY["rank"]: return up
+    m = {k: set(v) for k, v in up.items()}
+    for lo, his in _POLICY["rank"].items(): m.setdefault(lo, set()).update(his)
+    return m
+
 def infer(node, fns, errs, penv=None):
     """Effect row a node performs (transitively). penv = {param: latent-effect-set} for function-typed names in scope."""
     penv = penv or {}
@@ -239,6 +248,7 @@ def infer(node, fns, errs, penv=None):
     if h == "seam" or h == "seam1":                     # (seam (E..) (roles ..)? (sub ..)* expr..) — CHECKED boundary == GRANT
         decl = set(node[1]) - {"Pure"}                  # (seam1 ..) = LINEAR/AFFINE grant: each cap usable AT MOST ONCE.
         role_spec, up, needs, body = _roleclauses(node[2:])  # D12 (roles ..) GATES the grant on a quorum; D13 (needs EFF role) binds per-effect
+        up = _with_policy_rank(up)                       # D15: program-wide (rank ..) edges apply to this gate too
         inner = set()                                   # the row it declares is exactly the authority handed to the body
         for x in body: inner |= infer(x, fns, errs, penv)  # (incl. opaque foreign code). 'Pure' = the EMPTY grant.
         inner.discard("?")                              # the seam is WHERE you take responsibility for opaque foreign code
@@ -255,6 +265,10 @@ def infer(node, fns, errs, penv=None):
                 errs.append(f"seam: (needs {eff} {role}) names {eff}, not granted by this seam {sorted(decl)}")
             elif _quorum_check({role}, up, body)[0]:    # missing non-empty => role not covered (by a non-ai author or a subsuming role)
                 errs.append(f"seam grant denied: effect {eff} requires role '{role}' — not vouched by a non-ai author (or a subsuming role)")
+        for eff in sorted(decl):                        # D15: program-wide (require EFF role) — every seam granting EFF must vouch role
+            for role in sorted(_POLICY["require"].get(eff, ())):
+                if _quorum_check({role}, up, body)[0]:
+                    errs.append(f"policy: effect {eff} requires role '{role}' (program-wide (require {eff} {role})) — not vouched by a non-ai author")
         if h == "seam1":                                # affinity rides AS A PER-SEAM MULTIPLICITY — the row stays a flat
             uc = {}                                     # idempotent SET (superset inference untouched); we additionally
             for x in body:                              # carry a use-count LATTICE (0/1/many) that flows THROUGH calls
@@ -334,7 +348,7 @@ def infer(node, fns, errs, penv=None):
         if is_roles:                                     # D10 ROLE-QUORUM + D11 role LATTICE: (trust (roles ..) (sub LOW HIGH).. e)
             _, up, _, body = _roleclauses(node[1:])       # node[1] IS the (roles ..) spec — consume it + any (sub LOW HIGH) clauses
             roles_req = set(spec[1:])                     # up[LOW] = {HIGH..}: a higher role can STAND IN FOR a lower one (D11)
-            missing, authors = _quorum_check(roles_req, up, body)
+            missing, authors = _quorum_check(roles_req, _with_policy_rank(up), body)   # D15: + program-wide ranks
             if missing:
                 errs.append(f"trust gate (roles): role(s) {sorted(missing)} not independently covered (need a non-ai author, or a role that subsumes it) — self-certified")
             elif len(authors) < 2:
@@ -361,6 +375,12 @@ def infer(node, fns, errs, penv=None):
 
 def check(program):
     """Returns (fns, errors). errors empty == program type/effect-checks (is accepted)."""
+    _POLICY["rank"] = {}; _POLICY["require"] = {}        # D15: RESET program-wide policy first (never leaks between programs)
+    for top in program:                                  # collect (rank LOW HIGH) / (require EFF role) BEFORE inference
+        if isinstance(top, list) and len(top) >= 3 and top[0] == "rank":
+            _POLICY["rank"].setdefault(top[1], set()).add(top[2])
+        elif isinstance(top, list) and len(top) >= 3 and top[0] == "require":
+            _POLICY["require"].setdefault(top[1], set()).add(top[2])
     fns = {}
     for top in program:
         if isinstance(top, list) and top and top[0] == "defx":
