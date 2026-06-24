@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a small (~599-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript**. It is a research
-kernel — small on purpose — and it is **self-verified by 148 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 154 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 148/148 citadel checks
+PASS — 154/154 citadel checks
 ```
 
 ## The idea in one screen
@@ -84,7 +84,7 @@ the caller's declaration.
 ## What's inside
 
 Effect rows + superset rule · checked seams · effect handlers (`handle` discharges,
-`with` reinterprets) · **capability seams for effect-opaque FFI** · **affine (use-once) seams** + **linear resources** + **linear params** (use-exactly-once, carried across call boundaries) · typed resources can also carry an effect — open-once, use performs it, close-once · records (product data) · sum types + pattern matching · **required effects** (`E!`) — a function must *actually perform* a declared effect, not merely be permitted to (a do-nothing stub that lies about intent is rejected; a resource-tied floor forces the effect through the intended resource) · **provenance + a `trust` gate** — tag who authored a value (`(prov human e)`), and `(trust N e)` refuses a value trusted only by itself, demanding ≥ N *independent* (non-`ai`) anchors — a defense against **circular trust** (an AI authoring the code, the spec it's judged by, *and* the proof) · **role quorum** (`(by role who e)` + `(trust (roles code spec proof) e)`) — a *count* of anchors can't tell that they all played the same part, so the gate can demand that the **roles that matter are covered by distinct authors**: every required role needs a non-`ai` author *and* no single author may own them all (one person who wrote the code, the spec, *and* the proof is self-certifying → rejected) · `if` / `let` · recursion ·
+`with` reinterprets) · **capability seams for effect-opaque FFI** · **affine (use-once) seams** + **linear resources** + **linear params** (use-exactly-once, carried across call boundaries) · typed resources can also carry an effect — open-once, use performs it, close-once · records (product data) · sum types + pattern matching · **required effects** (`E!`) — a function must *actually perform* a declared effect, not merely be permitted to (a do-nothing stub that lies about intent is rejected; a resource-tied floor forces the effect through the intended resource) · **provenance + a `trust` gate** — tag who authored a value (`(prov human e)`), and `(trust N e)` refuses a value trusted only by itself, demanding ≥ N *independent* (non-`ai`) anchors — a defense against **circular trust** (an AI authoring the code, the spec it's judged by, *and* the proof) · **role quorum** (`(by role who e)` + `(trust (roles code spec proof) e)`) — a *count* of anchors can't tell that they all played the same part, so the gate can demand that the **roles that matter are covered by distinct authors**: every required role needs a non-`ai` author *and* no single author may own them all (one person who wrote the code, the spec, *and* the proof is self-certifying → rejected) · **a role lattice** (`(sub LOW HIGH)`) — roles can be ranked, so a *stronger* check stands in for a weaker requirement (an `auditor` covers a required `reviewer`), strictly one-directional and never bypassing the distinct-author rule · `if` / `let` · recursion ·
 pure list primitives · first-class functions with row-polymorphism · anonymous lambdas &
 closures · a BACKEND that compiles checked code to portable source — one verified program — even one that does I/O — runs on both Python AND JavaScript with identical output (same pattern -> C/WASM) · and a hard soundness rule: **an unverifiable call is rejected, never assumed
 pure**. The static checker's vocabulary is kept identical to the interpreter's, so nothing
@@ -157,6 +157,10 @@ author owns them all:
 python3 loom.py run examples/roles.loom   # => 42  (code ratified by a human, proof an independent trace)
 # one author for both roles, or an ai-only role, is REJECTED before it can run
 ```
+
+Roles can also be **ranked**: `(trust (roles code reviewer) (sub reviewer auditor) …)` declares that an
+`auditor` outranks a `reviewer`, so a stronger check satisfies a weaker requirement — one-directional,
+and rank never lets a single author stand in for two independent roles.
 
 ## Honest status & prior art
 

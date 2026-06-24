@@ -179,6 +179,14 @@ CASES = [
     ("D10 roles: effects still flow",   '(defx f (Net) (fn (u) (trust (roles code proof) (by code human (by proof trace (net u))))))', True),     # role gate orthogonal to effects
     ("D10 roles: under-declared effect still caught", '(defx f () (fn (u) (trust (roles code proof) (by code human (by proof trace (net u))))))', False),  # Net undeclared -> REJECTED
     ("D10: by-author feeds the count form", '(defx f () (fn () (trust 2 (by code human (by proof trace 1)))))', True),   # by-authors are anchors for D9.1 too
+    # --- grown 2026-06-24: D11 — roles as a LATTICE. (sub LOW HIGH) declares HIGH outranks LOW; a higher role STANDS IN FOR a
+    #     lower required role. Strict direction (stronger checker covers weaker requirement, never reverse) + rank never bypasses
+    #     the distinct-author rule. No (sub ..) => exact-name match = pure D10.
+    ("D11 sub: auditor fills reviewer ok", '(defx f () (fn () (trust (roles code reviewer) (sub reviewer auditor) (by code human (by auditor alice 1)))))', True),
+    ("D11 sub: wrong direction refused",   '(defx f () (fn () (trust (roles code auditor) (sub reviewer auditor) (by code human (by reviewer alice 1)))))', False),  # reviewer !>= auditor
+    ("D11 sub: transitive subsumption ok", '(defx f () (fn () (trust (roles code reviewer) (sub reviewer auditor) (sub auditor board) (by code human (by board alice 1)))))', True),
+    ("D11 sub: rank != independence",      '(defx f () (fn () (trust (roles code reviewer) (sub reviewer auditor) (by code alice (by auditor alice 1)))))', False),  # one author both -> circular
+    ("D11: no sub => exact match only",    '(defx f () (fn () (trust (roles code reviewer) (by code human (by auditor alice 1)))))', False),  # auditor doesn't match reviewer w/o declared sub
 ]
 
 
@@ -360,7 +368,13 @@ def main():
         print(f"  {'ok  ' if rd1 else 'FAIL'} runtime D10 roles: (trust (code proof) ..)={vd1} | (by code human 7)={vd2}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime D10 roles: {e}")
-    total = len(CASES) + 22
+    try:                                               # runtime: D11 (sub ..) clause is TRANSPARENT — subsumption is a static check
+        ve1, _ = run_call('(defx t () (fn () (trust (roles code reviewer) (sub reviewer auditor) (by code human (by auditor alice 5)))))', "(t)")
+        re1 = (ve1 == 5); ok += re1
+        print(f"  {'ok  ' if re1 else 'FAIL'} runtime D11 lattice: (trust (roles ..) (sub ..) ..)={ve1}")
+    except (LoomError, RecursionError) as e:
+        print(f"  FAIL runtime D11 lattice: {e}")
+    total = len(CASES) + 23
     print(f"{'PASS' if ok == total else 'FAIL'} — {ok}/{total} citadel checks")
 
 

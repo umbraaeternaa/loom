@@ -281,16 +281,27 @@ def infer(node, fns, errs, penv=None):
     if h == "trust":                                    # (trust SPEC? expr) — D9/D10 GATE vs CIRCULAR / under-corroborated trust
         spec = node[1] if len(node) > 1 else None
         is_roles = isinstance(spec, list) and len(spec) > 0 and spec[0] == "roles"
-        if is_roles:                                     # D10 ROLE-QUORUM: (trust (roles r1 r2 ..) e) — each role by a non-ai
-            roles_req = set(spec[1:]); body = node[2:]   #   author, and the required roles span >= 2 DISTINCT authors
-            pairs = set()
-            for x in body: pairs |= roles_of(x)
-            pairs = {(r, w) for (r, w) in pairs if w != "ai"}            # 'ai' never anchors a role
-            covered = {r for (r, w) in pairs}
-            authors = {w for (r, w) in pairs if r in roles_req}
+        if is_roles:                                     # D10 ROLE-QUORUM + D11 role LATTICE: (trust (roles ..) (sub LOW HIGH).. e)
+            roles_req = set(spec[1:])                     #   each role by a non-ai author; required roles span >= 2 DISTINCT authors
+            rest = node[2:]; up = {}                      # up[LOW] = {HIGH..}: a higher role can STAND IN FOR a lower one (D11)
+            while rest and isinstance(rest[0], list) and len(rest[0]) >= 3 and rest[0][0] == "sub":
+                up.setdefault(rest[0][1], set()).add(rest[0][2]); rest = rest[1:]   # (sub LOW HIGH): HIGH subsumes LOW
+            body = rest
+            def _fillers(r):                              # r plus every role transitively above it (iterative closure, no recursion)
+                seen = {r}; stk = [r]
+                while stk:
+                    for hi in up.get(stk.pop(), ()):
+                        if hi not in seen: seen.add(hi); stk.append(hi)
+                return seen
+            pairs = {(r, w) for x in body for (r, w) in roles_of(x) if w != "ai"}   # 'ai' never anchors a role
+            covered = set(); authors = set()
+            for req in roles_req:
+                fr = _fillers(req)
+                for (ar, w) in pairs:
+                    if ar in fr: covered.add(req); authors.add(w)
             missing = roles_req - covered
             if missing:
-                errs.append(f"trust gate (roles): role(s) {sorted(missing)} not independently covered (need a non-ai author) — self-certified")
+                errs.append(f"trust gate (roles): role(s) {sorted(missing)} not independently covered (need a non-ai author, or a role that subsumes it) — self-certified")
             elif len(authors) < 2:
                 errs.append(f"trust gate (roles): required roles satisfied by a single author {sorted(authors)} — circular trust (one author owns code+spec+proof)")
         else:                                            # D9 COUNT form: (trust [N] e) — value must carry >= N DISTINCT
@@ -414,9 +425,14 @@ def ev(node, env, fns, out, handlers=None):
         for x in node[3:]: r = ev(x, env, fns, out, handlers)
         return r
     if h == "trust":                                    # trust gate — runtime-transparent (already checked at check-time)
-        spec = node[1] if len(node) > 1 else None        # skip the SPEC arg (N or (roles ..)); eval only the body
-        is_spec = isinstance(spec, int) or (isinstance(spec, list) and len(spec) > 0 and spec[0] == "roles")
-        body = node[2:] if is_spec else node[1:]
+        spec = node[1] if len(node) > 1 else None        # skip the SPEC arg (N or (roles ..)) + any (sub ..) clauses; eval body
+        if isinstance(spec, int):
+            body = node[2:]
+        elif isinstance(spec, list) and len(spec) > 0 and spec[0] == "roles":
+            body = node[2:]
+            while body and isinstance(body[0], list) and len(body[0]) >= 3 and body[0][0] == "sub": body = body[1:]
+        else:
+            body = node[1:]
         r = None
         for x in body: r = ev(x, env, fns, out, handlers)
         return r
