@@ -265,10 +265,14 @@ def infer(node, fns, errs, penv=None):
                 errs.append(f"seam: (needs {eff} {role}) names {eff}, not granted by this seam {sorted(decl)}")
             elif _quorum_check({role}, up, body)[0]:    # missing non-empty => role not covered (by a non-ai author or a subsuming role)
                 errs.append(f"seam grant denied: effect {eff} requires role '{role}' — not vouched by a non-ai author (or a subsuming role)")
-        for eff in sorted(decl):                        # D15: program-wide (require EFF role) — every seam granting EFF must vouch role
-            for role in sorted(_POLICY["require"].get(eff, ())):
-                if _quorum_check({role}, up, body)[0]:
-                    errs.append(f"policy: effect {eff} requires role '{role}' (program-wide (require {eff} {role})) — not vouched by a non-ai author")
+        for eff in sorted(decl):                        # D15/D17: program-wide (require EFF spec) per granted effect
+            for spec in sorted(_POLICY["require"].get(eff, ()), key=str):
+                if isinstance(spec, int):               # D17: the grant needs >= N DISTINCT independent (non-ai) authors
+                    independent = {p for x in body for p in prov_of(x)} - {"ai"}
+                    if len(independent) < spec:
+                        errs.append(f"policy: effect {eff} requires >= {spec} independent authors (program-wide (require {eff} {spec})), got {len(independent)} {sorted(independent) or '(none)'}")
+                elif _quorum_check({spec}, up, body)[0]:  # D15: a SPECIFIC role must be covered (subsumption applies)
+                    errs.append(f"policy: effect {eff} requires role '{spec}' (program-wide (require {eff} {spec})) — not vouched by a non-ai author")
         if h == "seam1":                                # affinity rides AS A PER-SEAM MULTIPLICITY — the row stays a flat
             uc = {}                                     # idempotent SET (superset inference untouched); we additionally
             for x in body:                              # carry a use-count LATTICE (0/1/many) that flows THROUGH calls

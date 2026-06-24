@@ -227,6 +227,13 @@ CASES = [
     ("D16 forbid: does NOT leak",          '(defx f (Net) (fn (u) (net u)))', True),   # no (forbid) -> Net is fine
     ("D16 forbid: catches a declared+granted effect", '(forbid FFI) (defx f (FFI) (fn (x) (seam (FFI) (ffi "x" x))))', False),  # FFI declared+granted, ceiling ok -> forbid bans it
     ("D16 forbid: leaves other effects alone", '(forbid FFI) (defx f (IO) (fn (x) (print x)))', True),   # IO != FFI
+    # --- grown 2026-06-24: D17 — (require EFF N) with an INTEGER: every seam granting EFF must carry >= N DISTINCT independent
+    #     (non-ai) authors (merges D15 policy with D9.1 counting). The number form lives alongside the role form (require EFF role).
+    ("D17 require N: two authors meets N=2", '(require Net 2) (defx f (Net) (fn (u) (seam (Net) (by code human (by review alice (net u))))))', True),
+    ("D17 require N: one author fails N=2",  '(require Net 2) (defx f (Net) (fn (u) (seam (Net) (by code human (net u)))))', False),
+    ("D17 require N: ai does not count",     '(require Net 2) (defx f (Net) (fn (u) (seam (Net) (by code human (by x ai (net u))))))', False),  # {human,ai}-ai = 1 < 2
+    ("D17 require N: does NOT leak",         '(defx f (Net) (fn (u) (seam (Net) (by code human (net u)))))', True),   # no policy -> a single author is fine
+    ("D17 require N: prov anchors count too",'(require Net 2) (defx f (Net) (fn (u) (seam (Net) (prov human (prov audit (net u))))))', True),  # prov + prov = 2 distinct
 ]
 
 
@@ -445,7 +452,13 @@ def main():
         print(f"  {'ok  ' if rf1 else 'FAIL'} runtime D16 forbid: program with (forbid FFI) runs => {vf1}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime D16 forbid: {e}")
-    total = len(CASES) + 28
+    try:                                               # runtime: D17 (require EFF N) is STATIC — a grant that meets it runs
+        vq1, _ = run_call('(require Net 2) (defx t (Net) (fn () (seam (Net) (by a x (by b y (net "z"))))))', "(t)")
+        rq1 = (vq1 == "<net z>"); ok += rq1
+        print(f"  {'ok  ' if rq1 else 'FAIL'} runtime D17 require-N: grant with 2 authors runs => {vq1}")
+    except (LoomError, RecursionError) as e:
+        print(f"  FAIL runtime D17 require-N: {e}")
+    total = len(CASES) + 29
     print(f"{'PASS' if ok == total else 'FAIL'} — {ok}/{total} citadel checks")
 
 
