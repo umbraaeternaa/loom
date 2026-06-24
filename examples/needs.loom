@@ -1,0 +1,20 @@
+; needs.loom — D13: PER-EFFECT role binding. Different dangers want different vouchers.
+;
+; D12 gated a whole capability on one quorum. D13 makes it precise: bind each effect to the role
+; that must vouch for IT. Here the NETWORK call must be reviewed; the logging must be audited —
+; by the right, non-ai people. The grant of each effect is proven before it can happen.
+;
+; needs Net review  -> the Net capability is granted only if a non-ai 'review' anchor is present
+; needs IO  audit   -> the IO  capability is granted only if a non-ai 'audit'  anchor is present
+
+(defx publish (Net IO)
+  (fn (url msg)
+    (seam (Net IO) (needs Net review) (needs IO audit)
+      (by review alice
+        (by audit bob
+          (let (r (net url))
+            (print msg)))))))
+
+(defx main (Net IO) (fn () (publish "https://api" "shipped")))
+
+; DENIED at check if you cross the wires: e.g. binding Net to audit while only a reviewer is present.

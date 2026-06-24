@@ -122,7 +122,7 @@ def _ucount(node, fns, penv):
         for x in node[2:]: add(_ucount(x, fns, penv))
         return out
     if h in ("seam", "seam1"):                          # a grant is pass-through for counting (the check happens AT seam1)
-        for x in _roleclauses(node[2:])[2]: add(_ucount(x, fns, penv))   # skip D12 (roles..)/(sub..) clauses
+        for x in _roleclauses(node[2:])[3]: add(_ucount(x, fns, penv))   # skip D12/D13 (roles..)/(sub..)/(needs..) clauses
         return out
     if h == "handle":                                   # handled effects discharged locally -> 0 uses escape upward
         for x in node[2:]: add(_ucount(x, fns, penv))
@@ -207,14 +207,20 @@ def _quorum_check(roles_req, up, body):
     return roles_req - covered, authors
 
 def _roleclauses(tail):
-    """Split a clause tail into (role_spec | None, subsumption up-map, body). Shared by `trust` and `seam` (D10/D11/D12):
-    an optional (roles r..) clause, then zero or more (sub LOW HIGH) lattice clauses, then the body."""
-    rest = list(tail); role_spec = None; up = {}
-    if rest and isinstance(rest[0], list) and len(rest[0]) > 0 and rest[0][0] == "roles":
-        role_spec = rest[0]; rest = rest[1:]
-        while rest and isinstance(rest[0], list) and len(rest[0]) >= 3 and rest[0][0] == "sub":
-            up.setdefault(rest[0][1], set()).add(rest[0][2]); rest = rest[1:]
-    return role_spec, up, rest
+    """Parse leading trust/grant clauses off a tail, then the body. Shared by `trust` and `seam` (D10/D11/D12/D13):
+      (roles r..)        — the role quorum (D10/D11)
+      (sub LOW HIGH)     — a lattice edge: HIGH outranks / subsumes LOW (D11)
+      (needs EFF role)   — bind a specific effect's grant to a specific role (D13)
+    Returns (role_spec | None, subsumption up-map, needs=[(EFF, role)..], body)."""
+    role_spec = None; up = {}; needs = []; rest = list(tail)
+    while rest and isinstance(rest[0], list) and len(rest[0]) > 0:
+        c = rest[0]; head = c[0]
+        if head == "roles": role_spec = c
+        elif head == "sub" and len(c) >= 3: up.setdefault(c[1], set()).add(c[2])
+        elif head == "needs" and len(c) >= 3: needs.append((c[1], c[2]))
+        else: break                                       # first non-clause element => the body starts here
+        rest = rest[1:]
+    return role_spec, up, needs, rest
 
 def infer(node, fns, errs, penv=None):
     """Effect row a node performs (transitively). penv = {param: latent-effect-set} for function-typed names in scope."""
@@ -228,7 +234,7 @@ def infer(node, fns, errs, penv=None):
         return eff | {"?"}
     if h == "seam" or h == "seam1":                     # (seam (E..) (roles ..)? (sub ..)* expr..) — CHECKED boundary == GRANT
         decl = set(node[1]) - {"Pure"}                  # (seam1 ..) = LINEAR/AFFINE grant: each cap usable AT MOST ONCE.
-        role_spec, up, body = _roleclauses(node[2:])    # D12: an optional (roles ..) clause GATES the grant on a role quorum
+        role_spec, up, needs, body = _roleclauses(node[2:])  # D12 (roles ..) GATES the grant on a quorum; D13 (needs EFF role) binds per-effect
         inner = set()                                   # the row it declares is exactly the authority handed to the body
         for x in body: inner |= infer(x, fns, errs, penv)  # (incl. opaque foreign code). 'Pure' = the EMPTY grant.
         inner.discard("?")                              # the seam is WHERE you take responsibility for opaque foreign code
@@ -240,6 +246,11 @@ def infer(node, fns, errs, penv=None):
                 errs.append(f"seam grant denied: capability {sorted(decl)} requires role(s) {sorted(missing)} — not independently vouched (need a non-ai author, or a subsuming role)")
             elif len(authors) < 2:
                 errs.append(f"seam grant denied: capability {sorted(decl)} vouched by a single author {sorted(authors)} — needs >= 2 independent authors")
+        for (eff, role) in needs:                       # D13: a SPECIFIC effect is granted only if its OWN role vouches for it
+            if eff not in decl:
+                errs.append(f"seam: (needs {eff} {role}) names {eff}, not granted by this seam {sorted(decl)}")
+            elif _quorum_check({role}, up, body)[0]:    # missing non-empty => role not covered (by a non-ai author or a subsuming role)
+                errs.append(f"seam grant denied: effect {eff} requires role '{role}' — not vouched by a non-ai author (or a subsuming role)")
         if h == "seam1":                                # affinity rides AS A PER-SEAM MULTIPLICITY — the row stays a flat
             uc = {}                                     # idempotent SET (superset inference untouched); we additionally
             for x in body:                              # carry a use-count LATTICE (0/1/many) that flows THROUGH calls
@@ -317,7 +328,7 @@ def infer(node, fns, errs, penv=None):
         spec = node[1] if len(node) > 1 else None
         is_roles = isinstance(spec, list) and len(spec) > 0 and spec[0] == "roles"
         if is_roles:                                     # D10 ROLE-QUORUM + D11 role LATTICE: (trust (roles ..) (sub LOW HIGH).. e)
-            _, up, body = _roleclauses(node[1:])          # node[1] IS the (roles ..) spec — consume it + any (sub LOW HIGH) clauses
+            _, up, _, body = _roleclauses(node[1:])       # node[1] IS the (roles ..) spec — consume it + any (sub LOW HIGH) clauses
             roles_req = set(spec[1:])                     # up[LOW] = {HIGH..}: a higher role can STAND IN FOR a lower one (D11)
             missing, authors = _quorum_check(roles_req, up, body)
             if missing:
@@ -411,7 +422,7 @@ def ev(node, env, fns, out, handlers=None):
         _CAPS.append(set(node[1]) - {"Pure"})
         try:
             r = None
-            for x in _roleclauses(node[2:])[2]: r = ev(x, env, fns, out, handlers)   # skip D12 (roles..)/(sub..) clauses
+            for x in _roleclauses(node[2:])[3]: r = ev(x, env, fns, out, handlers)   # skip D12/D13 (roles..)/(sub..)/(needs..) clauses
         finally:
             _CAPS.pop()
         return r

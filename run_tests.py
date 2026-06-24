@@ -195,6 +195,16 @@ CASES = [
     ("D12: Net denied to single author",   '(defx f (Net) (fn (u) (seam (Net) (roles code review) (by code alice (by review alice (net u))))))', False),  # one author -> not independent
     ("D12: seam grant honors subsumption", '(defx f (Net) (fn (u) (seam (Net) (roles code review) (sub review auditor) (by code human (by auditor alice (net u))))))', True),   # auditor fills review
     ("D12: roles clause is opt-in (one author insufficient)", '(defx f (Net) (fn (u) (seam (Net) (roles code) (by code human (net u)))))', False),  # 1 author < 2 even though real
+    # --- grown 2026-06-24: D13 — PER-EFFECT role binding. (needs EFF role) on a seam: that specific effect is granted only if
+    #     the body carries the named role (non-ai, with D11 subsumption). Different dangers want different vouchers — Net wants
+    #     a reviewer, FFI wants an auditor. Makes the D12 grant PRECISE, not a blanket quorum.
+    ("D13 needs: Net+review satisfied",    '(defx f (Net) (fn (u) (seam (Net) (needs Net review) (by review alice (net u)))))', True),
+    ("D13 needs: role absent denied",      '(defx f (Net) (fn (u) (seam (Net) (needs Net review) (by code alice (net u)))))', False),    # review role not present
+    ("D13 needs: ai role denied",          '(defx f (Net) (fn (u) (seam (Net) (needs Net review) (by review ai (net u)))))', False),      # ai never vouches
+    ("D13 needs: per-effect precision ok", '(defx f (Net IO) (fn (u) (seam (Net IO) (needs Net review) (needs IO audit) (by review alice (by audit bob (let (x (net u)) (print x)))))))', True),
+    ("D13 needs: wrong role for effect",   '(defx f (Net) (fn (u) (seam (Net) (needs Net review) (by audit bob (net u)))))', False),    # audit present but Net needs review
+    ("D13 needs: ungranted effect named",  '(defx f (Net) (fn (u) (seam (Net) (needs IO audit) (by audit bob (net u)))))', False),       # IO not granted by this seam
+    ("D13 needs: honors subsumption",      '(defx f (Net) (fn (u) (seam (Net) (needs Net review) (sub review auditor) (by auditor alice (net u)))))', True),  # auditor fills review
 ]
 
 
@@ -388,7 +398,13 @@ def main():
         print(f"  {'ok  ' if rg1 else 'FAIL'} runtime D12 gated seam: (seam (Pure) (roles ..) ..)={vg1}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime D12 gated seam: {e}")
-    total = len(CASES) + 24
+    try:                                               # runtime: D13 (needs ..) is TRANSPARENT — per-effect binding is a static check
+        vn1, _ = run_call('(defx t (Net) (fn () (seam (Net) (needs Net review) (by review alice (net "u")))))', "(t)")
+        rn1 = (vn1 == "<net u>"); ok += rn1
+        print(f"  {'ok  ' if rn1 else 'FAIL'} runtime D13 needs: (seam (Net) (needs Net review) ..)={vn1}")
+    except (LoomError, RecursionError) as e:
+        print(f"  FAIL runtime D13 needs: {e}")
+    total = len(CASES) + 25
     print(f"{'PASS' if ok == total else 'FAIL'} — {ok}/{total} citadel checks")
 
 
