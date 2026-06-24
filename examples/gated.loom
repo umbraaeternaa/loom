@@ -1,0 +1,23 @@
+; gated.loom — D12: provenance-GATED capability.
+;
+; LOOM's spine is the effect system; the danger in AI-written code is the EFFECTS (Net/IO/FFI).
+; D12 fuses the trust layer onto that spine: a capability seam can demand a role quorum, so the
+; dangerous authority is GRANTED ONLY to independently-vouched code — proven by the checker, before
+; a single byte goes over the wire.
+;
+; (seam (Net) (roles code review) body)  grants Net to `body` ONLY if `body` satisfies the quorum:
+;   every required role has a non-ai author, and the roles span >= 2 DISTINCT authors (D10 + D11 ranks).
+
+(defx fetch (Net)
+  (fn (url)
+    (seam (Net) (roles code review)        ; Net is handed to this body ONLY if it is independently vouched
+      (by code human                       ; the code was ratified by a human
+        (by review alice                   ; and independently reviewed by alice  => two distinct, non-ai authors
+          (net url))))))                   ; the network call is now permitted
+
+(defx main (Net) (fn () (fetch "https://example")))   ; the grant lets the Net happen; it still propagates honestly
+
+; Capability DENIED at `check` (never runs) for any of these — uncomment to see:
+;   (by code ai (by review ai    (net url)))   ; ai-only        -> not independently vouched
+;   (by code alice (by review alice (net url))); one author     -> not independent (needs >= 2)
+;   (by code human (net url))                  ; reviewer absent -> role 'review' not covered

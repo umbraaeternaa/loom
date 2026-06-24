@@ -122,7 +122,7 @@ def _ucount(node, fns, penv):
         for x in node[2:]: add(_ucount(x, fns, penv))
         return out
     if h in ("seam", "seam1"):                          # a grant is pass-through for counting (the check happens AT seam1)
-        for x in node[2:]: add(_ucount(x, fns, penv))
+        for x in _roleclauses(node[2:])[2]: add(_ucount(x, fns, penv))   # skip D12 (roles..)/(sub..) clauses
         return out
     if h == "handle":                                   # handled effects discharged locally -> 0 uses escape upward
         for x in node[2:]: add(_ucount(x, fns, penv))
@@ -188,6 +188,34 @@ def roles_of(node):
     for a in node[1:]: s |= roles_of(a)
     return s
 
+def _quorum_check(roles_req, up, body):
+    """D10 role quorum + D11 lattice over `body`. up[LOW]={HIGH..}: a HIGHer role stands in for a LOWer requirement.
+    Returns (missing_roles, satisfying_authors): a required role is covered by a non-ai anchor at that role OR any role
+    that transitively subsumes it; authors are the non-ai authors that cover the required roles (>= 2 means independent)."""
+    def fillers(r):                                        # r plus every role transitively above it (iterative, no recursion)
+        seen = {r}; stk = [r]
+        while stk:
+            for hi in up.get(stk.pop(), ()):
+                if hi not in seen: seen.add(hi); stk.append(hi)
+        return seen
+    pairs = {(rr, w) for x in body for (rr, w) in roles_of(x) if w != "ai"}   # 'ai' never anchors a role
+    covered = set(); authors = set()
+    for req in roles_req:
+        fr = fillers(req)
+        for (ar, w) in pairs:
+            if ar in fr: covered.add(req); authors.add(w)
+    return roles_req - covered, authors
+
+def _roleclauses(tail):
+    """Split a clause tail into (role_spec | None, subsumption up-map, body). Shared by `trust` and `seam` (D10/D11/D12):
+    an optional (roles r..) clause, then zero or more (sub LOW HIGH) lattice clauses, then the body."""
+    rest = list(tail); role_spec = None; up = {}
+    if rest and isinstance(rest[0], list) and len(rest[0]) > 0 and rest[0][0] == "roles":
+        role_spec = rest[0]; rest = rest[1:]
+        while rest and isinstance(rest[0], list) and len(rest[0]) >= 3 and rest[0][0] == "sub":
+            up.setdefault(rest[0][1], set()).add(rest[0][2]); rest = rest[1:]
+    return role_spec, up, rest
+
 def infer(node, fns, errs, penv=None):
     """Effect row a node performs (transitively). penv = {param: latent-effect-set} for function-typed names in scope."""
     penv = penv or {}
@@ -198,16 +226,23 @@ def infer(node, fns, errs, penv=None):
         eff = set()                                     # foreign authority. Only a SEAM (the FFI contract) may cover it,
         for a in node[2:]: eff |= infer(a, fns, errs, penv)  # so the seam's granted row IS the capability handed across.
         return eff | {"?"}
-    if h == "seam" or h == "seam1":                     # (seam (E..) expr..) — CHECKED boundary == CAPABILITY GRANT;
+    if h == "seam" or h == "seam1":                     # (seam (E..) (roles ..)? (sub ..)* expr..) — CHECKED boundary == GRANT
         decl = set(node[1]) - {"Pure"}                  # (seam1 ..) = LINEAR/AFFINE grant: each cap usable AT MOST ONCE.
+        role_spec, up, body = _roleclauses(node[2:])    # D12: an optional (roles ..) clause GATES the grant on a role quorum
         inner = set()                                   # the row it declares is exactly the authority handed to the body
-        for x in node[2:]: inner |= infer(x, fns, errs, penv)  # (incl. opaque foreign code). 'Pure' = the EMPTY grant.
+        for x in body: inner |= infer(x, fns, errs, penv)  # (incl. opaque foreign code). 'Pure' = the EMPTY grant.
         inner.discard("?")                              # the seam is WHERE you take responsibility for opaque foreign code
         if inner - decl:
             errs.append(f"seam under-declares: wraps {sorted(inner)} but contract says {sorted(decl)}")
+        if role_spec is not None:                       # D12: grant the dangerous effect ONLY to independently-vouched code
+            missing, authors = _quorum_check(set(role_spec[1:]), up, body)
+            if missing:
+                errs.append(f"seam grant denied: capability {sorted(decl)} requires role(s) {sorted(missing)} — not independently vouched (need a non-ai author, or a subsuming role)")
+            elif len(authors) < 2:
+                errs.append(f"seam grant denied: capability {sorted(decl)} vouched by a single author {sorted(authors)} — needs >= 2 independent authors")
         if h == "seam1":                                # affinity rides AS A PER-SEAM MULTIPLICITY — the row stays a flat
             uc = {}                                     # idempotent SET (superset inference untouched); we additionally
-            for x in node[2:]:                          # carry a use-count LATTICE (0/1/many) that flows THROUGH calls
+            for x in body:                              # carry a use-count LATTICE (0/1/many) that flows THROUGH calls
                 for e, c in _ucount(x, fns, penv).items(): uc[e] = _uadd(uc.get(e, 0), c)   # + recursion (whole-program)
             for E in sorted(decl):
                 if uc.get(E, 0) == "M":
@@ -282,24 +317,9 @@ def infer(node, fns, errs, penv=None):
         spec = node[1] if len(node) > 1 else None
         is_roles = isinstance(spec, list) and len(spec) > 0 and spec[0] == "roles"
         if is_roles:                                     # D10 ROLE-QUORUM + D11 role LATTICE: (trust (roles ..) (sub LOW HIGH).. e)
-            roles_req = set(spec[1:])                     #   each role by a non-ai author; required roles span >= 2 DISTINCT authors
-            rest = node[2:]; up = {}                      # up[LOW] = {HIGH..}: a higher role can STAND IN FOR a lower one (D11)
-            while rest and isinstance(rest[0], list) and len(rest[0]) >= 3 and rest[0][0] == "sub":
-                up.setdefault(rest[0][1], set()).add(rest[0][2]); rest = rest[1:]   # (sub LOW HIGH): HIGH subsumes LOW
-            body = rest
-            def _fillers(r):                              # r plus every role transitively above it (iterative closure, no recursion)
-                seen = {r}; stk = [r]
-                while stk:
-                    for hi in up.get(stk.pop(), ()):
-                        if hi not in seen: seen.add(hi); stk.append(hi)
-                return seen
-            pairs = {(r, w) for x in body for (r, w) in roles_of(x) if w != "ai"}   # 'ai' never anchors a role
-            covered = set(); authors = set()
-            for req in roles_req:
-                fr = _fillers(req)
-                for (ar, w) in pairs:
-                    if ar in fr: covered.add(req); authors.add(w)
-            missing = roles_req - covered
+            _, up, body = _roleclauses(node[1:])          # node[1] IS the (roles ..) spec — consume it + any (sub LOW HIGH) clauses
+            roles_req = set(spec[1:])                     # up[LOW] = {HIGH..}: a higher role can STAND IN FOR a lower one (D11)
+            missing, authors = _quorum_check(roles_req, up, body)
             if missing:
                 errs.append(f"trust gate (roles): role(s) {sorted(missing)} not independently covered (need a non-ai author, or a role that subsumes it) — self-certified")
             elif len(authors) < 2:
@@ -391,7 +411,7 @@ def ev(node, env, fns, out, handlers=None):
         _CAPS.append(set(node[1]) - {"Pure"})
         try:
             r = None
-            for x in node[2:]: r = ev(x, env, fns, out, handlers)
+            for x in _roleclauses(node[2:])[2]: r = ev(x, env, fns, out, handlers)   # skip D12 (roles..)/(sub..) clauses
         finally:
             _CAPS.pop()
         return r

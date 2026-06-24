@@ -187,6 +187,14 @@ CASES = [
     ("D11 sub: transitive subsumption ok", '(defx f () (fn () (trust (roles code reviewer) (sub reviewer auditor) (sub auditor board) (by code human (by board alice 1)))))', True),
     ("D11 sub: rank != independence",      '(defx f () (fn () (trust (roles code reviewer) (sub reviewer auditor) (by code alice (by auditor alice 1)))))', False),  # one author both -> circular
     ("D11: no sub => exact match only",    '(defx f () (fn () (trust (roles code reviewer) (by code human (by auditor alice 1)))))', False),  # auditor doesn't match reviewer w/o declared sub
+    # --- grown 2026-06-24: D12 — provenance-GATED effects. A capability seam may carry a (roles ..) clause: the dangerous
+    #     effect (Net/IO/FFI) is GRANTED only to independently-vouched code (same D10+D11 quorum over the seam body). This
+    #     unifies the two axes — trust stops being a side-channel and becomes a CONDITION ON THE CAPABILITY ITSELF.
+    ("D12: Net granted to vouched code",   '(defx f (Net) (fn (u) (seam (Net) (roles code review) (by code human (by review alice (net u))))))', True),
+    ("D12: Net denied to ai-only code",    '(defx f (Net) (fn (u) (seam (Net) (roles code review) (by code ai (by review ai (net u))))))', False),   # capability needs non-ai roles
+    ("D12: Net denied to single author",   '(defx f (Net) (fn (u) (seam (Net) (roles code review) (by code alice (by review alice (net u))))))', False),  # one author -> not independent
+    ("D12: seam grant honors subsumption", '(defx f (Net) (fn (u) (seam (Net) (roles code review) (sub review auditor) (by code human (by auditor alice (net u))))))', True),   # auditor fills review
+    ("D12: roles clause is opt-in (one author insufficient)", '(defx f (Net) (fn (u) (seam (Net) (roles code) (by code human (net u)))))', False),  # 1 author < 2 even though real
 ]
 
 
@@ -374,7 +382,13 @@ def main():
         print(f"  {'ok  ' if re1 else 'FAIL'} runtime D11 lattice: (trust (roles ..) (sub ..) ..)={ve1}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime D11 lattice: {e}")
-    total = len(CASES) + 23
+    try:                                               # runtime: D12 (roles ..) on a seam is TRANSPARENT — the grant gate is static
+        vg1, _ = run_call('(defx t () (fn () (seam (Pure) (roles code review) (by code human (by review alice 7)))))', "(t)")
+        rg1 = (vg1 == 7); ok += rg1
+        print(f"  {'ok  ' if rg1 else 'FAIL'} runtime D12 gated seam: (seam (Pure) (roles ..) ..)={vg1}")
+    except (LoomError, RecursionError) as e:
+        print(f"  FAIL runtime D12 gated seam: {e}")
+    total = len(CASES) + 24
     print(f"{'PASS' if ok == total else 'FAIL'} — {ok}/{total} citadel checks")
 
 
