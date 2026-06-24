@@ -84,7 +84,7 @@ the caller's declaration.
 ## What's inside
 
 Effect rows + superset rule · checked seams · effect handlers (`handle` discharges,
-`with` reinterprets) · **capability seams for effect-opaque FFI** · **affine (use-once) seams** + **linear resources** + **linear params** (use-exactly-once, carried across call boundaries) · typed resources can also carry an effect — open-once, use performs it, close-once · records (product data) · sum types + pattern matching · `if` / `let` · recursion ·
+`with` reinterprets) · **capability seams for effect-opaque FFI** · **affine (use-once) seams** + **linear resources** + **linear params** (use-exactly-once, carried across call boundaries) · typed resources can also carry an effect — open-once, use performs it, close-once · records (product data) · sum types + pattern matching · **required effects** (`E!`) — a function must *actually perform* a declared effect, not merely be permitted to (a do-nothing stub that lies about intent is rejected; a resource-tied floor forces the effect through the intended resource) · **provenance + a `trust` gate** — tag who authored a value (`(prov human e)`), and `(trust N e)` refuses a value trusted only by itself, demanding ≥ N *independent* (non-`ai`) anchors — a defense against **circular trust** (an AI authoring the code, the spec it's judged by, *and* the proof) · `if` / `let` · recursion ·
 pure list primitives · first-class functions with row-polymorphism · anonymous lambdas &
 closures · a BACKEND that compiles checked code to portable source — one verified program — even one that does I/O — runs on both Python AND JavaScript with identical output (same pattern -> C/WASM) · and a hard soundness rule: **an unverifiable call is rejected, never assumed
 pure**. The static checker's vocabulary is kept identical to the interpreter's, so nothing
@@ -141,7 +141,7 @@ feature is added only with an adversarial test and must keep all checks green.
 
 The individual building blocks are **not new**: effect rows, algebraic effect handlers, and
 capability-style reasoning come from prior work like Koka, Eff, Unison, and OCaml 5's effects.
-LOOM does not claim to invent them — that's *why* the kernel still fits in ~550 lines. What it
+LOOM does not claim to invent them — that's *why* the kernel still fits in ~600 lines. What it
 explores is the **synthesis and framing**: one legible signature channel, checked at a trusted
 gate, as a **trust layer for AI-generated code**, with *reinterpreting handlers* as the
 primitive for containing untrusted effects. Feedback and criticism are very welcome —
