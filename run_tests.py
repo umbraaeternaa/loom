@@ -114,6 +114,27 @@ CASES = [
     ("match nullary arm", '(defx m2 () (fn () (match (variant None 0) ((Some x) x) ((None) 7))))', True),
     ("match arm effect surfaces", '(defx m3 () (fn (e) (match e ((Some x) (print x)) ((None) 0))))', False),
     ("match arm effect declared ok", '(defx m4 (IO) (fn (e) (match e ((Some x) (print x)) ((None) 0))))', True),
+    # --- grown 2026-06-23: TWO-SIDED ROW / REQUIRED effects `E!` — the row as a D7 SYNTHESIS CONTRACT, not just a
+    #     capability ceiling. Signals: srtdog64/PergyraLang "intent-oriented... compile-time verified contracts";
+    #     Aabody509/spec-compiler "human intent -> governed specification"; grioghar/sigil "requires/ensures".
+    #     Probe: does the SAME flat-set row survive being two-sided (floor MUST-perform <= actual <= ceiling MAY-perform)
+    #     so an AI's do-nothing stub is REJECTED — WITHOUT forcing a separate value-contract (Z3 ensures) mechanism? ---
+    ("required: honest fetch performs Net", '(defx fetch (Net!) (fn (u) (net u)))', True),
+    ("required: empty stub refused (D7)",   '(defx fetch (Net!) (fn (u) u))', False),    # type-checks under plain (Net); FAILS the intent
+    ("permitted (no !) stub still ok",      '(defx maybe (Net) (fn (u) u))', True),      # backward compat: ceiling-only row untouched
+    ("required: ceiling still enforced",    '(defx f (IO!) (fn (x) (net x)))', False),   # over-ceiling Net AND misses required IO
+    ("required: multi must all surface",    '(defx sync (IO! Net!) (fn (u) (print (net u))))', True),
+    ("required: multi under-performs",      '(defx sync2 (IO! Net!) (fn (u) (print u)))', False),  # IO done; Net required but absent
+    ("required: discharged eff fails floor",'(defx q (IO!) (fn (x) (handle (IO) (print x))))', False),  # handled away -> not performed
+    # --- grown 2026-06-24: RESOURCE-TIED FLOOR — pushing the D7 contract from "an effect happened" toward "the RIGHT
+    #     effect happened" (signals: grioghar/sigil "Z3 requires/ENSURES — result relates to args"; promise-language
+    #     "explicit ownership + zero hidden effects"; Aabody509/spec-compiler "human intent -> governed specification").
+    #     The row can't see VALUES, but it CAN see resource IDENTITY: tie the required floor `E!` to a TYPED LINEAR
+    #     resource of effect E, so the floor cannot be discharged while the intended resource sits unused (= leak).
+    #     This answers the 2026-06-23 open question with NO new mechanism (floor + typed resource, already in LOOM). ---
+    ("flat floor: stray Net cheats (D7 hole)",   '(defx fetch (Net!) (fn (u) (net "evil")))', True),   # honest limit: Net! only asks SOME net happen; the arg u is ignored, yet it type-checks
+    ("resource-tied floor: must consume r",      '(defx fetch (Net!) (fn () (resource (r Net) (use r))))', True),  # the plug: the only way to discharge Net! is to USE r -> the effect is forced through the intended resource
+    ("resource-tied floor: r ignored -> reject", '(defx fetch (Net!) (fn () (resource (r Net) (net "evil"))))', False),  # the cheat is caught: floor IS satisfied by stray net, yet REJECTED — r (the contract's resource) was never consumed
     # --- flagship 2026-06-23: untrusted code sandboxed (capability seam) + linear resource + typed result, all PROVEN ---
     ("flagship: sandboxed + linear + typed", '(defx untrusted () (fn (x) (seam (Pure) (ffi "logger" x)))) (defx process () (fn (item) (resource conn (let (r (use conn)) (variant Ok (untrusted item)))))) (defx main () (fn () (match (process 42) ((Ok v) v) ((Err e) 0))))', True),
 ]

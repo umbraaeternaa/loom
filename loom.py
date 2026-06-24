@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # LOOM v0 — the unifying core, made REAL. The citadel of ARGUS/plt.
-# Effect ROWS {Pure,IO,Net,Alloc,FFI} + SUPERSET rule (declared >= actual) + CHECKED SEAMS (foreign boundary
+# Effect ROWS {Pure,IO,Net,Alloc,FFI} + SUPERSET rule (declared >= actual) + REQUIRED effects `E!` (two-sided row:
+# floor MUST-perform <= actual <= ceiling MAY-perform -> the row IS the D7 synthesis contract) + CHECKED SEAMS (foreign boundary
 # declares+checks its contract) + effect HANDLERS: `handle` DISCHARGES an effect (drops it), `with` REINTERPRETS
 # it (routes the effect's operation to a handler fn, trading E for the handler's own effect — e.g. mock Net with
 # a pure fn => networked code becomes provably pure). Plus control flow (if/let), recursion, and first-class
@@ -260,7 +261,10 @@ def check(program):
             fn = top[3]
             penv = {pname(p): platent(p) for p in fn[1] if platent(p) is not None}
             lin = {idx for idx, p in enumerate(fn[1]) if plin(p)}   # positions of LINEAR params (carry a resource in)
-            fns[top[1]] = {"decl": set(top[2]), "fn": fn, "params": fn[1], "penv": penv, "lin": lin, "eff": set(), "uc": {}}
+            raw = top[2]                                            # declared row; a trailing '!' marks a REQUIRED effect
+            decl = {(e[:-1] if isinstance(e, str) and e.endswith("!") else e) for e in raw}    # CEILING: may perform ⊆ decl
+            req = {e[:-1] for e in raw if isinstance(e, str) and e.endswith("!") and e[:-1] in EFFECTS and e[:-1] != "Pure"}  # FLOOR: MUST perform
+            fns[top[1]] = {"decl": decl, "req": req, "fn": fn, "params": fn[1], "penv": penv, "lin": lin, "eff": set(), "uc": {}}
     for _ in range(len(fns) + 2):                       # fixpoint over callee effects + use-counts (both monotone)
         for i in fns.values():
             body = i["fn"][2:]; tmp = []
@@ -276,8 +280,11 @@ def check(program):
         if "?" in eff:                                  # an opaque foreign 'ffi' that no seam ever granted authority to
             errors.append(f"{n}: foreign 'ffi' call has no capability seam (wrap it: (seam (..) ...))")
             eff = eff - {"?"}
-        if eff - i["decl"]:
+        if eff - i["decl"]:                                 # CEILING: a capability you may not exceed (upper bound)
             errors.append(f"{n}: performs undeclared {sorted(eff - i['decl'])} (declared {sorted(i['decl'])})")
+        missing = i["req"] - eff                            # FLOOR: a REQUIRED effect (E!) must ACTUALLY be performed —
+        if missing:                                         # the row is now the D7 SYNTHESIS CONTRACT: a do-nothing stub
+            errors.append(f"{n}: contract requires {sorted(missing)} but body never performs it (stub does not satisfy intent)")
         unknown = {e for e in i["decl"] if e not in EFFECTS and not is_var(e)}  # vars ok; uppercase unknowns are not
         if unknown:
             errors.append(f"{n}: unknown effect {sorted(unknown)}")
