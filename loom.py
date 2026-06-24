@@ -161,6 +161,18 @@ def instantiate(callee, args, fns, penv, errs):
     return out
 
 
+def prov_of(node):
+    """Provenance set gathered under a node (who authored the values) — a channel SEPARATE from effects.
+    (prov P x) injects P; everything else unions its children. 'ai' is the only non-anchoring provenance."""
+    if not isinstance(node, list) or not node: return set()
+    if node[0] == "prov":
+        s = {node[1]}
+        for x in node[2:]: s |= prov_of(x)
+        return s
+    s = set()
+    for a in node[1:]: s |= prov_of(a)
+    return s
+
 def infer(node, fns, errs, penv=None):
     """Effect row a node performs (transitively). penv = {param: latent-effect-set} for function-typed names in scope."""
     penv = penv or {}
@@ -242,6 +254,17 @@ def infer(node, fns, errs, penv=None):
         eff = infer(val, fns, errs, penv)               # the bound value's OWN effects (defining a lambda = none)
         bp = {**penv, name: latent_of(val, fns, penv, errs)} if is_fn_expr(val, fns, penv) else penv
         for x in node[2:]: eff |= infer(x, fns, errs, bp)   # a let-bound function becomes callable in the body
+        return eff
+    if h == "prov":                                     # (prov P expr) — tag PROVENANCE P (who authored it); a channel
+        eff = set()                                     # SEPARATE from effects: prov flows up, effects pass through unchanged
+        for x in node[2:]: eff |= infer(x, fns, errs, penv)
+        return eff
+    if h == "trust":                                    # (trust expr) — D9 GATE vs CIRCULAR trust: the value must carry at
+        anchors = prov_of(node)                         # least one INDEPENDENT anchor (any provenance that is NOT 'ai').
+        if not (anchors - {"ai"}):                      # purely-ai or unprovenanced = self-referential / unanchored -> REFUSE
+            errs.append(f"trust gate: value is purely AI-authored/unanchored {sorted(anchors) or '(no provenance)'} — needs an independent anchor (human/trace/...)")
+        eff = set()
+        for x in node[1:]: eff |= infer(x, fns, errs, penv)
         return eff
     eff = set()
     for a in node[1:]: eff |= infer(a, fns, errs, penv)
@@ -345,6 +368,14 @@ def ev(node, env, fns, out, handlers=None):
         r = None
         for x in node[2:]: r = ev(x, env, fns, out, handlers)
         return r
+    if h == "prov":                                     # provenance tag — runtime-transparent (the trust gate is static)
+        r = None
+        for x in node[2:]: r = ev(x, env, fns, out, handlers)
+        return r
+    if h == "trust":                                    # trust gate — runtime-transparent (already checked at check-time)
+        r = None
+        for x in node[1:]: r = ev(x, env, fns, out, handlers)
+        return r
     if h == "record":                                   # build a product value (a dict of field -> value)
         return {fld[0]: ev(fld[1], env, fns, out, handlers) for fld in node[1:] if isinstance(fld, list) and len(fld) >= 2}
     if h == "get":
@@ -446,7 +477,8 @@ def _emit(node):
     if h == "record": return "{" + ",".join(f"{fld[0]!r}:{_emit(fld[1])}" for fld in node[1:] if isinstance(fld, list)) + "}"
     if h == "get": return f"({_emit(node[1])}[{node[2]!r}])"
     if h == "fn": return f"(lambda {','.join(pname(p) for p in node[1])}: {_emit(node[2:][-1])})"
-    if h in ("seam", "seam1", "resource"): return _emit(node[2:][-1])   # value-transparent (effects are a static layer)
+    if h in ("seam", "seam1", "resource", "prov"): return _emit(node[2:][-1])   # value-transparent (effects/prov are static layers)
+    if h == "trust": return _emit(node[1:][-1])                        # value-transparent (the trust gate is a static check)
     if h == "use": return "'<used>'"
     if h == "print": return f"_p({_emit(node[1])})"                     # IO: print AND return the value (as the interpreter)
     if h in ("net", "alloc", "ffi", "handle", "with", "variant", "match"):
@@ -494,7 +526,8 @@ def _emit_js(node):
     if h == "record": return "({" + ",".join(f"{fld[0]!r}:{_emit_js(fld[1])}" for fld in node[1:] if isinstance(fld, list)) + "})"
     if h == "get": return f"({_emit_js(node[1])}[{node[2]!r}])"
     if h == "fn": return f"(({','.join(pname(p) for p in node[1])})=>{_emit_js(node[2:][-1])})"
-    if h in ("seam", "seam1", "resource"): return _emit_js(node[2:][-1])
+    if h in ("seam", "seam1", "resource", "prov"): return _emit_js(node[2:][-1])
+    if h == "trust": return _emit_js(node[1:][-1])
     if h == "use": return "'<used>'"
     if h == "print": return f"_p({_emit_js(node[1])})"                  # IO: print AND return the value
     if h in ("net", "alloc", "ffi", "handle", "with", "variant", "match"):

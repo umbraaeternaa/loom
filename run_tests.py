@@ -137,6 +137,18 @@ CASES = [
     ("resource-tied floor: r ignored -> reject", '(defx fetch (Net!) (fn () (resource (r Net) (net "evil"))))', False),  # the cheat is caught: floor IS satisfied by stray net, yet REJECTED — r (the contract's resource) was never consumed
     # --- flagship 2026-06-23: untrusted code sandboxed (capability seam) + linear resource + typed result, all PROVEN ---
     ("flagship: sandboxed + linear + typed", '(defx untrusted () (fn (x) (seam (Pure) (ffi "logger" x)))) (defx process () (fn (item) (resource conn (let (r (use conn)) (variant Ok (untrusted item)))))) (defx main () (fn () (match (process 42) ((Ok v) v) ((Err e) 0))))', True),
+    # --- grown 2026-06-24: D9 PROVENANCE + the `trust` gate — defend CIRCULAR trust (the AI authoring the very criterion
+    #     it is judged by). (prov P e) tags WHO authored a value; (trust e) demands an INDEPENDENT anchor (any provenance
+    #     != 'ai'), else REJECTED. A channel SEPARATE from effects. Signals: KBSpec / CNnotator / CertiGC (the spec,
+    #     the annotations, and the proof are ALL AI-generated too -> the gate was gameable by construction). ---
+    ("trust: human anchor ok",        '(defx f () (fn () (trust (prov human 1))))', True),
+    ("trust: purely-AI refused",      '(defx f () (fn () (trust (prov ai 1))))', False),               # circular: AI authored the value it gates
+    ("trust: AI + human anchor ok",   '(defx f () (fn () (trust (prov ai (prov human 1)))))', True),    # one independent anchor is enough
+    ("trust: real-trace anchor ok",   '(defx f () (fn () (trust (prov trace 1))))', True),
+    ("trust: unprovenanced refused",  '(defx f () (fn () (trust 1)))', False),                          # no anchor at all = unanchored trust
+    ("prov tag alone is free",        '(defx f () (fn () (prov ai 1)))', True),                         # tagging never bites; only `trust` gates
+    ("trust: effects still flow",     '(defx f (Net) (fn (u) (trust (prov human (net u)))))', True),    # provenance is orthogonal to effects
+    ("trust: under-declared effect still caught", '(defx f () (fn (u) (trust (prov human (net u)))))', False),  # human-anchored, yet Net undeclared -> REJECTED
 ]
 
 
@@ -297,7 +309,14 @@ def main():
         print(f"  {'ok  ' if r28 else 'FAIL'} flagship: (main)={v28}, untrusted output={o28} (sandboxed)")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL flagship: {e}")
-    total = len(CASES) + 19
+    try:                                               # runtime: prov/trust are TRANSPARENT — the trust gate is a STATIC check
+        v29, _ = run_call('(defx t1 () (fn () (trust (prov human 5))))', "(t1)")
+        v30, _ = run_call('(defx t2 () (fn () (prov ai 7)))', "(t2)")
+        r29 = (v29 == 5 and v30 == 7); ok += r29
+        print(f"  {'ok  ' if r29 else 'FAIL'} runtime prov/trust: (trust (prov human 5))={v29} | (prov ai 7)={v30}")
+    except (LoomError, RecursionError) as e:
+        print(f"  FAIL runtime prov/trust: {e}")
+    total = len(CASES) + 20
     print(f"{'PASS' if ok == total else 'FAIL'} — {ok}/{total} citadel checks")
 
 
