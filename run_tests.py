@@ -158,6 +158,15 @@ CASES = [
     ("trust N=2: same source twice = 1",    '(defx f () (fn () (trust 2 (prov human (prov human 1)))))', False),    # set: distinct sources only
     ("trust N=3: three distinct ok",        '(defx f () (fn () (trust 3 (prov human (prov audit (prov trace 1))))))', True),
     ("trust N=1 explicit (backward-compat)",'(defx f () (fn () (trust 1 (prov human 1))))', True),
+    # --- grown 2026-06-24: Rand — NONDETERMINISM as a tracked effect (randomness / wall-clock). Fresh axis: "what is
+    #     AI code allowed to do" must cover hidden entropy. Mirrors net/alloc — superset rule, seams, handlers, `with`. ---
+    ("rand: honest declares Rand",      '(defx f (Rand) (fn () (rand)))', True),
+    ("rand: undeclared is the lie",     '(defx f () (fn () (rand)))', False),
+    ("rand: over-declare is fine",      '(defx f (Rand) (fn (x) x))', True),
+    ("rand: Pure seam sandboxes it",    '(defx f () (fn () (seam (Pure) (rand))))', False),     # seam wraps Rand but grants Pure
+    ("rand: handle discharges it",      '(defx f () (fn () (handle (Rand) (rand))))', True),
+    ("rand: with reinterprets to pure", '(defx rr (Rand) (fn () (rand))) (defx mk () (fn () 4)) (defx t () (fn () (with Rand mk (rr))))', True),
+    ("rand: flows through a call",      '(defx g (Rand) (fn () (rand))) (defx h () (fn () (g)))', False),  # h calls g (Rand) yet declares Pure
 ]
 
 
@@ -325,7 +334,14 @@ def main():
         print(f"  {'ok  ' if r29 else 'FAIL'} runtime prov/trust: (trust (prov human 5))={v29} | (prov ai 7)={v30}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime prov/trust: {e}")
-    total = len(CASES) + 20
+    try:                                               # runtime: Rand op runs; `with` reinterprets nondeterminism to a pure mock
+        vr1, _ = run_call('(defx rr (Rand) (fn () (rand)))', "(rr)")
+        vr2, _ = run_call('(defx rr (Rand) (fn () (rand))) (defx mk () (fn () 4)) (defx t () (fn () (with Rand mk (rr))))', "(t)")
+        rr1 = (vr1 == "<rand>" and vr2 == 4); ok += rr1
+        print(f"  {'ok  ' if rr1 else 'FAIL'} runtime Rand: (rr)={vr1} | with-mock (t)={vr2}")
+    except (LoomError, RecursionError) as e:
+        print(f"  FAIL runtime Rand: {e}")
+    total = len(CASES) + 21
     print(f"{'PASS' if ok == total else 'FAIL'} — {ok}/{total} citadel checks")
 
 

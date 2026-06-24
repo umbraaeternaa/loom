@@ -9,12 +9,12 @@
 # + interpreter. Grown nightly by the organism, verified by run_tests.py — the language only ever grows GREEN.
 import re
 
-EFFECTS = {"Pure", "IO", "Net", "Alloc", "FFI"}
+EFFECTS = {"Pure", "IO", "Net", "Alloc", "FFI", "Rand"}   # Rand = nondeterminism (randomness / wall-clock)
 # checker vocab MUST stay == interpreter (ev) vocab — no form the checker knows that the runtime can't run.
-BUILTIN_EFF = {"print": {"IO"}, "net": {"Net"}, "alloc": {"Alloc"}}
+BUILTIN_EFF = {"print": {"IO"}, "net": {"Net"}, "alloc": {"Alloc"}, "rand": {"Rand"}}
 PURE_OPS = {"+", "-", "*", "=", "<", ">",          # pure ops the interpreter runs; legitimate heads, zero effect
             "list", "cons", "head", "tail", "empty"}  # pure list primitives (map/fold are then DEFINABLE in LOOM)
-OP = {"IO": "print", "Net": "net", "Alloc": "alloc"}   # which builtin operation a `with`-handler reinterprets
+OP = {"IO": "print", "Net": "net", "Alloc": "alloc", "Rand": "rand"}   # which builtin operation a `with`-handler reinterprets
 _CAPS = []                                              # runtime capability stack: each seam pushes the authority it grants
 def _cap_ok(eff): return (not _CAPS) or (eff in _CAPS[-1])  # top-level host is unrestricted; a seam SANDBOXES its body
 _RENV = []                                              # static stack of {resource-name: effect-set} for typed resources
@@ -428,6 +428,9 @@ def ev(node, env, fns, out, handlers=None):
     if h == "alloc":
         if not _cap_ok("Alloc"): raise LoomError("capability denied: Alloc not granted by enclosing seam")
         return list(range(a[0])) if a else []
+    if h == "rand":                                     # nondeterminism: only if Rand is granted by the enclosing seam
+        if not _cap_ok("Rand"): raise LoomError("capability denied: Rand not granted by enclosing seam")
+        return "<rand>"                                 # deterministic placeholder — the point is effect-tracking, not real RNG
     fv = None                                           # resolve the head to a function: name, var->name, or closure
     if isinstance(h, str):
         if h in fns: fv = fns[h]
@@ -484,7 +487,7 @@ def _emit(node):
     if h == "trust": return _emit(node[1:][-1])                        # value-transparent (the trust gate is a static check)
     if h == "use": return "'<used>'"
     if h == "print": return f"_p({_emit(node[1])})"                     # IO: print AND return the value (as the interpreter)
-    if h in ("net", "alloc", "ffi", "handle", "with", "variant", "match"):
+    if h in ("net", "alloc", "rand", "ffi", "handle", "with", "variant", "match"):
         raise LoomError(f"codegen v0 does not cover '{h}' yet")
     return f"{h}(" + ",".join(_emit(a) for a in node[1:]) + ")"          # call: a user fn, or a closure-valued name
 
@@ -533,7 +536,7 @@ def _emit_js(node):
     if h == "trust": return _emit_js(node[1:][-1])
     if h == "use": return "'<used>'"
     if h == "print": return f"_p({_emit_js(node[1])})"                  # IO: print AND return the value
-    if h in ("net", "alloc", "ffi", "handle", "with", "variant", "match"):
+    if h in ("net", "alloc", "rand", "ffi", "handle", "with", "variant", "match"):
         raise LoomError(f"JS codegen v0 does not cover '{h}' yet")
     return f"{h}(" + ",".join(_emit_js(a) for a in node[1:]) + ")"
 
