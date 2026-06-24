@@ -205,6 +205,11 @@ CASES = [
     ("D13 needs: wrong role for effect",   '(defx f (Net) (fn (u) (seam (Net) (needs Net review) (by audit bob (net u)))))', False),    # audit present but Net needs review
     ("D13 needs: ungranted effect named",  '(defx f (Net) (fn (u) (seam (Net) (needs IO audit) (by audit bob (net u)))))', False),       # IO not granted by this seam
     ("D13 needs: honors subsumption",      '(defx f (Net) (fn (u) (seam (Net) (needs Net review) (sub review auditor) (by auditor alice (net u)))))', True),  # auditor fills review
+    # --- grown 2026-06-24: D14 — the tokenizer now strips `;`-to-EOL COMMENTS (never inside a string literal). Before this,
+    #     parens in a comment parsed as real forms and broke a check; comments are now genuinely inert.
+    ("D14 comment: parens in inline comment ignored", '(defx f (IO) (fn (x)\n  ; danger (net x) (ffi y) mentioned here\n  (print x)))', True),  # would have slurped (net x)/(ffi y) before
+    ("D14 comment: does NOT mask a real lie", '(defx f () (fn (x) (print x))) ; trailing (print x) is just a comment\n', False),   # f really does IO, declares none -> still REJECTED
+    ("D14 comment: semicolon inside a string is not a comment", '(defx f (IO) (fn () (print "a;b")))', True),   # the ';' lives in the string, not a comment
 ]
 
 
@@ -404,7 +409,14 @@ def main():
         print(f"  {'ok  ' if rn1 else 'FAIL'} runtime D13 needs: (seam (Net) (needs Net review) ..)={vn1}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime D13 needs: {e}")
-    total = len(CASES) + 25
+    try:                                               # runtime: a ';' inside a string SURVIVES; a commented program still runs
+        vc1, _ = run_call('(defx t (IO) (fn () (print "x;y")))', "(t)")
+        vc2, _ = run_call('(defx t () (fn () 42)) ; a comment with (parens) and ; semicolons\n', "(t)")
+        rc1 = (vc1 == "x;y" and vc2 == 42); ok += rc1
+        print(f"  {'ok  ' if rc1 else 'FAIL'} runtime D14 comments: string ';' kept={vc1} | commented run={vc2}")
+    except (LoomError, RecursionError) as e:
+        print(f"  FAIL runtime D14 comments: {e}")
+    total = len(CASES) + 26
     print(f"{'PASS' if ok == total else 'FAIL'} — {ok}/{total} citadel checks")
 
 

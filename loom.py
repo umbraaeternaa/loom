@@ -36,7 +36,11 @@ def is_fn_expr(e, fns, penv):                                    # does this exp
     return (isinstance(e, list) and len(e) > 0 and e[0] == "fn") or (isinstance(e, str) and (e in fns or e in penv))
 
 
-def tokenize(s): return re.findall(r'"[^"]*"|[()]|[^\s()]+', s)
+def tokenize(s):
+    # strip `;`-to-end-of-line comments FIRST, but never inside a string literal: the alternation matches a whole
+    # "..." first (kept verbatim, so a ';' within it survives), otherwise a comment (dropped).
+    s = re.sub(r'"[^"]*"|;[^\n]*', lambda m: m.group(0) if m.group(0)[:1] == '"' else '', s)
+    return re.findall(r'"[^"]*"|[()]|[^\s()]+', s)
 
 
 def _read(t):

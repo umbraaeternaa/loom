@@ -17,4 +17,6 @@
 
 (defx main (Net IO) (fn () (publish "https://api" "shipped")))
 
-; DENIED at check if you cross the wires: e.g. binding Net to audit while only a reviewer is present.
+; DENIED at `check` (uncomment to try) — comments are inert now, parens and all:
+;   (needs Net audit)        ; Net would then need an auditor, but only a reviewer is present -> denied
+;   (by review ai ...)       ; an ai voucher never counts -> denied
