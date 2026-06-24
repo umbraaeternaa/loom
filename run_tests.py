@@ -219,6 +219,14 @@ CASES = [
     ("D15 require: rejects an un-vouched grant", '(require Net review) (defx f (Net) (fn (u) (seam (Net) (net u))))', False),   # Net granted, no review anchor -> policy violation
     ("D15 require: does NOT leak (plain seam ok)", '(defx f (Net) (fn (u) (seam (Net) (net u))))', True),   # no policy -> ordinary capability seam
     ("D15: require honors global rank", '(rank review audit) (require Net review) (defx f (Net) (fn (u) (seam (Net) (by audit bob (net u)))))', True),  # audit subsumes review
+    # --- grown 2026-06-24: D16 — NEGATIVE policy. (forbid EFF) at top level bans an effect program-wide: it may not ESCAPE into
+    #     ANY function's effect row. Discharge it locally (with/handle) or don't perform it. The dual of (require ..) — together
+    #     they are the full policy language (positive + negative), proven before run.
+    ("D16 forbid: bans the effect",        '(forbid Net) (defx f (Net) (fn (u) (net u)))', False),
+    ("D16 forbid: locally-discharged is allowed", '(forbid Net) (defx mock () (fn (x) x)) (defx t () (fn (u) (with Net mock (net u))))', True),   # Net reinterpreted -> never escapes
+    ("D16 forbid: does NOT leak",          '(defx f (Net) (fn (u) (net u)))', True),   # no (forbid) -> Net is fine
+    ("D16 forbid: catches a declared+granted effect", '(forbid FFI) (defx f (FFI) (fn (x) (seam (FFI) (ffi "x" x))))', False),  # FFI declared+granted, ceiling ok -> forbid bans it
+    ("D16 forbid: leaves other effects alone", '(forbid FFI) (defx f (IO) (fn (x) (print x)))', True),   # IO != FFI
 ]
 
 
@@ -431,7 +439,13 @@ def main():
         print(f"  {'ok  ' if rp1 else 'FAIL'} runtime D15 policy: program with (rank)/(require) runs => {vp1}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime D15 policy: {e}")
-    total = len(CASES) + 27
+    try:                                               # runtime: (forbid ..) is STATIC — a program that respects it runs normally
+        vf1, _ = run_call('(forbid FFI) (defx t () (fn () 7))', "(t)")
+        rf1 = (vf1 == 7); ok += rf1
+        print(f"  {'ok  ' if rf1 else 'FAIL'} runtime D16 forbid: program with (forbid FFI) runs => {vf1}")
+    except (LoomError, RecursionError) as e:
+        print(f"  FAIL runtime D16 forbid: {e}")
+    total = len(CASES) + 28
     print(f"{'PASS' if ok == total else 'FAIL'} — {ok}/{total} citadel checks")
 
 

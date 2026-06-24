@@ -17,8 +17,8 @@ PURE_OPS = {"+", "-", "*", "=", "<", ">",          # pure ops the interpreter ru
 OP = {"IO": "print", "Net": "net", "Alloc": "alloc", "Rand": "rand"}   # which builtin operation a `with`-handler reinterprets
 _CAPS = []                                              # runtime capability stack: each seam pushes the authority it grants
 def _cap_ok(eff): return (not _CAPS) or (eff in _CAPS[-1])  # top-level host is unrestricted; a seam SANDBOXES its body
-_POLICY = {"rank": {}, "require": {}}                   # D15 program-wide trust policy (STATIC): (rank LOW HIGH) global subsumption
-#   rank[LOW] = {HIGH..} merged into every gate's lattice; require[EFF] = {role..} every seam granting EFF must vouch. check() RESETS it.
+_POLICY = {"rank": {}, "require": {}, "forbid": set()}   # D15/D16 program-wide trust policy (STATIC): (rank LOW HIGH) global subsumption;
+#   require[EFF] = {role..} every seam granting EFF must vouch; forbid = {EFF..} the effect may not escape any function's row. check() RESETS it.
 _RENV = []                                              # static stack of {resource-name: effect-set} for typed resources
 def _foreign_logger(args, out):                        # opaque foreign code that WANTS IO; emits ONLY if IO was granted
     if _cap_ok("IO"): out.append("foreign:" + str(args[0]))
@@ -375,12 +375,14 @@ def infer(node, fns, errs, penv=None):
 
 def check(program):
     """Returns (fns, errors). errors empty == program type/effect-checks (is accepted)."""
-    _POLICY["rank"] = {}; _POLICY["require"] = {}        # D15: RESET program-wide policy first (never leaks between programs)
-    for top in program:                                  # collect (rank LOW HIGH) / (require EFF role) BEFORE inference
+    _POLICY["rank"] = {}; _POLICY["require"] = {}; _POLICY["forbid"] = set()   # D15/D16: RESET policy first (never leaks between programs)
+    for top in program:                                  # collect (rank LOW HIGH) / (require EFF role) / (forbid EFF) BEFORE inference
         if isinstance(top, list) and len(top) >= 3 and top[0] == "rank":
             _POLICY["rank"].setdefault(top[1], set()).add(top[2])
         elif isinstance(top, list) and len(top) >= 3 and top[0] == "require":
             _POLICY["require"].setdefault(top[1], set()).add(top[2])
+        elif isinstance(top, list) and len(top) >= 2 and top[0] == "forbid":
+            _POLICY["forbid"].add(top[1])
     fns = {}
     for top in program:
         if isinstance(top, list) and top and top[0] == "defx":
@@ -408,6 +410,9 @@ def check(program):
             eff = eff - {"?"}
         if eff - i["decl"]:                                 # CEILING: a capability you may not exceed (upper bound)
             errors.append(f"{n}: performs undeclared {sorted(eff - i['decl'])} (declared {sorted(i['decl'])})")
+        banned = eff & _POLICY["forbid"]                    # D16: a program-wide (forbid EFF) — the effect must NOT escape into
+        if banned:                                          # any function's row (discharge it locally with with/handle, or don't)
+            errors.append(f"{n}: performs {sorted(banned)} — forbidden program-wide (forbid {sorted(banned)[0]}); discharge it locally or remove it")
         missing = i["req"] - eff                            # FLOOR: a REQUIRED effect (E!) must ACTUALLY be performed —
         if missing:                                         # the row is now the D7 SYNTHESIS CONTRACT: a do-nothing stub
             errors.append(f"{n}: contract requires {sorted(missing)} but body never performs it (stub does not satisfy intent)")

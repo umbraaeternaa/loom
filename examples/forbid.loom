@@ -1,0 +1,17 @@
+; forbid.loom — D16: the NEGATIVE policy. Ban an effect across the whole program; the compiler proves it.
+;
+; (forbid EFF) means EFF may not ESCAPE into any function's effect row. You either don't perform it,
+; or you discharge it locally — and the type system proves which. Here Net is forbidden, yet this code
+; "does network": it is provably reinterpreted to a pure mock, so nothing escapes. Let real Net leak
+; and the program is rejected before it runs.
+
+(forbid Net)                   ; no Net may escape any function — proven, before anything runs
+
+(defx mock () (fn (x) x))      ; a pure stand-in for the network
+(defx fetch ()
+  (fn (u)
+    (with Net mock (net u))))  ; Net is reinterpreted to the mock -> it never escapes -> allowed under (forbid Net)
+
+(defx main () (fn () (fetch "payload")))
+
+; Drop the (with Net mock ..) wrapper so real Net escapes, and the program is REJECTED: Net is forbidden here.
