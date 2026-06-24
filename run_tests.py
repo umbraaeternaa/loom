@@ -234,6 +234,14 @@ CASES = [
     ("D17 require N: ai does not count",     '(require Net 2) (defx f (Net) (fn (u) (seam (Net) (by code human (by x ai (net u))))))', False),  # {human,ai}-ai = 1 < 2
     ("D17 require N: does NOT leak",         '(defx f (Net) (fn (u) (seam (Net) (by code human (net u)))))', True),   # no policy -> a single author is fine
     ("D17 require N: prov anchors count too",'(require Net 2) (defx f (Net) (fn (u) (seam (Net) (prov human (prov audit (net u))))))', True),  # prov + prov = 2 distinct
+    # --- grown 2026-06-24: D18 — TAINT. Provenance now FLOWS through `let` bindings and computation: a value derived from a
+    #     (prov P ..) still carries P when it reaches a gate. Provenance stops being syntactic (the literal anchor position) and
+    #     becomes semantic (what the value is actually made of). Sound over-approximation: deriving from tainted data stays tainted.
+    ("D18 taint: flows through let",        '(defx f () (fn () (trust 2 (let (a (prov human 1)) (let (b (prov audit a)) b)))))', True),  # b carries {human,audit}
+    ("D18 taint: flows through computation",'(defx f () (fn (x) (trust (let (y (prov human x)) (+ y 1)))))', True),   # (+ y 1) carries human
+    ("D18 taint: faithful, does not fabricate", '(defx f () (fn () (trust 2 (let (a (prov human 1)) a))))', False),   # only {human} = 1 < 2; taint flows, never invents
+    ("D18 taint: roles flow through let",   '(defx f () (fn () (trust (roles code review) (let (x (by code human 1)) (by review alice x)))))', True),  # x carries (code,human)
+    ("D18 taint: ai taint still refused",   '(defx f () (fn () (trust (let (y (prov ai 1)) y))))', False),   # y carries {ai}; ai never anchors -> refused
 ]
 
 
@@ -458,7 +466,13 @@ def main():
         print(f"  {'ok  ' if rq1 else 'FAIL'} runtime D17 require-N: grant with 2 authors runs => {vq1}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime D17 require-N: {e}")
-    total = len(CASES) + 29
+    try:                                               # runtime: D18 taint is STATIC — let/prov are transparent, value flows out
+        vt1, _ = run_call('(defx t () (fn () (trust (let (y (prov human 5)) y))))', "(t)")
+        rt1 = (vt1 == 5); ok += rt1
+        print(f"  {'ok  ' if rt1 else 'FAIL'} runtime D18 taint: (trust (let (y (prov human 5)) y)) => {vt1}")
+    except (LoomError, RecursionError) as e:
+        print(f"  FAIL runtime D18 taint: {e}")
+    total = len(CASES) + 30
     print(f"{'PASS' if ok == total else 'FAIL'} — {ok}/{total} citadel checks")
 
 

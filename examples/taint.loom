@@ -1,0 +1,16 @@
+; taint.loom — D18: provenance FLOWS through data.
+;
+; A value built from a (prov P ..) value still carries P when it reaches a gate — even after it is
+; bound to a name and computed with. Provenance stops being syntactic (the literal anchor position)
+; and becomes what the value is actually MADE OF. Deriving from tainted data stays tainted (sound).
+
+(defx report ()
+  (fn (raw)
+    (trust 2                              ; demand 2 independent anchors
+      (let (reviewed (prov human raw))    ; a human reviews the raw input
+        (let (audited (prov audit reviewed)) ; an auditor signs the reviewed value
+          (+ audited 0))))))              ; the COMPUTED result still carries {human, audit} -> trust 2 passes
+
+(defx main () (fn () (report 41)))
+
+; Without taint the bound name would lose its provenance and (trust 2 ..) would see 0 anchors and reject.

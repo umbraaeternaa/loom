@@ -167,31 +167,46 @@ def instantiate(callee, args, fns, penv, errs):
     return out
 
 
-def prov_of(node):
-    """Provenance set gathered under a node (who authored the values) — a channel SEPARATE from effects.
-    (prov P x) injects P; (by ROLE WHO x) injects WHO; everything else unions its children. 'ai' never anchors."""
+def prov_of(node, penv=None):
+    """Provenance set under a node — who authored the values. D18 TAINT: provenance FLOWS through `let` bindings and
+    computation, so a value DERIVED from (prov P ..) still carries P. (prov P x) injects P; (by ROLE WHO x) injects WHO;
+    a bound variable carries the provenance of what it was bound to; everything else unions its children. 'ai' never anchors."""
+    penv = penv or {}
+    if isinstance(node, str): return set(penv.get(node, ()))   # a variable reference carries its bound provenance (taint)
     if not isinstance(node, list) or not node: return set()
     if node[0] == "prov":
         s = {node[1]}
-        for x in node[2:]: s |= prov_of(x)
+        for x in node[2:]: s |= prov_of(x, penv)
         return s
     if node[0] == "by":                                  # D10: (by ROLE WHO x) — WHO is also an independent anchor
         s = {node[2]}
-        for x in node[3:]: s |= prov_of(x)
+        for x in node[3:]: s |= prov_of(x, penv)
+        return s
+    if node[0] == "let":                                 # D18: (let (name E) BODY..) — name carries E's provenance INTO the body
+        np = dict(penv); np[node[1][0]] = prov_of(node[1][1], penv)
+        s = set()
+        for b in node[2:]: s |= prov_of(b, np)
         return s
     s = set()
-    for a in node[1:]: s |= prov_of(a)
+    for a in node[1:]: s |= prov_of(a, penv)
     return s
 
-def roles_of(node):
-    """Role->author pairs under a node: (by ROLE WHO x) asserts ROLE was performed by WHO (D10 role quorum)."""
+def roles_of(node, penv=None):
+    """Role->author pairs under a node (D10). D18 TAINT: flows through `let` and computation, like prov_of."""
+    penv = penv or {}
+    if isinstance(node, str): return set(penv.get(node, ()))
     if not isinstance(node, list) or not node: return set()
     if node[0] == "by":
         s = {(node[1], node[2])}
-        for x in node[3:]: s |= roles_of(x)
+        for x in node[3:]: s |= roles_of(x, penv)
+        return s
+    if node[0] == "let":
+        np = dict(penv); np[node[1][0]] = roles_of(node[1][1], penv)
+        s = set()
+        for b in node[2:]: s |= roles_of(b, np)
         return s
     s = set()
-    for a in node[1:]: s |= roles_of(a)
+    for a in node[1:]: s |= roles_of(a, penv)
     return s
 
 def _quorum_check(roles_req, up, body):
