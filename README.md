@@ -134,6 +134,17 @@ python3 loom.py check examples/flagship.loom   # the compiler proves it is safe
 python3 loom.py run   examples/flagship.loom   # => 42  (the untrusted step emitted nothing — sandboxed)
 ```
 
+## The trust gate, runnable
+
+[`examples/trust.loom`](examples/trust.loom) shows the **circular-trust defense** in action. An AI-authored
+value `(prov ai 42)` cannot vouch for itself — `(trust …)` *refuses* it until it carries **independent**
+anchors. `(trust 2 …)` demands at least **2 distinct non-`ai` sources** (here a human ratification *and* a
+real-execution trace):
+
+```console
+python3 loom.py run examples/trust.loom   # => 42  (refused outright without independent anchors)
+```
+
 ## Honest status & prior art
 
 This is **alpha** — a v0 research kernel, deliberately tiny. It is grown incrementally; every

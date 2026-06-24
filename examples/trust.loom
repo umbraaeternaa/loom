@@ -1,0 +1,19 @@
+; trust.loom — D9: a trust gate that refuses CIRCULAR (AI-only) trust.
+;
+;   python3 loom.py check examples/trust.loom   # the compiler proves the trust is independently anchored
+;   python3 loom.py run   examples/trust.loom   # => 42
+;
+; The story: an AI proposes a value (prov ai 42). On its own, trusting it is CIRCULAR — the AI would be
+; vouching for the very thing it authored. So `(trust (prov ai 42))` is REFUSED at check time.
+; It is accepted only once INDEPENDENT anchors are added: here a human ratification AND a real-execution
+; trace — `(trust 2 ...)` demands at least 2 DISTINCT non-AI sources. Then it runs, transparently, to 42.
+
+(defx result () (fn ()
+  (trust 2 (prov human (prov trace (prov ai 42))))))   ; AI value, corroborated by 2 independent anchors
+
+(defx main () (fn () (result)))
+
+; Each of these is REJECTED at check time — uncomment one to see the gate bite:
+;   (trust (prov ai 42))                   ; purely AI -> circular trust
+;   (trust 2 (prov human (prov ai 42)))    ; only ONE independent anchor (human); needs 2
+;   (trust 2 (prov human (prov human 42))) ; same source twice -> 1 distinct, not 2
