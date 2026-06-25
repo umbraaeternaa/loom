@@ -230,6 +230,35 @@ def roles_of(node, penv=None):
     for a in node[1:]: s |= roles_of(a, penv)
     return s
 
+def _prov_reqs(body, params):
+    """D22: per-PARAMETER provenance obligations inferred from a fn body. A (trust [N] p) whose body is a
+    RAW parameter p (count-form only — roles-form stays fail-closed) requires every CALLER to pass an
+    argument carrying >= N independent (non-ai) anchors. Returns {param: need}; discharged at call sites."""
+    req = {}
+    def walk(n):
+        if not isinstance(n, list) or not n: return
+        if n[0] == "trust":
+            spec = n[1] if len(n) > 1 else None
+            if isinstance(spec, int): need, tb = spec, n[2:]
+            elif isinstance(spec, list): need, tb = None, []          # roles-form: not deferred (fail-closed)
+            else: need, tb = 1, n[1:]
+            if need is not None and len(tb) == 1 and isinstance(tb[0], str) and tb[0] in params:
+                req[tb[0]] = max(req.get(tb[0], 0), need)
+        for c in n[1:]: walk(c)
+    for b in body: walk(b)
+    return req
+
+def _value_uses(node, obligated):
+    """D22 soundness: names in `obligated` (fns carrying a provenance obligation) used as a VALUE — ANY
+    position but a direct-call head. Such a use (passed as an arg / returned) would escape call-site
+    discharge via an indirect call, so it is REFUSED. A direct-call head is exempt (it is discharged)."""
+    if isinstance(node, str): return {node} if node in obligated else set()
+    bad = set()
+    if not isinstance(node, list) or not node: return bad
+    for c in node[1:]: bad |= _value_uses(c, obligated)
+    if isinstance(node[0], list): bad |= _value_uses(node[0], obligated)
+    return bad
+
 def _quorum_check(roles_req, up, body, penv=None):
     """D10 role quorum + D11 lattice over `body`. up[LOW]={HIGH..}: a HIGHer role stands in for a LOWer requirement.
     Returns (missing_roles, satisfying_authors): a required role is covered by a non-ai anchor at that role OR any role
@@ -438,7 +467,9 @@ def infer(node, fns, errs, penv=None):
             need = spec if has_n else 1
             body = node[2:] if has_n else node[1:]       # independence is a QUANTITY = count of distinct non-ai sources;
             independent = {p for x in body for p in prov_of(x, _TAINT_PROV)} - {"ai"} # SET; D19: taint env so bound vars carry prov
-            if len(independent) < need:
+            p0 = body[0] if len(body) == 1 else None     # D22: (trust [N] raw-param) DEFERS to the call site, where
+            deferred = isinstance(p0, str) and p0 in _POLICY.get("params", set()) and p0 not in _TAINT_PROV  # the arg's provenance discharges it; only a RAW param (untainted + unshadowed) defers
+            if len(independent) < need and not deferred:
                 errs.append(f"trust gate: need >= {need} independent anchor(s), got {len(independent)} {sorted(independent) or '(none)'} — value too self-referential / under-corroborated")
         eff = set()
         for x in body: eff |= infer(x, fns, errs, penv)
@@ -447,15 +478,43 @@ def infer(node, fns, errs, penv=None):
     for a in node[1:]: eff |= infer(a, fns, errs, penv)
     if h in BUILTIN_EFF: eff |= BUILTIN_EFF[h]
     elif h in penv: eff |= penv[h]                      # applying a function-typed name in scope -> its latent effect
-    elif h in fns: eff |= instantiate(fns[h], node[1:], fns, penv, errs)  # callee row, effect-vars instantiated
+    elif h in fns:
+        eff |= instantiate(fns[h], node[1:], fns, penv, errs)            # callee row, effect-vars instantiated
+        pn = [pname(p) for p in fns[h]["params"]]                        # D22: DISCHARGE the callee's provenance obligations —
+        for pp, need in fns[h].get("preq", {}).items():                  #   the arg bound to a trusted param must carry the anchors
+            ix = pn.index(pp)
+            anchors = (prov_of(node[ix+1], _TAINT_PROV) - {"ai"}) if ix + 1 < len(node) else set()
+            if len(anchors) < need:
+                errs.append(f"call to {h}: arg for trusted param '{pp}' carries {len(anchors)} independent anchor(s) {sorted(anchors) or '(none)'}, needs >= {need} — provenance does not flow through (or is too self-referential)")
     elif h not in PURE_OPS:                             # unknown head -> REFUSE to verify (never assume pure)
         errs.append(f"unresolved call: '{h}' is not a known function or builtin")
     return eff
 
 
+def _sealed_discharges(node, sealed):
+    """D22: sealed effects DISCHARGED by a `handle` anywhere under `node`. (handle (E..) ..) drops E from the static
+    row, but for a non-IO effect the runtime op still FIRES (handle truly captures only IO) -- a static-only drop, the
+    escapable-kernel gap; a (seal EFF) policy refuses it so the effect stays accountable (in the row, or via `with`)."""
+    out = set()
+    if not isinstance(node, list) or not node: return out
+    if node[0] == "handle": out |= (set(node[1]) & sealed)
+    for a in node[1:]: out |= _sealed_discharges(a, sealed)
+    return out
+
+
+def _has_head(node, head):
+    """D23: does a node-tree contain a form whose HEAD == `head`? Recurses into operands AND a
+    list-valued head (e.g. ((fn ..) args)). Used by the negative TRUST policy (forbid declassify):
+    the laundering hatch is banned SYNTACTICALLY (it performs no effect row to match against)."""
+    if not isinstance(node, list) or not node: return False
+    if node[0] == head: return True
+    if isinstance(node[0], list) and _has_head(node[0], head): return True
+    return any(_has_head(c, head) for c in node[1:])
+
+
 def check(program):
     """Returns (fns, errors). errors empty == program type/effect-checks (is accepted)."""
-    _POLICY["rank"] = {}; _POLICY["require"] = {}; _POLICY["forbid"] = set(); _POLICY["author"] = {}; _POLICY["confine"] = []   # D15/D16/D20: RESET policy first (never leaks between programs)
+    _POLICY["rank"] = {}; _POLICY["require"] = {}; _POLICY["forbid"] = set(); _POLICY["author"] = {}; _POLICY["confine"] = []; _POLICY["seal"] = set()   # D15/D16/D20/D22: RESET policy first (never leaks between programs)
     _TAINT_PROV.clear(); _TAINT_ROLE.clear()             # D19: RESET cross-statement taint env
     for top in program:                                  # collect (rank LOW HIGH) / (require EFF role) / (forbid EFF) BEFORE inference
         if isinstance(top, list) and len(top) >= 3 and top[0] == "rank":
@@ -468,6 +527,8 @@ def check(program):
             _POLICY["author"].setdefault(top[1], set()).add((top[2], top[3]))
         elif isinstance(top, list) and len(top) >= 3 and top[0] == "confine":   # D20: (confine EFF role)
             _POLICY["confine"].append((top[1], top[2]))
+        elif isinstance(top, list) and len(top) >= 2 and top[0] == "seal":   # D22: (seal EFF) -- complete-mediation: refuse a static-only discharge
+            _POLICY["seal"].add(top[1])
     fns = {}
     for top in program:
         if isinstance(top, list) and top and top[0] == "defx":
@@ -486,9 +547,15 @@ def check(program):
             for b in body:
                 for e, c in _ucount(b, fns, i["penv"]).items(): uc[e] = _uadd(uc.get(e, 0), c)
             i["uc"] = uc
+    for n, i in fns.items():                            # D22: infer each fn's per-param provenance obligations (count-form)
+        i["preq"] = _prov_reqs(i["fn"][2:], {pname(p) for p in i["params"]})
+    _obl = {n for n, i in fns.items() if i["preq"]}     # obligation-bearing fns: may ONLY be called directly (else refused)
     errors = []
     for n, i in fns.items():
-        for b in i["fn"][2:]: infer(b, fns, errors, i["penv"])   # collect seam/handle/with/lambda/unresolved violations
+        _POLICY["params"] = {pname(p) for p in i["params"]}     # D22: params of THIS fn -> a (trust raw-param) defers to its callers
+        for b in i["fn"][2:]: infer(b, fns, errors, i["penv"])   # collect seam/handle/with/lambda/unresolved violations + discharge obligations
+        for b in i["fn"][2:]:                           # D22 soundness: an obligation-bearing fn used as a VALUE escapes discharge
+            for nm in _value_uses(b, _obl): errors.append(f"{n}: '{nm}' carries a provenance obligation {sorted(fns[nm]['preq'])} and is used as a value — call it directly so it is discharged at the call site")
         eff = i["eff"]
         if "?" in eff:                                  # an opaque foreign 'ffi' that no seam ever granted authority to
             errors.append(f"{n}: foreign 'ffi' call has no capability seam (wrap it: (seam (..) ...))")
@@ -518,6 +585,17 @@ def check(program):
                     if not _author_covers(_POLICY["author"].get(n_, {("ai", "ai")}), role, up):
                         errors.append(f"{n_}: wields confined effect {eff} but is not authored by a cleared '{role}' "
                                       f"(program-wide (confine {eff} {role})) — uncleared component in the capability graph")
+    if _POLICY["seal"]:                                 # D22: COMPLETE MEDIATION -- a sealed effect may not be silently
+        for n_, i in fns.items():                       # dropped by `handle` (a static-only discharge that still FIRES at
+            bad = _sealed_discharges(i["fn"], _POLICY["seal"])   # runtime for a non-IO effect -- the unfireable-kernel gap)
+            if bad:
+                errors.append(f"{n_}: discharges sealed effect(s) {sorted(bad)} via handle "
+                    f"(program-wide (seal {sorted(bad)[0]})) -- a sealed effect may not be dropped to nothing; "
+                    f"keep it in the accountable row or genuinely reinterpret it with `with`")
+    if "declassify" in _POLICY["forbid"]:               # D23: NEGATIVE trust policy -- (forbid declassify) bans the D21
+        for n_, i in fns.items():                       # laundering hatch program-wide. A high-assurance codebase can
+            if any(_has_head(b, "declassify") for b in i["fn"][2:]):   # guarantee NO ai-derived value is rubber-stamped
+                errors.append(f"{n_}: uses (declassify ..) but it is forbidden program-wide (forbid declassify) -- no ai-derived value may be laundered into trust; remove the declassify or lift the policy")
     return fns, errors
 
 
@@ -713,7 +791,11 @@ def _emit(node):
     if h == "net": return f"_net({_emit(node[1])})"                       # effect OP -> prelude that mirrors the interpreter
     if h == "alloc": return f"_alloc({_emit(node[1])})" if len(node) > 1 else "[]"
     if h == "rand": return "_rand()"
-    if h in ("ffi", "handle", "with"):
+    if h == "handle": return f"_handle(lambda: {_emit(node[2:][-1])})" if "IO" in node[1] else _emit(node[2:][-1])
+    if h == "with":
+        op = OP.get(node[1])
+        return f"_with({op!r}, {_emit(node[2])}, lambda: {_emit(node[3:][-1])})" if op else _emit(node[3:][-1])
+    if h == "ffi":
         raise LoomError(f"codegen v0 does not cover '{h}' yet")
     return f"{h}(" + ",".join(_emit(a) for a in node[1:]) + ")"          # call: a user fn, or a closure-valued name
 
@@ -721,8 +803,15 @@ def compile_py(program_src):
     """Compile a CHECKED LOOM program to portable Python source (one def per defx). Rejects if it fails the checker."""
     fns, errs = check(parse(program_src))
     if errs: raise LoomError("; ".join(errs))
-    lines = ["def _p(x):\n    print(x); return x", "def _nm(t):\n    raise Exception('no match arm for '+str(t))",
-             "def _net(u): return '<net '+str(u)+'>'", "def _alloc(n): return list(range(n))", "def _rand(): return '<rand>'"]   # IO + no-match + effect-op prelude
+    lines = ["_sd = [0]", "_h = {}",
+             "def _route(name, args, default):\n    if name in _h:\n        f = _h.pop(name)\n        try: return f(*args)\n        finally: _h[name] = f\n    return default()",
+             "def _with(name, hf, thunk):\n    had = name in _h; prev = _h.get(name)\n    _h[name] = hf\n    try: return thunk()\n    finally:\n        if had: _h[name] = prev\n        else: _h.pop(name, None)",
+             "def _p(x): return _route('print', (x,), lambda: (print(x) if _sd[0]==0 else None) or x)",
+             "def _handle(t):\n    _sd[0]+=1\n    try: return t()\n    finally: _sd[0]-=1",
+             "def _nm(t):\n    raise Exception('no match arm for '+str(t))",
+             "def _net(u): return _route('net', (u,), lambda: '<net '+str(u)+'>')",
+             "def _alloc(n): return _route('alloc', (n,), lambda: list(range(n)))",
+             "def _rand(): return _route('rand', (), lambda: '<rand>')"]   # sink + handler-map (_with reinterpret) + no-match + effect ops
     for top in parse(program_src):
         if isinstance(top, list) and top and top[0] == "defx":
             fn = top[3]; ps = ",".join(pname(p) for p in fn[1]); body = _emit(fn[2:][-1]) if fn[2:] else "None"
@@ -775,7 +864,11 @@ def _emit_js(node):
     if h == "net": return f"_net({_emit_js(node[1])})"
     if h == "alloc": return f"_alloc({_emit_js(node[1])})" if len(node) > 1 else "[]"
     if h == "rand": return "_rand()"
-    if h in ("ffi", "handle", "with"):
+    if h == "handle": return f"_handle(()=>({_emit_js(node[2:][-1])}))" if "IO" in node[1] else _emit_js(node[2:][-1])
+    if h == "with":
+        op = OP.get(node[1])
+        return f"_with({op!r}, {_emit_js(node[2])}, ()=>({_emit_js(node[3:][-1])}))" if op else _emit_js(node[3:][-1])
+    if h == "ffi":
         raise LoomError(f"JS codegen v0 does not cover '{h}' yet")
     return f"{h}(" + ",".join(_emit_js(a) for a in node[1:]) + ")"
 
@@ -783,8 +876,13 @@ def compile_js(program_src):
     """Compile a CHECKED LOOM program to portable JavaScript source (one function per defx)."""
     fns, errs = check(parse(program_src))
     if errs: raise LoomError("; ".join(errs))
-    lines = ["function _p(x){ console.log(x); return x; }", "function _nm(t){ throw new Error('no match arm for '+t); }",
-             "function _net(u){ return '<net '+u+'>'; }", "function _alloc(n){ return Array.from({length:n},(_,i)=>i); }", "function _rand(){ return '<rand>'; }"]  # IO + no-match + effect-op prelude
+    lines = ["let _sd=0; let _h={};",
+             "function _route(name,args,d){ if(name in _h){ let f=_h[name]; delete _h[name]; try{ return f(...args); } finally{ _h[name]=f; } } return d(); }",
+             "function _with(name,hf,thunk){ let had=(name in _h), prev=_h[name]; _h[name]=hf; try{ return thunk(); } finally{ if(had) _h[name]=prev; else delete _h[name]; } }",
+             "function _p(x){ return _route('print',[x], ()=>{ if(_sd===0) console.log(x); return x; }); }",
+             "function _handle(t){ _sd++; try{ return t(); } finally{ _sd--; } }",
+             "function _nm(t){ throw new Error('no match arm for '+t); }",
+             "function _net(u){ return _route('net',[u], ()=>'<net '+u+'>'); }", "function _alloc(n){ return _route('alloc',[n], ()=>Array.from({length:n},(_,i)=>i)); }", "function _rand(){ return _route('rand',[], ()=>'<rand>'); }"]  # sink + handler-map + no-match + effect ops
     for top in parse(program_src):
         if isinstance(top, list) and top and top[0] == "defx":
             fn = top[3]; ps = ",".join(pname(p) for p in fn[1]); body = _emit_js(fn[2:][-1]) if fn[2:] else "null"

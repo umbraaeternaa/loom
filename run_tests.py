@@ -274,6 +274,45 @@ CASES = [
     ("D21 declassify: ai-declassify through let refused", '(defx f () (fn () (let (y (declassify ai (prov human 1))) (trust y))))', False),
     ("D21 declassify: effects still pass through", '(defx f (Net) (fn () (declassify human (net 1))))', True),
     ("D21 declassify: one declassifier is not 2 anchors", '(defx f () (fn () (trust 2 (declassify human (prov ai 5)))))', False),
+    # --- grown 2026-06-25: D22 -- (seal EFF): COMPLETE-MEDIATION policy. (forbid EFF) bans EFF from a function's ROW but
+    #     ALLOWS discharging it locally (with/handle); yet `handle` of a non-IO effect is a STATIC-ONLY drop -- at runtime
+    #     the op still FIRES (handle truly captures only IO). That is the unfireable-kernel / escapable-system gap in LOOM's
+    #     own terms. (seal EFF) refuses the silent drop: a sealed effect may NOT be handled away -- it stays in the
+    #     accountable row, or is genuinely reinterpreted by `with`. Opt-in, additive (no existing program carries (seal ..)).
+    ("D22 seal: handle-discharge of sealed Net refused", '(seal Net) (defx f () (fn (u) (handle (Net) (net u))))', False),
+    ("D22 seal: effect kept in the row is fine",         '(seal Net) (defx f (Net) (fn (u) (net u)))', True),
+    ("D22 seal: `with` reinterpretation still allowed",  '(seal Net) (defx mock () (fn (x) x)) (defx t () (fn (u) (with Net mock (net u))))', True),
+    ("D22 seal: targets only the sealed effect",         '(seal IO) (defx f (Net) (fn (u) (handle (Net) (net u))))', True),
+    ("D22 seal: overrides default handle leniency (Rand)",'(seal Rand) (defx f () (fn () (handle (Rand) (rand))))', False),
+    ("D22 seal: nested handle of sealed effect caught",  '(seal Net) (defx f (IO) (fn (u) (handle (IO) (let (z (handle (Net) (net u))) (print u)))))', False),
+    ("D22 seal: does NOT leak (no policy)",              '(defx f () (fn (u) (handle (Net) (net u))))', True),
+    # --- grown 2026-06-25 (pass 2): D22 — INTERPROCEDURAL provenance taint. Provenance now flows through a
+    #     function CALL: a (trust raw-param) inside a callee DEFERS its anchor obligation to each call site,
+    #     where the actual argument's provenance discharges it (the natural completion of D18 intra-expr +
+    #     D19 cross-let + D21 declassify). Count-form only; an obligation-bearing fn may NOT be passed as a
+    #     value (the obligation would escape discharge via an indirect call) — fail-closed (ai never sneaks). ---
+    ("D22 interproc: human arg flows through call", '(defx g () (fn (x) (trust x))) (defx top () (fn () (g (prov human 5))))', True),
+    ("D22 interproc: ai arg refused", '(defx g () (fn (x) (trust x))) (defx top () (fn () (g (prov ai 5))))', False),
+    ("D22 interproc: unprovenanced arg refused", '(defx g () (fn (x) (trust x))) (defx top () (fn () (g 5)))', False),
+    ("D22 interproc: callee alone (uncalled) is not a lie", '(defx g () (fn (x) (trust x)))', True),
+    ("D22 interproc: N=2 two distinct anchors through call", '(defx g () (fn (x) (trust 2 x))) (defx top () (fn () (g (prov human (prov audit 5)))))', True),
+    ("D22 interproc: N=2 one anchor refused", '(defx g () (fn (x) (trust 2 x))) (defx top () (fn () (g (prov human 5))))', False),
+    ("D22 interproc: N=2 same source twice refused", '(defx g () (fn (x) (trust 2 x))) (defx top () (fn () (g (prov human (prov human 5)))))', False),
+    ("D22 interproc: cross-stmt let then call flows", '(defx g () (fn (x) (trust x))) (defx top () (fn () (let (v (prov human 5)) (g v))))', True),
+    ("D22 interproc: obligation-fn passed as value refused", '(defx g () (fn (x) (trust x))) (defx ap (e) (fn ((f e) y) (f y))) (defx top () (fn () (ap g (prov human 5))))', False),
+    ("D22 interproc: effects still flow through the call", '(defx g (Net) (fn (x) (trust (prov human (net x))))) (defx top (Net) (fn () (g 5)))', True),
+    ("D22 interproc: shadowed param not deferred (no leak)", '(defx g () (fn (y) (let (y 5) (trust y)))) (defx top () (fn () (g (prov human 1))))', False),
+    # --- grown 2026-06-25 (pass 2): D23 - NEGATIVE TRUST POLICY (forbid declassify). The trust-layer twin of D16
+    #     (forbid EFF): a top-level (forbid declassify) bans the D21 laundering hatch program-wide, so NO ai-derived
+    #     value can be rubber-stamped into trust anywhere - the poisoned-playbook antidote as a one-line guarantee.
+    #     Detected syntactically (declassify performs no effect row to match against). ---
+    ("D23 forbid declassify: laundering banned", '(forbid declassify) (defx f () (fn () (trust (declassify human (prov ai 5)))))', False),
+    ("D23 forbid declassify: clean program still ok", '(forbid declassify) (defx f () (fn () (trust (prov human 5))))', True),
+    ("D23 declassify w/o the policy still ok (D21 intact)", '(defx f () (fn () (trust (declassify human (prov ai 5)))))', True),
+    ("D23 forbid declassify: caught nested in a let", '(forbid declassify) (defx f () (fn () (let (y (declassify human (prov ai 1))) (trust y))))', False),
+    ("D23 forbid declassify: caught inside a seam body", '(forbid declassify) (defx f (IO) (fn (x) (seam (IO) (declassify human (print x)))))', False),
+    ("D23 forbid declassify: caught inside a match arm", '(forbid declassify) (defx f () (fn (e) (match e ((Some x) (declassify human x)) ((None) 0))))', False),
+    ("D23 forbid Net does NOT ban declassify", '(forbid Net) (defx f () (fn () (trust (declassify human (prov ai 5)))))', True),
 ]
 
 
@@ -400,6 +439,8 @@ def main():
                  ('(defx f (Net) (fn () (seam (Net) (net 1))))', "(f)"),                       # EFFECT op net -> "<net 1>" on interp/Py/JS
                  ('(defx f (Alloc) (fn () (head (seam (Alloc) (alloc 3)))))', "(f)"),           # EFFECT op alloc -> [0,1,2], head => 0
                  ('(defx f (Rand) (fn () (seam (Rand) (rand))))', "(f)"),                       # EFFECT op rand -> "<rand>"
+                 ('(defx f () (fn () (handle (IO) (print 5))))', "(f)"),                        # HANDLE discharges IO -> value 5, output SUPPRESSED []
+                 ('(defx mock () (fn (u) u)) (defx f () (fn () (with Net mock (net 5))))', "(f)"),  # WITH reinterprets Net via a pure mock -> (net 5) routes to mock => 5, no net
                  ('(defx g (IO) (fn (x) (print x)))', "(g 7)")]   # EFFECTFUL: prints 7, returns 7 (value AND output must match)
         allok = True
         for prog, call in pairs:
