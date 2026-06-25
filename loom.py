@@ -17,7 +17,7 @@ PURE_OPS = {"+", "-", "*", "=", "<", ">",          # pure ops the interpreter ru
 OP = {"IO": "print", "Net": "net", "Alloc": "alloc", "Rand": "rand"}   # which builtin operation a `with`-handler reinterprets
 _CAPS = []                                              # runtime capability stack: each seam pushes the authority it grants
 def _cap_ok(eff): return (not _CAPS) or (eff in _CAPS[-1])  # top-level host is unrestricted; a seam SANDBOXES its body
-_POLICY = {"rank": {}, "require": {}, "forbid": set()}   # D15/D16 program-wide trust policy (STATIC): (rank LOW HIGH) global subsumption;
+_POLICY = {"rank": {}, "require": {}, "forbid": set(), "author": {}, "confine": []}   # D15/D16 + D20: author[NAME]={(role,who)..}; confine=[(EFF,role)..]; program-wide trust policy (STATIC): (rank LOW HIGH) global subsumption;
 #   require[EFF] = {role..} every seam granting EFF must vouch; forbid = {EFF..} the effect may not escape any function's row. check() RESETS it.
 _RENV = []                                              # static stack of {resource-name: effect-set} for typed resources
 _MISS = object()                                        # sentinel for scoped save/restore
@@ -156,6 +156,20 @@ def _ucount(node, fns, penv):
     return out
 
 
+def _ambient_op_of(node, effs):
+    """Direct ambient builtin ops (net/print/alloc/rand) of an effect in `effs` reachable from `node`
+    WITHOUT crossing a re-scoping boundary (seam/seam1/handle/with) or a nested resource, skipping
+    `use` (the sanctioned bearer path) and `fn` (latent). Enforces resource EXCLUSIVITY: inside
+    (resource (r E..) ..) the effect E has no ambient bearer but r."""
+    found = set()
+    if not isinstance(node, list) or not node: return found
+    h = node[0]
+    if h in ("seam", "seam1", "handle", "with", "resource", "fn", "use"): return found
+    for a in node[1:]: found |= _ambient_op_of(a, effs)
+    if h in BUILTIN_EFF: found |= (BUILTIN_EFF[h] & effs)
+    return found
+
+
 def instantiate(callee, args, fns, penv, errs):
     """Callee's effect row with its effect VARIABLES replaced by the actual function arguments' latent effects."""
     subst = {}
@@ -185,6 +199,10 @@ def prov_of(node, penv=None):
         s = {node[2]}
         for x in node[3:]: s |= prov_of(x, penv)
         return s
+    if node[0] == "declassify":                          # D21: (declassify ROLE e) — a non-ai ROLE LAUNDERS the taint:
+        inner = set()                                    # drop the `ai` provenance and add ROLE's vouch (ai-declassify caught in infer)
+        for x in node[2:]: inner |= prov_of(x, penv)
+        return (inner - {"ai"}) | {node[1]}
     if node[0] == "let":                                 # D18: (let (name E) BODY..) — name carries E's provenance INTO the body
         np = dict(penv); np[node[1][0]] = prov_of(node[1][1], penv)
         s = set()
@@ -253,6 +271,26 @@ def _with_policy_rank(up):
     m = {k: set(v) for k, v in up.items()}
     for lo, his in _POLICY["rank"].items(): m.setdefault(lo, set()).update(his)
     return m
+
+def _direct_effects(node):
+    """D20: effects a node performs DIRECTLY via its OWN ops (net/print/alloc/rand/ffi, a typed resource) — NOT via
+    callees. The author of the defx containing these WIELDS the capability; a mere router (a call) wields nothing."""
+    out = set()
+    if not isinstance(node, list) or not node: return out
+    h = node[0]
+    if h in BUILTIN_EFF: out |= BUILTIN_EFF[h]
+    elif h == "ffi": out.add("FFI")
+    elif h == "resource" and isinstance(node[1], list): out |= (set(node[1][1:]) & EFFECTS)   # typed resource (r E..)
+    for a in node[1:]: out |= _direct_effects(a)
+    return out
+
+def _author_covers(pairs, role, up):
+    """D20: does some NON-AI author at `role` (or a role that subsumes it via D11/D15) appear in `pairs`?"""
+    seen = {role}; stk = [role]
+    while stk:
+        for hi in up.get(stk.pop(), ()):
+            if hi not in seen: seen.add(hi); stk.append(hi)
+    return any(r in seen and w != "ai" for (r, w) in pairs)
 
 def infer(node, fns, errs, penv=None):
     """Effect row a node performs (transitively). penv = {param: latent-effect-set} for function-typed names in scope."""
@@ -324,6 +362,13 @@ def infer(node, fns, errs, penv=None):
         rname, reffs = (spec[0], set(spec[1:])) if isinstance(spec, list) else (spec, set())
         bad = {e for e in reffs if e not in EFFECTS and not is_var(e)}
         if bad: errs.append(f"resource {rname} declares unknown effect {sorted(bad)}")
+        if reffs:                                       # EXCLUSIVITY: inside a typed resource, E has NO ambient bearer
+            amb = set()                                 # but r. A stray ambient op of E (not via (use r)) decouples
+            for x in node[2:]: amb |= _ambient_op_of(x, reffs)   # "consumed r" from "performed E" — refuse it.
+            if amb:
+                errs.append(f"resource {rname}: effect(s) {sorted(amb)} performed ambiently inside its scope — "
+                            f"route through (use {rname}); the resource is E's sole bearer "
+                            f"(a declared (seam ..) re-grant is allowed)")
         _RENV.append({rname: reffs})                    # in scope, (use rname) performs reffs
         try:
             eff = set()
@@ -371,6 +416,12 @@ def infer(node, fns, errs, penv=None):
         eff = set()
         for x in node[3:]: eff |= infer(x, fns, errs, penv)
         return eff
+    if h == "declassify":                               # (declassify ROLE e) — D21: a non-ai ROLE launders provenance taint
+        if node[1] == "ai":                             # CORE anti-circularity rule: ai may not declassify its own output
+            errs.append("declassify: 'ai' cannot declassify provenance — only a non-ai role may take responsibility")
+        eff = set()
+        for x in node[2:]: eff |= infer(x, fns, errs, penv)
+        return eff
     if h == "trust":                                    # (trust SPEC? expr) — D9/D10 GATE vs CIRCULAR / under-corroborated trust
         spec = node[1] if len(node) > 1 else None
         is_roles = isinstance(spec, list) and len(spec) > 0 and spec[0] == "roles"
@@ -404,7 +455,7 @@ def infer(node, fns, errs, penv=None):
 
 def check(program):
     """Returns (fns, errors). errors empty == program type/effect-checks (is accepted)."""
-    _POLICY["rank"] = {}; _POLICY["require"] = {}; _POLICY["forbid"] = set()   # D15/D16: RESET policy first (never leaks between programs)
+    _POLICY["rank"] = {}; _POLICY["require"] = {}; _POLICY["forbid"] = set(); _POLICY["author"] = {}; _POLICY["confine"] = []   # D15/D16/D20: RESET policy first (never leaks between programs)
     _TAINT_PROV.clear(); _TAINT_ROLE.clear()             # D19: RESET cross-statement taint env
     for top in program:                                  # collect (rank LOW HIGH) / (require EFF role) / (forbid EFF) BEFORE inference
         if isinstance(top, list) and len(top) >= 3 and top[0] == "rank":
@@ -413,6 +464,10 @@ def check(program):
             _POLICY["require"].setdefault(top[1], set()).add(top[2])
         elif isinstance(top, list) and len(top) >= 2 and top[0] == "forbid":
             _POLICY["forbid"].add(top[1])
+        elif isinstance(top, list) and len(top) >= 4 and top[0] == "author":   # D20: (author NAME role WHO)
+            _POLICY["author"].setdefault(top[1], set()).add((top[2], top[3]))
+        elif isinstance(top, list) and len(top) >= 3 and top[0] == "confine":   # D20: (confine EFF role)
+            _POLICY["confine"].append((top[1], top[2]))
     fns = {}
     for top in program:
         if isinstance(top, list) and top and top[0] == "defx":
@@ -455,6 +510,14 @@ def check(program):
                 cnt = i["uc"].get(rn, 0)
                 if cnt == 0: errors.append(f"{n}: linear param {rn} never used (must be used exactly once)")
                 elif cnt == "M": errors.append(f"{n}: linear param {rn} used more than once")
+    if _POLICY["confine"]:                              # D20: capability CONFINEMENT by author — the COMPOSITION GRAPH
+        up = _with_policy_rank({})                      # program-wide (rank ..) edges apply to clearance subsumption too
+        for eff, role in _POLICY["confine"]:
+            for n_, i in fns.items():
+                if eff in i["eff"] and eff in _direct_effects(i["fn"]):   # this defx WIELDS the confined effect directly
+                    if not _author_covers(_POLICY["author"].get(n_, {("ai", "ai")}), role, up):
+                        errors.append(f"{n_}: wields confined effect {eff} but is not authored by a cleared '{role}' "
+                                      f"(program-wide (confine {eff} {role})) — uncleared component in the capability graph")
     return fns, errors
 
 
@@ -513,6 +576,10 @@ def ev(node, env, fns, out, handlers=None):
     if h == "by":                                       # role-tagged provenance — runtime-transparent (static gate)
         r = None
         for x in node[3:]: r = ev(x, env, fns, out, handlers)
+        return r
+    if h == "declassify":                               # declassification — runtime-transparent (provenance is a static layer)
+        r = None
+        for x in node[2:]: r = ev(x, env, fns, out, handlers)
         return r
     if h == "trust":                                    # trust gate — runtime-transparent (already checked at check-time)
         spec = node[1] if len(node) > 1 else None        # skip the SPEC arg (N or (roles ..)) + any (sub ..) clauses; eval body
@@ -630,7 +697,7 @@ def _emit(node):
     if h == "record": return "{" + ",".join(f"{fld[0]!r}:{_emit(fld[1])}" for fld in node[1:] if isinstance(fld, list)) + "}"
     if h == "get": return f"({_emit(node[1])}[{node[2]!r}])"
     if h == "fn": return f"(lambda {','.join(pname(p) for p in node[1])}: {_emit(node[2:][-1])})"
-    if h in ("seam", "seam1", "resource", "prov"): return _emit(node[2:][-1])   # value-transparent (effects/prov are static layers)
+    if h in ("seam", "seam1", "resource", "prov", "declassify"): return _emit(node[2:][-1])   # value-transparent (effects/prov are static layers)
     if h == "by": return _emit(node[3:][-1])                           # value-transparent (role tag is a static layer)
     if h == "trust": return _emit(node[1:][-1])                        # value-transparent (the trust gate is a static check)
     if h == "use": return "'<used>'"
@@ -680,7 +747,7 @@ def _emit_js(node):
     if h == "record": return "({" + ",".join(f"{fld[0]!r}:{_emit_js(fld[1])}" for fld in node[1:] if isinstance(fld, list)) + "})"
     if h == "get": return f"({_emit_js(node[1])}[{node[2]!r}])"
     if h == "fn": return f"(({','.join(pname(p) for p in node[1])})=>{_emit_js(node[2:][-1])})"
-    if h in ("seam", "seam1", "resource", "prov"): return _emit_js(node[2:][-1])
+    if h in ("seam", "seam1", "resource", "prov", "declassify"): return _emit_js(node[2:][-1])
     if h == "by": return _emit_js(node[3:][-1])
     if h == "trust": return _emit_js(node[1:][-1])
     if h == "use": return "'<used>'"

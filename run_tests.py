@@ -135,6 +135,11 @@ CASES = [
     ("flat floor: stray Net cheats (D7 hole)",   '(defx fetch (Net!) (fn (u) (net "evil")))', True),   # honest limit: Net! only asks SOME net happen; the arg u is ignored, yet it type-checks
     ("resource-tied floor: must consume r",      '(defx fetch (Net!) (fn () (resource (r Net) (use r))))', True),  # the plug: the only way to discharge Net! is to USE r -> the effect is forced through the intended resource
     ("resource-tied floor: r ignored -> reject", '(defx fetch (Net!) (fn () (resource (r Net) (net "evil"))))', False),  # the cheat is caught: floor IS satisfied by stray net, yet REJECTED — r (the contract's resource) was never consumed
+    # --- grown 2026-06-24 (pass 2): EXCLUSIVE-BEARER resource — inside (resource (r E..) ..) the effect E has NO ambient
+    #     bearer but r; a stray ambient op of E (not via (use r)) is the decoupling cheat, now REFUSED — the
+    #     "use-that-IS-the-net": linearity is unsatisfiable except BY performing E through r. ---
+    ("exclusive: decoupling cheat refused", '(defx fetch (Net!) (fn () (resource (r Net) (let (a (use r)) (net "evil")))))', False),  # use r clears linearity; stray ambient net does the real work -> REFUSED
+    ("exclusive: declared seam re-grant ok", '(defx fetch (Net!) (fn () (resource (r Net) (let (a (use r)) (seam (Net) (net "evil"))))))', True),  # exclusivity bans INVISIBLE decoupling, not a declared (seam ..) re-grant
     # --- flagship 2026-06-23: untrusted code sandboxed (capability seam) + linear resource + typed result, all PROVEN ---
     ("flagship: sandboxed + linear + typed", '(defx untrusted () (fn (x) (seam (Pure) (ffi "logger" x)))) (defx process () (fn (item) (resource conn (let (r (use conn)) (variant Ok (untrusted item)))))) (defx main () (fn () (match (process 42) ((Ok v) v) ((Err e) 0))))', True),
     # --- grown 2026-06-24: D9 PROVENANCE + the `trust` gate — defend CIRCULAR trust (the AI authoring the very criterion
@@ -250,6 +255,25 @@ CASES = [
     ("D19 cross-stmt: count across two lets", '(defx f () (fn () (let (a (prov human 1)) (let (b (prov audit 2)) (trust 2 (+ a b))))))', True),
     ("D19 cross-stmt: roles flow across lets", '(defx f () (fn () (let (x (by code human 1)) (trust (roles code review) (by review alice x)))))', True),
     ("D19 cross-stmt: shadowing hides outer taint", '(defx f () (fn () (let (y (prov human 1)) (let (y 5) (trust y)))))', False),  # inner y is untainted -> refused (no leak)
+    # --- grown 2026-06-24: D20 — capability CONFINEMENT by author (the COMPOSITION GRAPH, not just an SBOM). (author NAME role WHO)
+    #     attributes a defx; (confine EFF role) lets a confined effect be WIELDED (performed DIRECTLY) only by a cleared author. ---
+    ("D20 confine: cleared author may wield Net", '(confine Net trusted) (author send trusted dev) (defx send (Net) (fn (u) (seam (Net) (net u))))', True),
+    ("D20 confine: unattributed wielder refused", '(confine Net trusted) (author send trusted dev) (defx send (Net) (fn (u) (seam (Net) (net u)))) (defx leak (Net) (fn (u) (seam (Net) (net u))))', False),
+    ("D20 confine: ai-authored wielder refused", '(confine Net trusted) (author leak trusted ai) (defx leak (Net) (fn (u) (seam (Net) (net u))))', False),
+    ("D20 confine: wrong role refused", '(confine Net trusted) (author leak other mallory) (defx leak (Net) (fn (u) (seam (Net) (net u))))', False),
+    ("D20 confine: honors global rank", '(rank trusted root) (confine Net trusted) (author send root dev) (defx send (Net) (fn (u) (seam (Net) (net u))))', True),
+    ("D20 confine: router need not be cleared, only the wielder", '(confine Net trusted) (author hit trusted dev) (defx hit (Net) (fn (u) (net u))) (defx route (Net) (fn (u) (seam (Net) (hit u))))', True),
+    ("D20 confine: does NOT leak (no policy)", '(defx leak (Net) (fn (u) (seam (Net) (net u))))', True),
+    ("D20 confine: discharged effect not wielded", '(confine Net trusted) (defx mock () (fn (x) x)) (defx t () (fn (u) (with Net mock (net u))))', True),
+    # --- grown 2026-06-25: D21 — (declassify ROLE e): the principled ESCAPE HATCH for provenance taint (D18/D19). A non-ai
+    #     ROLE explicitly LAUNDERS the taint (drops the `ai` provenance, adds ROLE's vouch) so a human can take responsibility
+    #     for an ai-derived value; ai itself may NOT declassify (the core anti-circularity rule). Provenance-only, additive. ---
+    ("D21 declassify: human launders ai -> trusts", '(defx f () (fn () (trust (declassify human (prov ai 5)))))', True),
+    ("D21 declassify: ai cannot launder", '(defx f () (fn () (trust (declassify ai (prov human 5)))))', False),
+    ("D21 declassify: laundered value flows through let", '(defx f () (fn () (let (y (declassify human (prov ai 1))) (trust y))))', True),
+    ("D21 declassify: ai-declassify through let refused", '(defx f () (fn () (let (y (declassify ai (prov human 1))) (trust y))))', False),
+    ("D21 declassify: effects still pass through", '(defx f (Net) (fn () (declassify human (net 1))))', True),
+    ("D21 declassify: one declassifier is not 2 anchors", '(defx f () (fn () (trust 2 (declassify human (prov ai 5)))))', False),
 ]
 
 
@@ -486,7 +510,19 @@ def main():
         print(f"  {'ok  ' if rx1 else 'FAIL'} runtime D19 cross-stmt: (let (y (prov human 9)) (trust y)) => {vx1}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime D19 cross-stmt: {e}")
-    total = len(CASES) + 31
+    try:                                               # runtime: D20 confine/author are STATIC — inert at runtime
+        vy1, _ = run_call('(confine Net trusted) (author t trusted dev) (defx t () (fn () 42))', "(t)")
+        ry1 = (vy1 == 42); ok += ry1
+        print(f"  {'ok  ' if ry1 else 'FAIL'} runtime D20 confine: program with (confine)/(author) runs => {vy1}")
+    except (LoomError, RecursionError) as e:
+        print(f"  FAIL runtime D20 confine: {e}")
+    try:                                               # runtime: D21 declassify is STATIC — value/provenance-transparent at runtime
+        vz1, _ = run_call('(defx t () (fn () (declassify human 42)))', "(t)")
+        rz1 = (vz1 == 42); ok += rz1
+        print(f"  {'ok  ' if rz1 else 'FAIL'} runtime D21 declassify: (declassify human 42) => {vz1}")
+    except (LoomError, RecursionError) as e:
+        print(f"  FAIL runtime D21 declassify: {e}")
+    total = len(CASES) + 33
     print(f"{'PASS' if ok == total else 'FAIL'} — {ok}/{total} citadel checks")
 
 
