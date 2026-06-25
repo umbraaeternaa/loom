@@ -702,7 +702,18 @@ def _emit(node):
     if h == "trust": return _emit(node[1:][-1])                        # value-transparent (the trust gate is a static check)
     if h == "use": return "'<used>'"
     if h == "print": return f"_p({_emit(node[1])})"                     # IO: print AND return the value (as the interpreter)
-    if h in ("net", "alloc", "rand", "ffi", "handle", "with", "variant", "match"):
+    if h == "variant": return f"({node[1]!r},{_emit(node[2])})"           # tagged value (Tag, payload) — mirrors the interpreter tuple
+    if h == "match":                                                      # dispatch on tag; bind payload; mirror the interpreter
+        chain = "_nm(_sc[0])"
+        for arm in reversed(node[2:]):
+            pat = arm[0]; b = _emit(arm[1])
+            hit = f"(lambda {pat[1]}: {b})(_sc[1])" if len(pat) >= 2 else b
+            chain = f"({hit} if _sc[0]=={pat[0]!r} else {chain})"
+        return f"(lambda _sc: {chain})({_emit(node[1])})"
+    if h == "net": return f"_net({_emit(node[1])})"                       # effect OP -> prelude that mirrors the interpreter
+    if h == "alloc": return f"_alloc({_emit(node[1])})" if len(node) > 1 else "[]"
+    if h == "rand": return "_rand()"
+    if h in ("ffi", "handle", "with"):
         raise LoomError(f"codegen v0 does not cover '{h}' yet")
     return f"{h}(" + ",".join(_emit(a) for a in node[1:]) + ")"          # call: a user fn, or a closure-valued name
 
@@ -710,7 +721,8 @@ def compile_py(program_src):
     """Compile a CHECKED LOOM program to portable Python source (one def per defx). Rejects if it fails the checker."""
     fns, errs = check(parse(program_src))
     if errs: raise LoomError("; ".join(errs))
-    lines = ["def _p(x):\n    print(x); return x"]                       # IO prelude: print performs + returns the value
+    lines = ["def _p(x):\n    print(x); return x", "def _nm(t):\n    raise Exception('no match arm for '+str(t))",
+             "def _net(u): return '<net '+str(u)+'>'", "def _alloc(n): return list(range(n))", "def _rand(): return '<rand>'"]   # IO + no-match + effect-op prelude
     for top in parse(program_src):
         if isinstance(top, list) and top and top[0] == "defx":
             fn = top[3]; ps = ",".join(pname(p) for p in fn[1]); body = _emit(fn[2:][-1]) if fn[2:] else "None"
@@ -752,7 +764,18 @@ def _emit_js(node):
     if h == "trust": return _emit_js(node[1:][-1])
     if h == "use": return "'<used>'"
     if h == "print": return f"_p({_emit_js(node[1])})"                  # IO: print AND return the value
-    if h in ("net", "alloc", "rand", "ffi", "handle", "with", "variant", "match"):
+    if h == "variant": return f"([{node[1]!r},{_emit_js(node[2])}])"      # tagged value [Tag, payload]
+    if h == "match":
+        chain = "_nm(_sc[0])"
+        for arm in reversed(node[2:]):
+            pat = arm[0]; b = _emit_js(arm[1])
+            hit = f"((({pat[1]})=>{b})(_sc[1]))" if len(pat) >= 2 else b
+            chain = f"((_sc[0]==={pat[0]!r})?{hit}:{chain})"
+        return f"((_sc)=>{chain})({_emit_js(node[1])})"
+    if h == "net": return f"_net({_emit_js(node[1])})"
+    if h == "alloc": return f"_alloc({_emit_js(node[1])})" if len(node) > 1 else "[]"
+    if h == "rand": return "_rand()"
+    if h in ("ffi", "handle", "with"):
         raise LoomError(f"JS codegen v0 does not cover '{h}' yet")
     return f"{h}(" + ",".join(_emit_js(a) for a in node[1:]) + ")"
 
@@ -760,7 +783,8 @@ def compile_js(program_src):
     """Compile a CHECKED LOOM program to portable JavaScript source (one function per defx)."""
     fns, errs = check(parse(program_src))
     if errs: raise LoomError("; ".join(errs))
-    lines = ["function _p(x){ console.log(x); return x; }"]              # IO prelude
+    lines = ["function _p(x){ console.log(x); return x; }", "function _nm(t){ throw new Error('no match arm for '+t); }",
+             "function _net(u){ return '<net '+u+'>'; }", "function _alloc(n){ return Array.from({length:n},(_,i)=>i); }", "function _rand(){ return '<rand>'; }"]  # IO + no-match + effect-op prelude
     for top in parse(program_src):
         if isinstance(top, list) and top and top[0] == "defx":
             fn = top[3]; ps = ",".join(pname(p) for p in fn[1]); body = _emit_js(fn[2:][-1]) if fn[2:] else "null"

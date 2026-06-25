@@ -396,6 +396,10 @@ def main():
                  ('(defx fact () (fn (n) (if (< n 2) 1 (* n (fact (- n 1))))))', "(fact 6)"),
                  (MAP + ' (defx demo () (fn () (map sq (list 1 2 3 4))))', "(demo)"),
                  ('(defx g () (fn () (get (record (a 10) (b 20)) b)))', "(g)"),
+                 ('(defx mk () (fn (x) (variant Ok x))) (defx main () (fn () (match (mk 7) ((Ok v) (+ v 1)) ((Err e) 0))))', "(main)"),  # SUM TYPE: variant+match compiles to BOTH Py and JS, each == interpreter (=> 8)
+                 ('(defx f (Net) (fn () (seam (Net) (net 1))))', "(f)"),                       # EFFECT op net -> "<net 1>" on interp/Py/JS
+                 ('(defx f (Alloc) (fn () (head (seam (Alloc) (alloc 3)))))', "(f)"),           # EFFECT op alloc -> [0,1,2], head => 0
+                 ('(defx f (Rand) (fn () (seam (Rand) (rand))))', "(f)"),                       # EFFECT op rand -> "<rand>"
                  ('(defx g (IO) (fn (x) (print x)))', "(g 7)")]   # EFFECTFUL: prints 7, returns 7 (value AND output must match)
         allok = True
         for prog, call in pairs:
