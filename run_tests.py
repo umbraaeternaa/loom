@@ -341,6 +341,20 @@ CASES = [
     ("D25 multi-hop: relay fn used as value refused", '(defx g () (fn (x) (trust x))) (defx mid () (fn (x) (g x))) (defx ap (e) (fn ((f e) y) (f y))) (defx top () (fn () (ap mid (prov human 5))))', False),
     ("D25 multi-hop: relay of ai-shadowed param refused", '(defx g () (fn (x) (trust x))) (defx mid () (fn (x) (let (x (prov ai 9)) (g x)))) (defx top () (fn () (mid (prov human 5))))', False),
     ("D25 multi-hop: obligation tracks the right param position", '(defx g () (fn (x) (trust x))) (defx mid () (fn (a b) (g b))) (defx top () (fn () (mid (prov human 1) 5)))', False),
+    # --- grown 2026-06-26 (pass 2): D26 — provenance does NOT survive an opaque FFI boundary. The same (ffi ..) that
+    #     has no ambient EFFECT-authority (it must be seam-granted) also has no DATA-authority: whatever opaque foreign
+    #     code returns cannot carry the host's vouch, so prov_of/roles_of STRIP all anchors at an ffi node and mark it
+    #     ai-tainted — the exact dual of D24 recall (persistence boundary), now at the INTEROP boundary. Re-trust needs a
+    #     LIVE host re-vouch placed OUTSIDE the ffi, or an explicit (declassify ..). Fail-closed everywhere else.
+    ("D26 ffi: input vouch does NOT survive a foreign call", '(defx f () (fn () (trust (seam (Pure) (ffi "x" (prov human 5))))))', False),
+    ("D26 ffi: live re-vouch AFTER the foreign call is honored", '(defx f () (fn () (trust (prov human (seam (Pure) (ffi "x" 5))))))', True),
+    ("D26 ffi: laundered value blocked even through a let", '(defx f () (fn () (let (y (seam (Pure) (ffi "x" (prov human 5)))) (trust y))))', False),
+    ("D26 ffi: foreign result cannot launder an ai origin", '(defx f () (fn () (trust (seam (Pure) (ffi "x" (prov ai 5))))))', False),
+    ("D26 ffi: N=2 not met by foreign-stripped anchors", '(defx f () (fn () (trust 2 (seam (Pure) (ffi "x" (prov human (prov audit 5)))))))', False),
+    ("D26 ffi: role vouch does NOT survive a foreign call", '(defx f () (fn () (trust (roles code proof) (seam (Pure) (ffi "x" (by code human (by proof trace 5)))))))', False),
+    ("D26 ffi: two live re-vouchers satisfy N=2 after a foreign call", '(defx f () (fn () (trust 2 (prov human (prov audit (seam (Pure) (ffi "x" 5)))))))', True),
+    ("D26 ffi: effects still flow through a foreign call (orthogonal)", '(defx f (IO) (fn (x) (seam (IO) (ffi "logger" x))))', True),
+    ("D26 ffi: bare ffi tag without a trust gate never bites", '(defx f () (fn (x) (seam (Pure) (ffi "x" (prov human x)))))', True),
 ]
 
 

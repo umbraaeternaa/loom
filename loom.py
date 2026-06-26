@@ -201,6 +201,8 @@ def prov_of(node, penv=None):
         return s
     if node[0] == "recall":  # D24: persistence strips in-program provenance (store->recall across ticks)
         return {"ai"}  # drop ALL inner anchors, mark ai-tainted -> untrusted-by-default (fail-closed dual of declassify)
+    if node[0] == "ffi":  # D26: opaque FOREIGN code cannot be vouched for -> its RESULT strips provenance (dual of recall,
+        return {"ai"}     #   at the interop/FFI boundary): the seam vouches what foreign code is GRANTED, never what it DID
     if node[0] == "declassify":                          # D21: (declassify ROLE e) — a non-ai ROLE LAUNDERS the taint:
         inner = set()                                    # drop the `ai` provenance and add ROLE's vouch (ai-declassify caught in infer)
         for x in node[2:]: inner |= prov_of(x, penv)
@@ -224,6 +226,8 @@ def roles_of(node, penv=None):
         for x in node[3:]: s |= roles_of(x, penv)
         return s
     if node[0] == "recall":  # D24: no role vouch survives a persistence boundary -> recalled data carries NO role
+        return set()
+    if node[0] == "ffi":  # D26: no role vouch survives the FOREIGN boundary either -> ffi result carries NO role
         return set()
     if node[0] == "let":
         np = dict(penv); np[node[1][0]] = roles_of(node[1][1], penv)
