@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LOOM — trust only the code you can prove</title>
+<meta name="description" content="LOOM is a trust layer for AI-written code: it proves, at a gate, exactly what code is allowed to do. Open source, 266 self-verifying checks, from Ukraine.">
+<meta property="og:title" content="LOOM — a trust layer for AI-written code">
+<meta property="og:description" content="It doesn't just run code — it proves, at a gate, exactly what the code is allowed to do.">
+<meta property="og:type" content="website">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: #05070f; color: #e7ecff; font-family: 'IBM Plex Sans', system-ui, sans-serif; -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+  ::selection { background: rgba(57,214,200,0.3); color: #fff; }
+  a { color: inherit; }
+</style>
+</head>
+<body>
+
+<div style="position: relative; width: 100%; min-height: 100vh; background: radial-gradient(120% 80% at 80% -10%, rgba(139,123,255,0.10), transparent 55%), radial-gradient(100% 70% at 10% 5%, rgba(57,214,200,0.07), transparent 50%), #05070f; overflow: hidden;">
+
+  <canvas id="loom-stars" style="position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 0; pointer-events: none;"></canvas>
+
+  <div style="position: relative; z-index: 1;">
+
+    <!-- NAV -->
+    <header style="max-width: 1180px; margin: 0 auto; padding: 28px clamp(20px,5vw,48px); display: flex; align-items: center; justify-content: space-between;">
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <div style="width: 26px; height: 26px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #fff, #39d6c8 55%, rgba(57,214,200,0.1) 100%); box-shadow: 0 0 18px rgba(57,214,200,0.6);"></div>
+        <span style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 19px; letter-spacing: 0.18em;">LOOM</span>
+      </div>
+      <a href="https://github.com/umbraaeternaa/loom" style="font-family: 'JetBrains Mono', monospace; font-size: 12.5px; letter-spacing: 0.04em; color: rgba(231,236,255,0.65); text-decoration: none; padding: 9px 16px; border: 1px solid rgba(139,123,255,0.22); border-radius: 999px;">github.com/umbraaeternaa/loom</a>
+    </header>
+
+    <!-- 1. HERO -->
+    <section style="max-width: 1180px; margin: 0 auto; padding: clamp(40px,7vw,90px) clamp(20px,5vw,48px) clamp(70px,9vw,120px); display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: clamp(40px,5vw,72px); align-items: center;">
+      <div>
+        <div style="font-family: 'JetBrains Mono', monospace; font-size: 12.5px; letter-spacing: 0.22em; text-transform: uppercase; color: #39d6c8; margin-bottom: 26px;">A trust layer for AI-written code</div>
+        <h1 style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: clamp(38px, 5.8vw, 70px); line-height: 1.04; letter-spacing: -0.02em; margin: 0 0 26px;">Trust only the code<br>you can <span style="background: linear-gradient(100deg, #39d6c8, #8b7bff); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;">prove</span>.</h1>
+        <p style="font-size: clamp(16px, 1.5vw, 19px); line-height: 1.65; color: rgba(231,236,255,0.68); max-width: 540px; margin: 0 0 38px;">LOOM doesn't just run code — it proves, at a gate, exactly what the code is allowed to do. A trust layer for the age of AI-written code.</p>
+        <div style="display: flex; flex-wrap: wrap; gap: 14px;">
+          <a href="https://github.com/umbraaeternaa/loom" style="display: inline-flex; align-items: center; gap: 9px; font-family: 'Space Grotesk', sans-serif; font-weight: 500; font-size: 15.5px; text-decoration: none; color: #05070f; background: linear-gradient(100deg, #39d6c8, #6ee8dc); padding: 15px 26px; border-radius: 12px; box-shadow: 0 8px 30px rgba(57,214,200,0.28);">★ Star on GitHub</a>
+          <a href="#proof-code" style="display: inline-flex; align-items: center; gap: 9px; font-family: 'Space Grotesk', sans-serif; font-weight: 500; font-size: 15.5px; text-decoration: none; color: #e7ecff; background: rgba(231,236,255,0.04); border: 1px solid rgba(139,123,255,0.28); padding: 15px 26px; border-radius: 12px;">See it work <span style="color:#8b7bff;">↓</span></a>
+        </div>
+      </div>
+      <div style="display: flex; justify-content: center; align-items: center;">
+        <div style="position: relative; width: 100%; max-width: 480px; aspect-ratio: 1 / 1;">
+          <canvas id="loom-organism" style="position: absolute; inset: 0; width: 100%; height: 100%;"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. THE PROBLEM -->
+    <section data-reveal style="max-width: 920px; margin: 0 auto; padding: clamp(60px,8vw,110px) clamp(20px,5vw,48px); text-align: center;">
+      <div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: 0.22em; color: rgba(139,123,255,0.85); margin-bottom: 22px;">01 — THE PROBLEM</div>
+      <h2 style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: clamp(28px, 3.8vw, 46px); line-height: 1.12; letter-spacing: -0.015em; margin: 0 0 24px;">AI writes the code — and its own tests.</h2>
+      <p style="font-size: clamp(16px,1.5vw,19px); line-height: 1.7; color: rgba(231,236,255,0.66); max-width: 640px; margin: 0 auto;">When one model writes both the code and the criteria that check it, the gate becomes foolable. <span style="color:#e7ecff;">"It passed" stops meaning "it's safe."</span></p>
+    </section>
+
+    <!-- 3. THE IDEA -->
+    <section data-reveal style="max-width: 920px; margin: 0 auto; padding: clamp(40px,6vw,90px) clamp(20px,5vw,48px); text-align: center;">
+      <div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: 0.22em; color: #39d6c8; margin-bottom: 22px;">02 — THE IDEA</div>
+      <h2 style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: clamp(28px, 3.8vw, 46px); line-height: 1.12; letter-spacing: -0.015em; margin: 0 0 24px;">Trust must be independently proven.</h2>
+      <p style="font-size: clamp(16px,1.5vw,19px); line-height: 1.7; color: rgba(231,236,255,0.66); max-width: 660px; margin: 0 auto;">LOOM tags where every value came from and what every function may do, then refuses anything not backed by an independent, non-AI anchor — <span style="color:#e7ecff;">proven by the compiler, before the code ever runs.</span></p>
+    </section>
+
+    <!-- 4. CODE -->
+    <section id="proof-code" data-reveal style="max-width: 980px; margin: 0 auto; padding: clamp(40px,6vw,90px) clamp(20px,5vw,48px);">
+      <div style="position: relative; border-radius: 18px; background: linear-gradient(180deg, rgba(16,20,38,0.92), rgba(9,12,26,0.92)); border: 1px solid rgba(139,123,255,0.18); box-shadow: 0 30px 80px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04); overflow: hidden;">
+        <div style="display: flex; align-items: center; gap: 8px; padding: 16px 20px; border-bottom: 1px solid rgba(139,123,255,0.12);">
+          <span style="width: 11px; height: 11px; border-radius: 50%; background: rgba(231,236,255,0.18);"></span>
+          <span style="width: 11px; height: 11px; border-radius: 50%; background: rgba(231,236,255,0.18);"></span>
+          <span style="width: 11px; height: 11px; border-radius: 50%; background: rgba(231,236,255,0.18);"></span>
+          <span style="margin-left: 10px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: rgba(231,236,255,0.4);">trust.loom</span>
+        </div>
+        <pre style="margin: 0; padding: clamp(20px,3vw,34px); font-family: 'JetBrains Mono', monospace; font-size: clamp(12.5px, 1.45vw, 16px); line-height: 2; overflow-x: auto;"><code><span style="color:#5d6688;">(</span><span style="color:#39d6c8;">trust</span> <span style="color:#ffb86c;">2</span>                     <span style="color:#4a5378;font-style:italic;">; needs &gt;= 2 independent anchors</span>
+  <span style="color:#5d6688;">(</span><span style="color:#8b7bff;">prov</span> <span style="color:#e7ecff;">human</span>                <span style="color:#4a5378;font-style:italic;">; a human ratifies ...</span>
+    <span style="color:#5d6688;">(</span><span style="color:#8b7bff;">prov</span> <span style="color:#e7ecff;">trace</span>              <span style="color:#4a5378;font-style:italic;">; ... plus a real-run trace ...</span>
+      <span style="color:#5d6688;">(</span><span style="color:#8b7bff;">prov</span> <span style="color:#e7ecff;">ai</span> <span style="color:#ffb86c;">42</span><span style="color:#5d6688;">))))</span>        <span style="color:#4a5378;font-style:italic;">; ... vouching for the AI's value</span>
+
+<span style="color:#5d6688;">(</span><span style="color:#39d6c8;">trust</span> <span style="color:#5d6688;">(</span><span style="color:#8b7bff;">prov</span> <span style="color:#e7ecff;">ai</span> <span style="color:#ffb86c;">42</span><span style="color:#5d6688;">))</span>         <span style="color:#ff6b7d;font-style:italic;">; ✗  AI-only -&gt; circular, REFUSED</span></code></pre>
+      </div>
+      <p style="text-align: center; font-size: 15px; line-height: 1.6; color: rgba(231,236,255,0.55); max-width: 600px; margin: 26px auto 0;">The compiler refuses circular, AI-only trust — and proves the real one.</p>
+    </section>
+
+    <!-- 5. WHAT IT CHECKS -->
+    <section data-reveal style="max-width: 1180px; margin: 0 auto; padding: clamp(60px,8vw,110px) clamp(20px,5vw,48px);">
+      <div style="text-align: center; margin-bottom: 56px;">
+        <div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: 0.22em; color: #39d6c8; margin-bottom: 22px;">03 — WHAT IT CHECKS</div>
+        <h2 style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: clamp(28px, 3.8vw, 46px); line-height: 1.12; letter-spacing: -0.015em; margin: 0;">Six guarantees, proven at the gate.</h2>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 18px;">
+
+        <div style="padding: 30px 28px; border-radius: 16px; background: rgba(231,236,255,0.025); border: 1px solid rgba(139,123,255,0.14);">
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#39d6c8" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 18px;"><path d="M13 2 3 14h7l-1 8 10-12h-7z"/></svg>
+          <h3 style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 19px; margin: 0 0 10px;">Effects</h3>
+          <p style="font-size: 14.5px; line-height: 1.6; color: rgba(231,236,255,0.6); margin: 0;">Every function declares what it does (IO / Net / FFI); undeclared side-effects are rejected.</p>
+        </div>
+
+        <div style="padding: 30px 28px; border-radius: 16px; background: rgba(231,236,255,0.025); border: 1px solid rgba(139,123,255,0.14);">
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#8b7bff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 18px;"><rect x="3" y="3" width="18" height="18" rx="3"/><rect x="8.5" y="8.5" width="7" height="7" rx="1.5"/></svg>
+          <h3 style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 19px; margin: 0 0 10px;">Capabilities</h3>
+          <p style="font-size: 14.5px; line-height: 1.6; color: rgba(231,236,255,0.6); margin: 0;">Untrusted code runs inside a sandbox seam; ambient power is impossible.</p>
+        </div>
+
+        <div style="padding: 30px 28px; border-radius: 16px; background: rgba(231,236,255,0.025); border: 1px solid rgba(139,123,255,0.14);">
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#39d6c8" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 18px;"><path d="M12 2 4 6v6c0 5 3.5 8 8 10 4.5-2 8-5 8-10V6z"/><path d="m9 12 2 2 4-4"/></svg>
+          <h3 style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 19px; margin: 0 0 10px;">Provenance &amp; trust</h3>
+          <p style="font-size: 14.5px; line-height: 1.6; color: rgba(231,236,255,0.6); margin: 0;">Values carry who authored them; trust demands independent anchors.</p>
+        </div>
+
+        <div style="padding: 30px 28px; border-radius: 16px; background: rgba(231,236,255,0.025); border: 1px solid rgba(139,123,255,0.14);">
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#8b7bff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 18px;"><circle cx="5" cy="6" r="2.5"/><circle cx="19" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M6.8 7.6 10.5 16M17.2 7.6 13.5 16"/></svg>
+          <h3 style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 19px; margin: 0 0 10px;">Taint flow</h3>
+          <p style="font-size: 14.5px; line-height: 1.6; color: rgba(231,236,255,0.6); margin: 0;">Provenance follows a value through bindings and across function calls.</p>
+        </div>
+
+        <div style="padding: 30px 28px; border-radius: 16px; background: rgba(231,236,255,0.025); border: 1px solid rgba(139,123,255,0.14);">
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#39d6c8" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 18px;"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3 1.4 0 2.7-.1 3.8-.4"/><path d="m16 16 2 2 4-4"/></svg>
+          <h3 style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 19px; margin: 0 0 10px;">Memory-poisoning defense</h3>
+          <p style="font-size: 14.5px; line-height: 1.6; color: rgba(231,236,255,0.6); margin: 0;">Data recalled from a store is untrusted by default — provenance doesn't survive persistence.</p>
+        </div>
+
+        <div style="padding: 30px 28px; border-radius: 16px; background: rgba(231,236,255,0.025); border: 1px solid rgba(139,123,255,0.14);">
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#8b7bff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 18px;"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><circle cx="12" cy="15.5" r="1.4"/></svg>
+          <h3 style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 19px; margin: 0 0 10px;">Complete mediation</h3>
+          <p style="font-size: 14.5px; line-height: 1.6; color: rgba(231,236,255,0.6); margin: 0;">An effect can't be statically laundered out; it must reach the gate.</p>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- 6. PROOF -->
+    <section data-reveal style="max-width: 1180px; margin: 0 auto; padding: clamp(40px,6vw,90px) clamp(20px,5vw,48px);">
+      <div style="text-align: center; margin-bottom: 52px;">
+        <div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: 0.22em; color: #39d6c8; margin-bottom: 22px;">04 — PROOF</div>
+        <h2 style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: clamp(28px, 3.8vw, 46px); line-height: 1.12; letter-spacing: -0.015em; margin: 0;">It works, and it can only ever grow greener.</h2>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px;">
+        <div style="padding: 38px 30px; border-radius: 16px; background: linear-gradient(180deg, rgba(57,214,200,0.07), rgba(57,214,200,0.02)); border: 1px solid rgba(57,214,200,0.22); text-align: center;">
+          <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: clamp(40px,5vw,58px); line-height: 1; color: #39d6c8;">266</div>
+          <div style="font-size: 15px; color: rgba(231,236,255,0.7); margin-top: 14px;">self-verifying checks</div>
+        </div>
+        <div style="padding: 38px 30px; border-radius: 16px; background: rgba(231,236,255,0.025); border: 1px solid rgba(139,123,255,0.16); text-align: center; display: flex; flex-direction: column; justify-content: center;">
+          <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: clamp(18px,2vw,21px); line-height: 1.35; color: #e7ecff;">Every feature added with an adversarial test</div>
+        </div>
+        <div style="padding: 38px 30px; border-radius: 16px; background: rgba(231,236,255,0.025); border: 1px solid rgba(139,123,255,0.16); text-align: center; display: flex; flex-direction: column; justify-content: center;">
+          <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: clamp(18px,2vw,21px); line-height: 1.35; color: #e7ecff;">One program runs identically on the interpreter, <span style="color:#8b7bff;">Python</span> and <span style="color:#39d6c8;">JavaScript</span></div>
+        </div>
+      </div>
+      <p style="text-align: center; font-size: 14.5px; line-height: 1.6; color: rgba(231,236,255,0.5); max-width: 620px; margin: 30px auto 0;">Grown daily by an autonomous research organism — the language is open; the engine is mine.</p>
+    </section>
+
+    <!-- 7. BUILT BY -->
+    <section data-reveal style="max-width: 760px; margin: 0 auto; padding: clamp(60px,8vw,110px) clamp(20px,5vw,48px); text-align: center;">
+      <div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: 0.22em; color: rgba(139,123,255,0.85); margin-bottom: 28px;">05 — BUILT BY</div>
+      <p style="font-family: 'Space Grotesk', sans-serif; font-weight: 400; font-size: clamp(20px,2.6vw,30px); line-height: 1.45; letter-spacing: -0.01em; color: #e7ecff; margin: 0 0 22px;">Built solo, in the open, from Ukraine. No company, no funds — just this idea.</p>
+      <p style="font-family: 'JetBrains Mono', monospace; font-size: 14px; color: rgba(231,236,255,0.6); margin: 0;">— Volodymyr Natoptanyi <span style="color:#39d6c8;">(«Umbra»)</span></p>
+    </section>
+
+    <!-- 8. CTA / SUPPORT -->
+    <section data-reveal style="max-width: 1180px; margin: 0 auto; padding: clamp(40px,6vw,80px) clamp(20px,5vw,48px) clamp(80px,10vw,130px);">
+      <div style="position: relative; border-radius: 24px; padding: clamp(40px,6vw,72px) clamp(28px,5vw,64px); background: radial-gradient(110% 130% at 50% 0%, rgba(139,123,255,0.16), transparent 60%), linear-gradient(180deg, rgba(16,20,38,0.7), rgba(9,12,26,0.7)); border: 1px solid rgba(139,123,255,0.2); overflow: hidden;">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: clamp(36px,5vw,64px); align-items: center;">
+          <div>
+            <h2 style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: clamp(28px,3.6vw,44px); line-height: 1.1; letter-spacing: -0.015em; margin: 0 0 26px;">Help prove the<br>future of trust.</h2>
+            <a href="https://github.com/umbraaeternaa/loom" style="display: flex; align-items: center; gap: 12px; text-decoration: none; padding: 16px 20px; border-radius: 12px; background: rgba(231,236,255,0.04); border: 1px solid rgba(57,214,200,0.25); margin-bottom: 14px;">
+              <span style="color: #39d6c8; font-size: 18px;">★</span>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 13.5px; color: #e7ecff;">github.com/umbraaeternaa/loom</span>
+            </a>
+            <a href="https://send.monobank.ua/jar/AHaziFXjYX" style="display: flex; align-items: flex-start; gap: 12px; text-decoration: none; padding: 16px 20px; border-radius: 12px; background: rgba(231,236,255,0.04); border: 1px solid rgba(139,123,255,0.25);">
+              <span style="color: #8b7bff; font-size: 18px; line-height: 1.3;">☕</span>
+              <span>
+                <span style="display: block; font-family: 'Space Grotesk', sans-serif; font-weight: 500; font-size: 14.5px; color: #e7ecff; margin-bottom: 4px;">Support the mission</span>
+                <span style="display: block; font-size: 12.5px; line-height: 1.5; color: rgba(231,236,255,0.55);">Even a small donation moves it forward — <span style="font-family:'JetBrains Mono',monospace;color:#8b7bff;">send.monobank.ua/jar/AHaziFXjYX</span></span>
+              </span>
+            </a>
+          </div>
+          <div style="display: flex; justify-content: center;">
+            <div style="text-align: center;">
+              <a href="https://send.monobank.ua/jar/AHaziFXjYX" style="display:block; width: 190px; height: 190px; border-radius: 18px; background: #e7ecff; padding: 14px; box-shadow: 0 16px 50px rgba(0,0,0,0.45); margin: 0 auto;">
+                <div id="loom-qr" style="width: 100%; height: 100%; position: relative;"></div>
+              </a>
+              <div style="font-family: 'JetBrains Mono', monospace; font-size: 11.5px; letter-spacing: 0.08em; color: rgba(231,236,255,0.45); margin-top: 16px;">SCAN TO SUPPORT</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style="text-align: center; margin-top: 50px; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; letter-spacing: 0.12em; color: rgba(231,236,255,0.32);">LOOM · OPEN SOURCE · MMXXVI</div>
+    </section>
+
+  </div>
+</div>
+
+<script>
+// Standalone implementation of the Claude Design "Loom trust layer landing" —
+// the DCLogic component framework is replaced with vanilla JS; props are fixed at their defaults;
+// the faux-QR placeholder is replaced with the REAL Monobank jar QR (monobank_qr.png).
+(function () {
+  class LoomLanding {
+    constructor() {
+      this.props = { organismSpeed: 1, impulseColor: 'teal', starDensity: 1, showStarfield: true };
+    }
+
+    componentDidMount() {
+      this.starsCanvas = document.getElementById('loom-stars');
+      this.orgCanvas = document.getElementById('loom-organism');
+      this.startStars();
+      this.startOrganism();
+      this.buildQR();
+      this.setupReveal();
+      this._onResize = () => { this.resizeStars(); this.resizeOrganism(); };
+      window.addEventListener('resize', this._onResize);
+    }
+
+    // ---------- scroll reveal ----------
+    setupReveal() {
+      const els = document.querySelectorAll('[data-reveal]');
+      els.forEach(el => {
+        el.style.opacity = '0';
+        el.style.transform = 'translateY(28px)';
+        el.style.transition = 'opacity 0.9s cubic-bezier(.2,.7,.2,1), transform 0.9s cubic-bezier(.2,.7,.2,1)';
+        el.style.willChange = 'opacity, transform';
+      });
+      if (!('IntersectionObserver' in window)) {
+        els.forEach(el => { el.style.opacity = '1'; el.style.transform = 'none'; });
+        return;
+      }
+      this._io = new IntersectionObserver((entries) => {
+        entries.forEach(e => {
+          if (e.isIntersecting) {
+            e.target.style.opacity = '1';
+            e.target.style.transform = 'none';
+            this._io.unobserve(e.target);
+          }
+        });
+      }, { threshold: 0.14, rootMargin: '0px 0px -8% 0px' });
+      els.forEach(el => this._io.observe(el));
+    }
+
+    // ---------- starfield ----------
+    startStars() {
+      const c = this.starsCanvas;
+      if (!c) return;
+      this.resizeStars();
+      const ctx = c.getContext('2d');
+      const draw = (t) => {
+        const sz = this._starSize;
+        if (sz) {
+          ctx.clearRect(0, 0, sz.w, sz.h);
+          if (this.props.showStarfield !== false) {
+            for (const s of this._stars) {
+              const tw = 0.55 + 0.45 * Math.sin(t * 0.0011 * s.tw + s.ph);
+              ctx.globalAlpha = s.base * tw;
+              ctx.fillStyle = s.color;
+              ctx.beginPath();
+              ctx.arc(s.x * sz.w, s.y * sz.h, s.r, 0, 6.2832);
+              ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+          }
+        }
+        this._starRAF = requestAnimationFrame(draw);
+      };
+      this._starRAF = requestAnimationFrame(draw);
+    }
+
+    resizeStars() {
+      const c = this.starsCanvas;
+      if (!c) return;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const W = window.innerWidth, H = window.innerHeight;
+      c.width = W * dpr; c.height = H * dpr;
+      c.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
+      this._starSize = { w: W, h: H };
+      const density = this.props.starDensity ?? 1;
+      const count = Math.round((W * H / 8200) * density);
+      this._stars = new Array(count).fill(0).map(() => {
+        const roll = Math.random();
+        return {
+          x: Math.random(), y: Math.random(),
+          r: Math.random() * 1.25 + 0.25,
+          base: Math.random() * 0.5 + 0.18,
+          tw: Math.random() * 2 + 0.5,
+          ph: Math.random() * 6.2832,
+          color: roll < 0.08 ? '#8b7bff' : (roll < 0.16 ? '#39d6c8' : '#e7ecff')
+        };
+      });
+    }
+
+    // ---------- organism ----------
+    startOrganism() {
+      const c = this.orgCanvas;
+      if (!c) return;
+      this.resizeOrganism();
+      const ctx = c.getContext('2d');
+      this._lastFrame = performance.now();
+      this._spawnAcc = 0;
+      const draw = (t) => {
+        const dt = Math.min((t - this._lastFrame) / 1000, 0.05);
+        this._lastFrame = t;
+        this.drawOrganism(ctx, t, dt);
+        this._orgRAF = requestAnimationFrame(draw);
+      };
+      this._orgRAF = requestAnimationFrame(draw);
+    }
+
+    resizeOrganism() {
+      const c = this.orgCanvas;
+      if (!c) return;
+      const size = c.clientWidth || 420;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      c.width = size * dpr; c.height = size * dpr;
+      c.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
+      this._orgSize = size;
+      if (!this._nodes) {
+        const n = 5;
+        this._nodes = [];
+        for (let i = 0; i < n; i++) {
+          this._nodes.push({
+            base: (i / n) * 6.2832,
+            orbit: 0.30 + 0.065 * (i % 3),
+            speed: (0.16 + 0.05 * i) * (i % 2 ? -1 : 1),
+            size: 4.5 + (i % 2 ? 2 : 0),
+            yscale: 0.52 + 0.06 * (i % 2)
+          });
+        }
+        this._impulses = [];
+      }
+    }
+
+    drawOrganism(ctx, t, dt) {
+      const S = this._orgSize;
+      if (!S) return;
+      const cx = S / 2, cy = S / 2;
+      const speed = this.props.organismSpeed ?? 1;
+      const impColor = this.props.impulseColor === 'violet' ? [139, 123, 255] : [57, 214, 200];
+      const time = t * 0.001 * speed;
+      ctx.clearRect(0, 0, S, S);
+
+      const nodePos = this._nodes.map(nd => {
+        const a = nd.base + time * nd.speed;
+        const rx = nd.orbit * S, ry = nd.orbit * S * nd.yscale;
+        return { x: cx + Math.cos(a) * rx, y: cy + Math.sin(a) * ry, size: nd.size };
+      });
+
+      // edges core -> node
+      for (const p of nodePos) {
+        const g = ctx.createLinearGradient(cx, cy, p.x, p.y);
+        g.addColorStop(0, 'rgba(57,214,200,0.26)');
+        g.addColorStop(1, 'rgba(139,123,255,0.10)');
+        ctx.strokeStyle = g;
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(p.x, p.y); ctx.stroke();
+      }
+      // faint orbital ring between nodes
+      ctx.strokeStyle = 'rgba(139,123,255,0.08)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      nodePos.forEach((p, i) => { i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y); });
+      ctx.closePath(); ctx.stroke();
+
+      // spawn impulses
+      this._spawnAcc += dt;
+      if (this._spawnAcc > 0.20 / speed) {
+        this._spawnAcc = 0;
+        const idx = Math.floor(Math.random() * nodePos.length);
+        this._impulses.push({ idx, p: 0, dir: Math.random() < 0.5, sp: 0.5 + Math.random() * 0.5 });
+      }
+      // update + draw impulses
+      this._impulses = this._impulses.filter(im => im.p <= 1);
+      for (const im of this._impulses) {
+        im.p += im.sp * dt * speed;
+        const target = nodePos[im.idx];
+        const f = im.dir ? im.p : 1 - im.p;
+        const x = cx + (target.x - cx) * f;
+        const y = cy + (target.y - cy) * f;
+        const fade = Math.sin(Math.min(im.p, 1) * Math.PI);
+        ctx.beginPath();
+        ctx.fillStyle = `rgba(${impColor[0]},${impColor[1]},${impColor[2]},${0.9 * fade})`;
+        ctx.shadowColor = `rgba(${impColor[0]},${impColor[1]},${impColor[2]},0.9)`;
+        ctx.shadowBlur = 8;
+        ctx.arc(x, y, 2.2, 0, 6.2832);
+        ctx.fill();
+      }
+      ctx.shadowBlur = 0;
+
+      // nodes (violet)
+      for (const p of nodePos) {
+        const ng = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.size * 3.2);
+        ng.addColorStop(0, 'rgba(139,123,255,0.95)');
+        ng.addColorStop(0.4, 'rgba(139,123,255,0.45)');
+        ng.addColorStop(1, 'rgba(139,123,255,0)');
+        ctx.fillStyle = ng;
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.size * 3.2, 0, 6.2832); ctx.fill();
+        ctx.fillStyle = 'rgba(231,236,255,0.95)';
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.size * 0.5, 0, 6.2832); ctx.fill();
+      }
+
+      // breathing core (white-teal)
+      const breathe = 1 + 0.10 * Math.sin(time * 1.7);
+      const core = S * 0.085 * breathe;
+      const aura = ctx.createRadialGradient(cx, cy, 0, cx, cy, core * 4.2);
+      aura.addColorStop(0, 'rgba(231,255,252,0.95)');
+      aura.addColorStop(0.18, 'rgba(120,240,228,0.8)');
+      aura.addColorStop(0.5, 'rgba(57,214,200,0.28)');
+      aura.addColorStop(1, 'rgba(57,214,200,0)');
+      ctx.fillStyle = aura;
+      ctx.beginPath(); ctx.arc(cx, cy, core * 4.2, 0, 6.2832); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.98)';
+      ctx.beginPath(); ctx.arc(cx, cy, core * 0.6, 0, 6.2832); ctx.fill();
+    }
+
+    // ---------- real Monobank jar QR ----------
+    buildQR() {
+      const host = document.getElementById('loom-qr');
+      if (!host) return;
+      host.innerHTML = '<img src="monobank_qr.png" alt="Monobank jar — scan to support LOOM" style="width:100%;height:100%;object-fit:contain;display:block;">';
+    }
+  }
+
+  const boot = () => new LoomLanding().componentDidMount();
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
+})();
+</script>
+</body>
+</html>
