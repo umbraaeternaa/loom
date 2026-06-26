@@ -130,6 +130,7 @@ def _ucount(node, fns, penv):
         add(_ucount(node[1][1], fns, penv))
         for x in node[2:]: add(_ucount(x, fns, penv))
         return out
+    if h == 'seamN': return _ucount(['seam'] + node[2:], fns, penv)   # D27 metered grant: pass-through for use-counting, like a seam
     if h in ("seam", "seam1"):                          # a grant is pass-through for counting (the check happens AT seam1)
         for x in _roleclauses(node[2:])[3]: add(_ucount(x, fns, penv))   # skip D12/D13 (roles..)/(sub..)/(needs..) clauses
         return out
@@ -156,6 +157,52 @@ def _ucount(node, fns, penv):
     return out
 
 
+_NCAP = 1024                                                         # D27 meter ceiling: counts saturate here (>> any lawful quantum); recursion/overflow reach it
+def _nadd(a, b): return min(a + b, _NCAP)
+def _ncount(node, fns, penv):                                        # D27 EXACT use-count {effect:int}, saturating -- numeric refinement of _ucount (whose {0,1,'M'} collapses every count >= 2)
+    out = {}                                                         # conservative: a call/recursion/unknown higher-order use -> _NCAP (fail-closed); if/match branches take MAX (one runs)
+    def add(dd):
+        for e, c in dd.items(): out[e] = _nadd(out.get(e, 0), c)
+    if not isinstance(node, list) or not node: return out
+    h = node[0]
+    if h == 'fn': return out
+    if h == 'seamN': return _ncount(['seam'] + node[2:], fns, penv)
+    if h in ('seam', 'seam1'):
+        for x in _roleclauses(node[2:])[3]: add(_ncount(x, fns, penv))
+        return out
+    if h == 'if':
+        add(_ncount(node[1], fns, penv))
+        tc, ec = _ncount(node[2], fns, penv), _ncount(node[3], fns, penv)
+        for e in set(tc) | set(ec): out[e] = _nadd(out.get(e, 0), max(tc.get(e, 0), ec.get(e, 0)))
+        return out
+    if h == 'match':
+        add(_ncount(node[1], fns, penv))
+        arms = [_ncount(a[1], fns, penv) for a in node[2:] if isinstance(a, list) and len(a) >= 2]
+        for e in set().union(*[set(c) for c in arms]) if arms else set():
+            out[e] = _nadd(out.get(e, 0), max(c.get(e, 0) for c in arms))
+        return out
+    if h == 'let':
+        add(_ncount(node[1][1], fns, penv))
+        for x in node[2:]: add(_ncount(x, fns, penv))
+        return out
+    if h == 'resource':
+        spec = node[1]; rname, reffs = (spec[0], set(spec[1:])) if isinstance(spec, list) else (spec, set())
+        for x in node[2:]: add(_ncount(x, fns, penv))
+        uses = out.pop(rname, 0)
+        for E in reffs & EFFECTS: out[E] = _nadd(out.get(E, 0), uses)
+        return out
+    if h == 'use': return {node[1]: 1}
+    for a in node[1:]: add(_ncount(a, fns, penv))
+    if h in _OPEFF: out[_OPEFF[h]] = _nadd(out.get(_OPEFF[h], 0), 1)
+    elif h == 'ffi': out['FFI'] = _nadd(out.get('FFI', 0), 1)
+    elif h in fns:
+        for e in fns[h].get('eff', set()) & EFFECTS: out[e] = _NCAP
+    elif penv and h in penv:
+        for e in penv[h]:
+            if not is_var(e): out[e] = _NCAP
+    return out
+
+
 def _ambient_op_of(node, effs):
     """Direct ambient builtin ops (net/print/alloc/rand) of an effect in `effs` reachable from `node`
     WITHOUT crossing a re-scoping boundary (seam/seam1/handle/with) or a nested resource, skipping
@@ -164,7 +211,7 @@ def _ambient_op_of(node, effs):
     found = set()
     if not isinstance(node, list) or not node: return found
     h = node[0]
-    if h in ("seam", "seam1", "handle", "with", "resource", "fn", "use"): return found
+    if h in ("seam", "seam1", "seamN", "handle", "with", "resource", "fn", "use"): return found
     for a in node[1:]: found |= _ambient_op_of(a, effs)
     if h in BUILTIN_EFF: found |= (BUILTIN_EFF[h] & effs)
     return found
@@ -403,6 +450,19 @@ def infer(node, fns, errs, penv=None):
             for E in sorted(decl):
                 if uc.get(E, 0) == "M":
                     errs.append(f"linear capability {E} used more than once (incl. via a call or recursion)")
+        return decl
+    if h == 'seamN':                                    # (seamN K (E..) ... body) -- D27 METERED grant: seam gates + at-most-K uses per granted effect
+        K = node[1] if isinstance(node[1], int) else -1
+        decl = infer(['seam'] + node[2:], fns, errs, penv)
+        body = _roleclauses(node[3:])[3]
+        opaque = any(_has_head(x, 'with') or _has_head(x, 'handle') for x in body)
+        nc = {}
+        for x in body:
+            for e, c in _ncount(x, fns, penv).items(): nc[e] = _nadd(nc.get(e, 0), c)
+        for E in sorted(decl):
+            got = _NCAP if opaque else nc.get(E, 0)
+            if K < 0 or K >= _NCAP or got > K:
+                errs.append('metered capability ' + str(E) + ' used more than its quantum ' + str(K) + ' (got ' + (str(got) if got < _NCAP else 'unbounded/opaque') + '; a call/recursion/reinterpret/discharge or unknown higher-order use counts as overflow -- fail-closed)')
         return decl
     if h == "handle":                                   # (handle (E..) expr..) — DISCHARGE effects E locally (drop)
         hdl = set(node[1])
@@ -664,6 +724,7 @@ def ev(node, env, fns, out, handlers=None):
     if isinstance(node, str): return env.get(node, node)
     h = node[0]
     if h == "fn": return Closure(node[1], node[2:], env)   # a lambda literal evaluates to a closure over env
+    if h == 'seamN': return ev(['seam'] + node[2:], env, fns, out, handlers)   # D27 meter runs as a seam (cap stack); the quantum is a static check
     if h == "seam" or h == "seam1":                     # narrow runtime authority to exactly the granted row, then run
         _CAPS.append(set(node[1]) - {"Pure"})
         try:
@@ -825,6 +886,7 @@ def _emit(node):
     if h == "record": return "{" + ",".join(f"{fld[0]!r}:{_emit(fld[1])}" for fld in node[1:] if isinstance(fld, list)) + "}"
     if h == "get": return f"({_emit(node[1])}[{node[2]!r}])"
     if h == "fn": return f"(lambda {','.join(pname(p) for p in node[1])}: {_emit(node[2:][-1])})"
+    if h == 'seamN': return _emit(['seam'] + node[2:])   # D27 meter compiles as a seam (the quantum is a static-only check)
     if h in ("seam", "seam1"): return f"_seam({sorted(set(node[1])-{'Pure'})!r}, lambda: {_emit(node[2:][-1])})"   # seam SANDBOXES the body: push its granted row so foreign/ffi code is cap-gated exactly like the interpreter
     if h in ("resource", "prov", "declassify"): return _emit(node[2:][-1])   # value-transparent (effects/prov are static layers)
     if h == "by": return _emit(node[3:][-1])                           # value-transparent (role tag is a static layer)
@@ -904,6 +966,7 @@ def _emit_js(node):
     if h == "record": return "({" + ",".join(f"{fld[0]!r}:{_emit_js(fld[1])}" for fld in node[1:] if isinstance(fld, list)) + "})"
     if h == "get": return f"({_emit_js(node[1])}[{node[2]!r}])"
     if h == "fn": return f"(({','.join(pname(p) for p in node[1])})=>{_emit_js(node[2:][-1])})"
+    if h == 'seamN': return _emit_js(['seam'] + node[2:])   # D27 meter compiles as a seam (JS)
     if h in ("seam", "seam1"): return f"_seam({sorted(set(node[1])-{'Pure'})!r}, ()=>({_emit_js(node[2:][-1])}))"   # seam SANDBOXES the body (JS): cap-gate foreign code like the interpreter
     if h in ("resource", "prov", "declassify"): return _emit_js(node[2:][-1])
     if h == "by": return _emit_js(node[3:][-1])

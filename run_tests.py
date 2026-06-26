@@ -355,6 +355,22 @@ CASES = [
     ("D26 ffi: two live re-vouchers satisfy N=2 after a foreign call", '(defx f () (fn () (trust 2 (prov human (prov audit (seam (Pure) (ffi "x" 5)))))))', True),
     ("D26 ffi: effects still flow through a foreign call (orthogonal)", '(defx f (IO) (fn (x) (seam (IO) (ffi "logger" x))))', True),
     ("D26 ffi: bare ffi tag without a trust gate never bites", '(defx f () (fn (x) (seam (Pure) (ffi "x" (prov human x)))))', True),
+    # --- grown 2026-06-26 (pass 9): D27 — METERED capabilities (seamN K). seam1 (D23) is the quantum=1 meter; the
+    #     {0,1,'M'} use-count lattice collapses every count >= 2, so at-most-N (N>=2) is unrepresentable: a legit 2-use
+    #     task must over-grant (seam, UNBOUNDED) or under-grant (seam1). (seamN K (E..) ... body) bounds each granted
+    #     effect to K uses via an exact saturating count, delegating EVERY seam gate (no bypass); an effect reaching the
+    #     meter via a call/recursion/reinterpret/discharge saturates to overflow (fail-closed). Signals: otari (budget
+    #     enforcement), tokenomics (per-token metering), Agent Zero (unbounded ambient). ---
+    ("D27 metered: under quantum ok",        '(defx f (Net) (fn (u) (seamN 2 (Net) (net u) (net u))))', True),
+    ("D27 metered: over quantum refused",    '(defx f (Net) (fn (u) (seamN 1 (Net) (net u) (net u))))', False),
+    ("D27 metered: K=1 is seam1 (at most once)", '(defx f (Net) (fn (u) (seamN 1 (Net) (net u))))', True),
+    ("D27 metered: exactly K accepts",       '(defx f (Net) (fn (u) (seamN 3 (Net) (net u) (net u) (net u))))', True),
+    ("D27 metered: K+1 refused",             '(defx f (Net) (fn (u) (seamN 2 (Net) (net u) (net u) (net u))))', False),
+    ("D27 metered: if-branches not summed",  '(defx f (Net) (fn (u c) (seamN 1 (Net) (if c (net u) (net u)))))', True),
+    ("D27 metered: effect via a call is fail-closed", '(defx hit (Net) (fn (u) (net u))) (defx f (Net) (fn (u) (seamN 5 (Net) (hit u))))', False),
+    ("D27 metered: under-declared row still caught", '(defx f (Net) (fn (u) (seamN 2 (Pure) (net u))))', False),
+    ("D27 metered: per-effect quantum holds", '(defx f (Net IO) (fn (u) (seamN 2 (Net IO) (net u) (net u) (print u))))', True),
+    ("D27 metered: nested seam cannot launder amplification", '(defx f (Net) (fn (u) (seamN 1 (Net) (seam (Net) (net u) (net u)))))', False),
     # --- grown 2026-06-26 (pass 3): D27 — GRADED foreign trust via component-bound ATTESTATION. D26 strips ALL foreign
     #     output to ai (binary). A seam clause (vouch ROLE WHO COMP) lets a NON-AI authority WHO sign a SPECIFIC foreign
     #     component COMP, so (ffi COMP ..) directly in that seam body carries WHO's anchor instead of the strip — making
