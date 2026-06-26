@@ -203,6 +203,17 @@ def prov_of(node, penv=None):
         return {"ai"}  # drop ALL inner anchors, mark ai-tainted -> untrusted-by-default (fail-closed dual of declassify)
     if node[0] == "ffi":  # D26: opaque FOREIGN code cannot be vouched for -> its RESULT strips provenance (dual of recall,
         return {"ai"}     #   at the interop/FFI boundary): the seam vouches what foreign code is GRANTED, never what it DID
+    if node[0] in ("seam", "seam1"):  # D27: a (vouch ROLE WHO COMP) seam clause names a non-ai authority WHO that SIGNS a
+        vmap = {}; sbody = []         #   specific foreign component COMP, so (ffi COMP ..) DIRECTLY in this seam body carries
+        for x in node[2:]:            #   WHO's anchor instead of the D26 strip -> graded (audited vs unaudited) trusted-FFI.
+            if isinstance(x, list) and x and x[0] == "vouch" and len(x) >= 4: vmap.setdefault(x[3], set()).add(x[2])
+            elif isinstance(x, list) and x and x[0] in ("roles", "sub", "needs"): pass
+            else: sbody.append(x)
+        s = set()
+        for x in sbody:
+            if isinstance(x, list) and len(x) > 1 and x[0] == "ffi" and x[1] in vmap: s |= vmap[x[1]]
+            else: s |= prov_of(x, penv)
+        return s
     if node[0] == "declassify":                          # D21: (declassify ROLE e) — a non-ai ROLE LAUNDERS the taint:
         inner = set()                                    # drop the `ai` provenance and add ROLE's vouch (ai-declassify caught in infer)
         for x in node[2:]: inner |= prov_of(x, penv)
@@ -229,6 +240,17 @@ def roles_of(node, penv=None):
         return set()
     if node[0] == "ffi":  # D26: no role vouch survives the FOREIGN boundary either -> ffi result carries NO role
         return set()
+    if node[0] in ("seam", "seam1"):  # D27: a (vouch ROLE WHO COMP) clause re-grants (ROLE, WHO) to (ffi COMP ..) in body
+        vmap = {}; sbody = []
+        for x in node[2:]:
+            if isinstance(x, list) and x and x[0] == "vouch" and len(x) >= 4: vmap.setdefault(x[3], set()).add((x[1], x[2]))
+            elif isinstance(x, list) and x and x[0] in ("roles", "sub", "needs"): pass
+            else: sbody.append(x)
+        s = set()
+        for x in sbody:
+            if isinstance(x, list) and len(x) > 1 and x[0] == "ffi" and x[1] in vmap: s |= vmap[x[1]]
+            else: s |= roles_of(x, penv)
+        return s
     if node[0] == "let":
         np = dict(penv); np[node[1][0]] = roles_of(node[1][1], penv)
         s = set()
@@ -304,6 +326,7 @@ def _roleclauses(tail):
         if head == "roles": role_spec = c
         elif head == "sub" and len(c) >= 3: up.setdefault(c[1], set()).add(c[2])
         elif head == "needs" and len(c) >= 3: needs.append((c[1], c[2]))
+        elif head == "vouch": pass                        # D27: foreign-component attestation (consumed by prov_of/roles_of)
         else: break                                       # first non-clause element => the body starts here
         rest = rest[1:]
     return role_spec, up, needs, rest

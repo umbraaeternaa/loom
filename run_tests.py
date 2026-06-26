@@ -355,6 +355,47 @@ CASES = [
     ("D26 ffi: two live re-vouchers satisfy N=2 after a foreign call", '(defx f () (fn () (trust 2 (prov human (prov audit (seam (Pure) (ffi "x" 5)))))))', True),
     ("D26 ffi: effects still flow through a foreign call (orthogonal)", '(defx f (IO) (fn (x) (seam (IO) (ffi "logger" x))))', True),
     ("D26 ffi: bare ffi tag without a trust gate never bites", '(defx f () (fn (x) (seam (Pure) (ffi "x" (prov human x)))))', True),
+    # --- grown 2026-06-26 (pass 3): D27 — GRADED foreign trust via component-bound ATTESTATION. D26 strips ALL foreign
+    #     output to ai (binary). A seam clause (vouch ROLE WHO COMP) lets a NON-AI authority WHO sign a SPECIFIC foreign
+    #     component COMP, so (ffi COMP ..) directly in that seam body carries WHO's anchor instead of the strip — making
+    #     trusted-FFI graded (audited vs arbitrary). Sound AS AN ATTESTATION (the checker enforces non-ai authorship +
+    #     EXACT component-name match), not a verification. The dual of D21 declassify, bound to component IDENTITY (which
+    #     declassify/prov/by cannot express). Signals: julelang/jule (first-class C/C++ interop + compile-time caps),
+    #     carbon-lang (C++ interop), lantos1618/zen-holotype (one mechanism — the seam now also carries data-attestation).
+    ("D27 vouch: auditor signs the component -> trusted", '(defx f () (fn (x) (trust (seam (Pure) (vouch auditor alice "lib") (ffi "lib" x)))))', True),
+    ("D27 vouch: names a DIFFERENT component -> stripped", '(defx f () (fn (x) (trust (seam (Pure) (vouch auditor alice "other") (ffi "lib" x)))))', False),
+    ("D27 vouch: ai cannot self-vouch (fail-closed)", '(defx f () (fn (x) (trust (seam (Pure) (vouch auditor ai "lib") (ffi "lib" x)))))', False),
+    ("D27 vouch: no vouch -> D26 strip still stands", '(defx f () (fn () (trust (seam (Pure) (ffi "x" (prov human 5))))))', False),
+    ("D27 vouch: effects still flow alongside the attestation", '(defx f (Net) (fn (x) (trust (seam (Net) (vouch auditor alice "lib") (ffi "lib" x)))))', True),
+    ("D27 vouch: one vouch is ONE anchor, not N=2", '(defx f () (fn (x) (trust 2 (seam (Pure) (vouch auditor alice "lib") (ffi "lib" x)))))', False),
+    ("D27 vouch: two distinct vouchers meet N=2", '(defx f () (fn (x) (trust 2 (seam (Pure) (vouch auditor alice "lib") (vouch sig bob "lib") (ffi "lib" x)))))', True),
+    ("D27 vouch: role-quorum met by two component auditors", '(defx f () (fn (x) (trust (roles code proof) (seam (Pure) (vouch code alice "lib") (vouch proof bob "lib") (ffi "lib" x)))))', True),
+    ("D27 vouch: nested (non-direct) ffi not covered -> stripped", '(defx f () (fn (x) (trust (seam (Pure) (vouch auditor alice "lib") (let (y (ffi "lib" x)) y)))))', False),
+    # --- grown 2026-06-26 (pass 3): D27 -- the ShareLock INTERPROCEDURAL split. The GRANT (a (seam E)
+    #     that performs E) and the LAUNDER (a (handle E) that drops E from the row) are split across
+    #     TWO functions; each passes its local ceiling check, yet the composition performs E and the
+    #     ENTRY function declares Pure. PINS: (a) without the handle the effect-CLOSURE surfaces (the
+    #     fixpoint is a JOINT judge -- no effect fires that no defx declares), (b) the residual is the
+    #     entry row only, (c) (seal E) catches the laundering handle in whichever function holds it. ---
+    ("D27 split-launder: handle outside a granting seam hides Net (the gap)", '(defx leak (Net) (fn () (seam (Net) (net 1)))) (defx hideit () (fn () (handle (Net) (leak))))', True),
+    ("D27 split-launder: (seal Net) rejects it across the call boundary", '(seal Net) (defx leak (Net) (fn () (seam (Net) (net 1)))) (defx hideit () (fn () (handle (Net) (leak))))', False),
+    ("D27 split-launder: without the handle, Net closure surfaces (joint judge)", '(defx leak (Net) (fn () (seam (Net) (net 1)))) (defx hideit () (fn () (leak)))', False),
+    ("D27 split-launder: honest declaration of the routed effect is fine", '(defx leak (Net) (fn () (seam (Net) (net 1)))) (defx route (Net) (fn () (leak)))', True),
+    ("D27 split-launder: IO variant accepts statically too (runtime-sound: handle captures IO)", '(defx leakio (IO) (fn () (seam (IO) (print 1)))) (defx hideio () (fn () (handle (IO) (leakio))))', True),
+    ("D27 split-launder: (seal IO) also rejects the IO laundering", '(seal IO) (defx leakio (IO) (fn () (seam (IO) (print 1)))) (defx hideio () (fn () (handle (IO) (leakio))))', False),
+    # --- grown 2026-06-26 (growth pass #7): D26 RE-VOUCH BOUNDARY -- pin the EXACT line between a host
+    #     re-vouch that SURVIVES the foreign boundary and a vouch on the foreign INPUT that is STRIPPED.
+    #     The D26 cases above pin 'prov OUTSIDE the seam' (accept) and 'prov as the ffi INPUT' (reject);
+    #     these pin the SHARP middle: a vouch ABOVE the ffi node (host owns the RESULT) survives across
+    #     prov/by/declassify; the ai-declassify guard holds at the ffi; and an N=2 gate cannot be PADDED
+    #     with a foreign-stripped anchor. loom.py UNTOUCHED -- guards D26 (the live-playground headline). ---
+    ("D26 boundary: prov ABOVE the ffi (inside the seam) survives", '(defx f () (fn () (trust (seam (Pure) (prov human (ffi "x" 5))))))', True),
+    ("D26 boundary: declassify of a foreign result re-trusts (non-ai owns it)", '(defx f () (fn () (trust (declassify auditor (seam (Pure) (ffi "x" 5))))))', True),
+    ("D26 boundary: ai cannot declassify its own foreign result", '(defx f () (fn () (trust (declassify ai (seam (Pure) (ffi "x" 5))))))', False),
+    ("D26 boundary: (by ROLE WHO ..) re-vouch above the ffi survives", '(defx f () (fn () (trust (by code human (seam (Pure) (ffi "x" 5))))))', True),
+    ("D26 boundary: by-form vouch on the foreign INPUT is stripped (through a let)", '(defx f () (fn () (let (y (seam (Pure) (ffi "x" (by code human 5)))) (trust y))))', False),
+    ("D26 boundary: declassify placed BETWEEN seam and ffi re-trusts the result", '(defx f () (fn () (trust (seam (Pure) (declassify auditor (ffi "x" 5))))))', True),
+    ("D26 boundary: N=2 cannot be padded by a foreign-stripped anchor", '(defx f () (fn () (trust 2 (prov human (seam (Pure) (ffi "x" (prov audit 5)))))))', False),
 ]
 
 
