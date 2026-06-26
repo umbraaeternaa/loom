@@ -4,7 +4,7 @@
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
-from loom import parse, check, run_call, run_compiled, run_js, compile_js, LoomError
+from loom import parse, check, run_call, run_compiled, run_js, compile_js, compile_wasm, run_wasm, emit_wat, LoomError
 
 # (name, source, should_be_accepted)
 CASES = [
@@ -509,6 +509,26 @@ def main():
             ok += 1; print("  ok   backend(JS): compile_js emits source (node absent -> exec check skipped)")
     except Exception as e:
         print(f"  FAIL backend(JS): {e}")
+    try:                                               # THIRD TARGET (WASM): real wasm bytes via node's WebAssembly == interpreter (integer core)
+        import shutil as _sh
+        wpairs = [('(defx main () (fn () (+ 2 (* 3 4))))', "(main)"),                                   # arithmetic -> 14
+                  ('(defx mx () (fn (a b) (if (> a b) a b)))', "(mx 3 7)"),                              # comparison + if -> 7
+                  ('(defx fib () (fn (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))))', "(fib 10)"),  # recursion -> 55
+                  ('(defx fac () (fn (n) (if (< n 1) 1 (* n (fac (- n 1))))))', "(fac 6)")]               # recursion -> 720
+        for prog, call in wpairs:                       # every program emits a valid wasm module (magic header)
+            assert compile_wasm(prog)[:4] == b"\x00asm"
+        assert emit_wat(wpairs[2][0]).startswith("(module") and "i32.lt_s" in emit_wat(wpairs[2][0])   # WAT 'assembler' is emitted
+        if _sh.which("node"):
+            wok = True
+            for prog, call in wpairs:
+                wval, _ = run_wasm(prog, call); ival, _ = run_call(prog, call)
+                if wval != ival: wok = False; print(f"  FAIL wasm: {call} wasm={wval} interp={ival}")
+            ok += wok
+            print(f"  {'ok  ' if wok else 'FAIL'} backend(WASM): node WebAssembly value == interpreter ({len(wpairs)} programs)")
+        else:
+            ok += 1; print("  ok   backend(WASM): compile_wasm emits a valid module (node absent -> exec check skipped)")
+    except Exception as e:
+        print(f"  FAIL backend(WASM): {e}")
     try:                                               # runtime: variant + match extracts the payload / picks the arm
         v26, _ = run_call('(defx m1 () (fn () (match (variant Some 5) ((Some x) x) ((None) 0))))', "(m1)")
         v27, _ = run_call('(defx m2 () (fn () (match (variant None 0) ((Some x) x) ((None) 7))))', "(m2)")
@@ -617,7 +637,7 @@ def main():
         print(f"  {'ok  ' if rr1 else 'FAIL'} runtime D24 recall: (recall 42) => {vr1}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime D24 recall: {e}")
-    total = len(CASES) + 34
+    total = len(CASES) + 35   # +1: backend(WASM) cross-check (interpreter == node WebAssembly, integer core)
     print(f"{'PASS' if ok == total else 'FAIL'} — {ok}/{total} citadel checks")
 
 

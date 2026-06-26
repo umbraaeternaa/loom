@@ -941,7 +941,116 @@ def run_js(program_src, call_src):
     return val, out
 
 
-# ---- CLI: turn the kernel into a usable TOOL. `python3 loom.py <check|run|build> file.loom [call] [--target py|js]` ----
+# ---- THIRD TARGET: WebAssembly. The integer computational core compiles to REAL wasm bytes (run via node's built-in
+#      WebAssembly, ZERO deps) + a human-readable WAT "assembler". interp==Py==JS==WASM. Honest scope: the integer core
+#      only (+ - * / = < > / if / first-order calls + recursion); closures/lists/types/effects need a value runtime in
+#      linear memory -> the next frontier. Forms outside the core fail-closed (LoomError), never emit wrong code. ----
+def _leb_u(n):
+    o = bytearray()
+    while True:
+        b = n & 0x7f; n >>= 7; o.append(b | (0x80 if n else 0))
+        if not n: return bytes(o)
+
+def _leb_s(n):
+    o = bytearray(); more = True
+    while more:
+        b = n & 0x7f; n >>= 7
+        if (n == 0 and not (b & 0x40)) or (n == -1 and (b & 0x40)): more = False
+        else: b |= 0x80
+        o.append(b)
+    return bytes(o)
+
+_WBIN = {"+": 0x6a, "-": 0x6b, "*": 0x6c}; _WCMP = {"=": 0x46, "<": 0x48, ">": 0x4a}   # i32 add/sub/mul + eq/lt_s/gt_s
+
+def _emit_wasm(node, pmap, fmap):                          # -> body bytes for the wasm stack machine
+    if isinstance(node, int): return b"\x41" + _leb_s(node)            # i32.const
+    if isinstance(node, str):
+        if node not in pmap: raise LoomError("wasm: free variable " + node)
+        return b"\x20" + _leb_u(pmap[node])                            # local.get (param)
+    h = node[0]
+    if h in ("+", "*"):
+        out = _emit_wasm(node[1], pmap, fmap)
+        for a in node[2:]: out += _emit_wasm(a, pmap, fmap) + bytes([_WBIN[h]])
+        return out
+    if h == "-": return _emit_wasm(node[1], pmap, fmap) + _emit_wasm(node[2], pmap, fmap) + b"\x6b"
+    if h in _WCMP: return _emit_wasm(node[1], pmap, fmap) + _emit_wasm(node[2], pmap, fmap) + bytes([_WCMP[h]])
+    if h == "if":                                                       # if (result i32) THEN else ELSE end
+        return (_emit_wasm(node[1], pmap, fmap) + b"\x04\x7f" + _emit_wasm(node[2], pmap, fmap)
+                + b"\x05" + _emit_wasm(node[3], pmap, fmap) + b"\x0b")
+    if h in fmap:                                                       # call $fn  (first-order / recursive)
+        return b"".join(_emit_wasm(a, pmap, fmap) for a in node[1:]) + b"\x10" + _leb_u(fmap[h])
+    raise LoomError("wasm: form outside the integer core: " + str(h))
+
+def _wasm_defxs(program_src):
+    return [t for t in parse(program_src) if isinstance(t, list) and t and t[0] == "defx"]
+
+def compile_wasm(program_src):
+    """Compile a CHECKED LOOM integer-core program to a real WebAssembly module (bytes). Rejects if it fails the checker."""
+    _, errs = check(parse(program_src))
+    if errs: raise LoomError("; ".join(errs))
+    ds = _wasm_defxs(program_src); fmap = {t[1]: i for i, t in enumerate(ds)}; funcs = []
+    for t in ds:
+        fn = t[3]; pmap = {pname(p): i for i, p in enumerate(fn[1])}
+        funcs.append((t[1], len(fn[1]), _emit_wasm(fn[2:][-1] if fn[2:] else 0, pmap, fmap) + b"\x0b"))
+    ar = sorted({n for _, n, _ in funcs}); ti = {a: i for i, a in enumerate(ar)}
+    def _sec(sid, c): return bytes([sid]) + _leb_u(len(c)) + c
+    tc = _leb_u(len(ar)) + b"".join(b"\x60" + _leb_u(a) + b"\x7f" * a + b"\x01\x7f" for a in ar)   # type: (i32*)->i32
+    fc = _leb_u(len(funcs)) + b"".join(_leb_u(ti[n]) for _, n, _ in funcs)                         # function -> type
+    ec = _leb_u(len(funcs))
+    for i, (nm, _, _) in enumerate(funcs):
+        nb = nm.encode(); ec += _leb_u(len(nb)) + nb + b"\x00" + _leb_u(i)                          # export func
+    cc = _leb_u(len(funcs))
+    for _, _, code in funcs:
+        e = _leb_u(0) + code; cc += _leb_u(len(e)) + e                                              # 0 locals + body
+    return b"\x00asm\x01\x00\x00\x00" + _sec(1, tc) + _sec(3, fc) + _sec(7, ec) + _sec(10, cc)
+
+def emit_wat(program_src):
+    """Human-readable WebAssembly Text (the 'assembler') for the integer core — what compile_wasm encodes to bytes."""
+    _, errs = check(parse(program_src))
+    if errs: raise LoomError("; ".join(errs))
+    ds = _wasm_defxs(program_src); fmap = {t[1]: i for i, t in enumerate(ds)}
+    _OP = {"+": "i32.add", "-": "i32.sub", "*": "i32.mul", "=": "i32.eq", "<": "i32.lt_s", ">": "i32.gt_s"}
+    def w(node, ind):
+        if isinstance(node, int): return [ind + "i32.const " + str(node)]
+        if isinstance(node, str): return [ind + "local.get $" + node]
+        h = node[0]
+        if h in ("+", "*"):
+            o = w(node[1], ind)
+            for a in node[2:]: o += w(a, ind) + [ind + _OP[h]]
+            return o
+        if h in ("-", "=", "<", ">"): return w(node[1], ind) + w(node[2], ind) + [ind + _OP[h]]
+        if h == "if":
+            return (w(node[1], ind) + [ind + "if (result i32)"] + w(node[2], ind + "  ")
+                    + [ind + "else"] + w(node[3], ind + "  ") + [ind + "end"])
+        if h in fmap:
+            o = []
+            for a in node[1:]: o += w(a, ind)
+            return o + [ind + "call $" + h]
+        raise LoomError("wat: form outside the integer core: " + str(h))
+    lines = ["(module"]
+    for t in ds:
+        fn = t[3]; pn = [pname(p) for p in fn[1]]; sig = " ".join("(param $" + p + " i32)" for p in pn)
+        lines.append("  (func $" + t[1] + ((" " + sig) if sig else "") + " (result i32)")
+        lines += w(fn[2:][-1] if fn[2:] else 0, "    ")
+        lines += ["  )", '  (export "' + t[1] + '" (func $' + t[1] + "))"]
+    return "\n".join(lines + [")"])
+
+def run_wasm(program_src, call_src):
+    """Compile to wasm bytes, run via node's built-in WebAssembly; return (value, []) — proof wasm == interpreter. Needs node."""
+    import subprocess
+    c = parse(call_src)[0]                                  # call site = (NAME int-args...) for the integer core
+    name = c[0] if isinstance(c, list) else c
+    args = c[1:] if isinstance(c, list) else []
+    arr = ",".join(str(b) for b in compile_wasm(program_src))
+    js = ("WebAssembly.instantiate(new Uint8Array([" + arr + "]))"
+          ".then(m=>console.log(m.instance.exports[" + repr(name) + "](" + ",".join(str(a) for a in args) + ")))"
+          ".catch(e=>{console.error(String(e));process.exit(1)})")
+    r = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=15)
+    if r.returncode != 0: raise LoomError("node-wasm: " + r.stderr.strip()[:200])
+    return int(r.stdout.strip()), []
+
+
+# ---- CLI: turn the kernel into a usable TOOL. `python3 loom.py <check|run|build> file.loom [call] [--target py|js|wat]` ----
 def _cli(argv):
     flags, pos, i = {}, [], 0
     while i < len(argv):
@@ -966,7 +1075,7 @@ def _cli(argv):
         print("=> " + repr(val)); return 0
     if cmd == "build":
         tgt = flags.get("target", "py")
-        try: print(compile_js(src) if tgt == "js" else compile_py(src))
+        try: print(emit_wat(src) if tgt == "wat" else (compile_js(src) if tgt == "js" else compile_py(src)))
         except LoomError as e: print("REJECTED: " + str(e)); return 1
         return 0
     print("unknown command: " + cmd); return 2

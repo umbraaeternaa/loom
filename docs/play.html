@@ -67,6 +67,7 @@
     <button type="button" class="act primary" id="bCheck" disabled>Check</button>
     <button type="button" class="act" id="bRun" disabled>Run <small>(main)</small></button>
     <button type="button" class="act" id="bJs" disabled>Compile → JS</button>
+    <button type="button" class="act" id="bWat" disabled>Compile → WAT</button>
     <span class="status" id="status">loading…</span>
   </div>
 
@@ -105,6 +106,14 @@ const EXAMPLES = [
 
 (defx fetch () (fn (u) (seam (Net) (net u))))
 (defx main () (fn () (fetch "https://example")))` },
+  { name: "WASM · fib", note: "→ WAT",
+    src: `; The integer computational core compiles to REAL WebAssembly.
+; Press "Compile → WAT" to see the assembler, or "Run" for the value.
+
+(defx fib () (fn (n)
+  (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))))
+
+(defx main () (fn () (fib 10)))` },
 ];
 
 const $ = id => document.getElementById(id);
@@ -133,7 +142,7 @@ async function boot(){
     pyodide.FS.writeFile("loom.py", code);
     pyodide.runPython("import loom, json");
     setStatus("ready ✓");
-    ["bCheck","bRun","bJs"].forEach(id => $(id).disabled = false);
+    ["bCheck","bRun","bJs","bWat"].forEach(id => $(id).disabled = false);
     show("Ready — press <span class='v-eff'>Check</span>, or pick an example above.");
   } catch (e) {
     setStatus("failed to load");
@@ -208,6 +217,19 @@ except Exception as _e: _j = "// REJECTED — nothing to compile:\\n// " + str(_
 _j
 `);
     show("<span class='v-eff'>// LOOM → JavaScript (only checked code compiles)</span>\n\n" + esc(js));
+  } catch(e){ show("<span class='v-bad'>error</span>\n" + esc(e)); }
+};
+
+$("bWat").onclick = () => {
+  if(!pyodide) return;
+  try {
+    pyodide.globals.set("_src", $("src").value);
+    const wat = pyodide.runPython(`
+try: _w = loom.emit_wat(_src)
+except Exception as _e: _w = "; outside the integer core — WebAssembly here covers ints, arithmetic,\\n; comparison, if and recursion. Try the 'WASM · fib' example.\\n; (" + str(_e) + ")"
+_w
+`);
+    show("<span class='v-eff'>;; LOOM → WebAssembly text (WAT) — the integer core, as real assembly</span>\n\n" + esc(wat));
   } catch(e){ show("<span class='v-bad'>error</span>\n" + esc(e)); }
 };
 
