@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LOOM Playground — try the trust checker live</title>
+<meta name="description" content="Run LOOM in your browser: type a program, and the trust/effect checker proves — live — exactly what it's allowed to do. No server; the whole checker runs client-side via Pyodide.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<style>
+  :root{ --teal:#39d6c8; --violet:#8b7bff; --bg:#0b0d1a; --panel:#11142a; --line:rgba(120,140,210,.18); --ink:#e7ecff; --dim:rgba(231,236,255,.6); --bad:#ff7a8a; --good:#6ee7b0; }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 700px at 70% -10%, rgba(57,214,200,.08), transparent 60%), radial-gradient(900px 600px at 10% 110%, rgba(139,123,255,.10), transparent 60%), var(--bg);color:var(--ink);font-family:'IBM Plex Sans',system-ui,sans-serif;line-height:1.5;min-height:100vh}
+  .wrap{max-width:1060px;margin:0 auto;padding:26px 20px 70px}
+  header{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:6px}
+  h1{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:clamp(26px,4vw,38px);margin:0;letter-spacing:.5px}
+  h1 .dot{color:var(--teal)}
+  .home{margin-left:auto;color:var(--dim);text-decoration:none;font-size:14px;border:1px solid var(--line);padding:7px 13px;border-radius:9px}
+  .home:hover{color:var(--ink);border-color:var(--teal)}
+  .lede{color:var(--dim);max-width:760px;margin:2px 0 18px;font-size:15.5px}
+  .lede b{color:var(--ink);font-weight:500}
+  .examples{display:flex;gap:9px;flex-wrap:wrap;margin:0 0 12px}
+  .chip{background:var(--panel);border:1px solid var(--line);color:var(--ink);border-radius:999px;padding:8px 15px;font-size:13.5px;cursor:pointer;font-family:inherit;transition:.15s}
+  .chip:hover{border-color:var(--teal);color:var(--teal)}
+  .chip small{color:var(--dim);font-weight:400}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:820px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
+  .card .cap{padding:10px 15px;border-bottom:1px solid var(--line);font-size:12.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+  textarea{width:100%;min-height:330px;resize:vertical;border:0;outline:0;background:transparent;color:var(--ink);font-family:'JetBrains Mono',monospace;font-size:14px;line-height:1.65;padding:15px;tab-size:2}
+  .out{min-height:330px;padding:15px;font-family:'JetBrains Mono',monospace;font-size:13.5px;white-space:pre-wrap;overflow:auto;margin:0}
+  .bar{display:flex;gap:10px;align-items:center;margin:14px 0;flex-wrap:wrap}
+  button.act{font-family:'Space Grotesk',sans-serif;font-weight:500;font-size:14.5px;border-radius:10px;padding:11px 20px;cursor:pointer;border:1px solid var(--line);background:var(--panel);color:var(--ink);transition:.15s}
+  button.act:hover{border-color:var(--teal)}
+  button.act.primary{background:linear-gradient(180deg, rgba(57,214,200,.22), rgba(57,214,200,.08));border-color:rgba(57,214,200,.5);color:#dffdf8}
+  button.act:disabled{opacity:.5;cursor:wait}
+  .status{color:var(--dim);font-size:13px;margin-left:auto}
+  .v-ok{color:var(--good)} .v-bad{color:var(--bad)} .v-key{color:var(--violet)} .v-eff{color:var(--teal)}
+  footer{margin-top:30px;color:var(--dim);font-size:13px}
+  footer a{color:var(--teal);text-decoration:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>LOOM <span class="dot">·</span> playground</h1>
+    <a class="home" href="./index.html">← loom</a>
+  </header>
+  <p class="lede">Type a program. The <b>trust &amp; effect checker</b> proves — live, in your browser — exactly what the code is allowed to do, and refuses anything that lies. The whole checker runs <b>client-side</b> (Pyodide) — no server, nothing leaves your tab.</p>
+
+  <div class="examples" id="examples"></div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="cap">program</div>
+      <textarea id="src" spellcheck="false" aria-label="LOOM program source"></textarea>
+    </div>
+    <div class="card">
+      <div class="cap">result</div>
+      <pre class="out" id="out">Booting the checker…</pre>
+    </div>
+  </div>
+
+  <div class="bar">
+    <button type="button" class="act primary" id="bCheck" disabled>Check</button>
+    <button type="button" class="act" id="bRun" disabled>Run <small>(main)</small></button>
+    <button type="button" class="act" id="bJs" disabled>Compile → JS</button>
+    <span class="status" id="status">loading…</span>
+  </div>
+
+  <footer>
+    LOOM is a machine-checked trust layer for AI-written code · <a href="./index.html">about</a> · <a href="https://github.com/umbraaeternaa/loom" target="_blank" rel="noopener">source (MIT)</a> · built solo, from Ukraine 🇺🇦
+  </footer>
+</div>
+
+<script>
+const EXAMPLES = [
+  { name: "Trust gate", note: "→ 42",
+    src: `; An AI proposes a value. Trusting it ALONE is circular —
+; the AI would vouch for what it authored. The gate refuses that.
+; It is accepted only with >= 2 INDEPENDENT non-AI anchors.
+
+(defx result () (fn ()
+  (trust 2 (prov human (prov trace (prov ai 42))))))
+
+(defx main () (fn () (result)))` },
+  { name: "D26 · foreign boundary", note: "REJECTED",
+    src: `; D26 — provenance does NOT survive an opaque foreign (FFI) call.
+; The host vouched for what went IN; it can't vouch for what comes OUT.
+; A value that crossed the foreign boundary is untrusted-by-default.
+
+(defx main () (fn ()
+  (trust (seam (Pure) (ffi "x" (prov human 5))))))` },
+  { name: "D26 · live re-vouch", note: "→ 5",
+    src: `; The fix: a LIVE host re-vouch placed OUTSIDE the foreign call.
+; Now the human ratifies the RESULT, not what was fed in — accepted, runs to 5.
+
+(defx main () (fn ()
+  (trust (prov human (seam (Pure) (ffi "logger" 5))))))` },
+  { name: "Effect honesty", note: "REJECTED",
+    src: `; Declare your effects honestly. This function claims Pure ()
+; but performs a network call — the checker proves the lie and refuses.
+
+(defx fetch () (fn (u) (seam (Net) (net u))))
+(defx main () (fn () (fetch "https://example")))` },
+];
+
+const $ = id => document.getElementById(id);
+let pyodide = null;
+
+function setStatus(t){ $("status").textContent = t; }
+function show(html){ $("out").innerHTML = html; }
+function esc(s){ return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+// render example chips
+EXAMPLES.forEach((ex,i) => {
+  const b = document.createElement("button");
+  b.className = "chip";
+  b.innerHTML = ex.name + " <small>" + esc(ex.note) + "</small>";
+  b.onclick = () => { $("src").value = ex.src; show("Ready — press Check."); };
+  $("examples").appendChild(b);
+});
+$("src").value = EXAMPLES[0].src;
+
+async function boot(){
+  try {
+    setStatus("downloading runtime…");
+    pyodide = await loadPyodide();
+    setStatus("loading LOOM…");
+    const code = await (await fetch("./loom.py")).text();
+    pyodide.FS.writeFile("loom.py", code);
+    pyodide.runPython("import loom, json");
+    setStatus("ready ✓");
+    ["bCheck","bRun","bJs"].forEach(id => $(id).disabled = false);
+    show("Ready — press <span class='v-eff'>Check</span>, or pick an example above.");
+  } catch (e) {
+    setStatus("failed to load");
+    show("<span class='v-bad'>Could not start the runtime.</span>\n" + esc(e));
+  }
+}
+
+function pyjson(expr){
+  pyodide.globals.set("_src", $("src").value);
+  const raw = pyodide.runPython(expr);
+  return JSON.parse(raw);
+}
+
+$("bCheck").onclick = () => {
+  if(!pyodide) return;
+  try {
+    const r = pyjson(`
+import json
+try:
+    fns, errs = loom.check(loom.parse(_src))
+    if errs:
+        _o = {"ok": False, "errors": list(errs)}
+    else:
+        _o = {"ok": True, "fns": {n: (sorted(i["decl"]) or ["Pure"]) for n,i in fns.items()}}
+    _r = json.dumps(_o)
+except Exception as _e:
+    _r = json.dumps({"ok": False, "errors": ["parse error: " + str(_e)]})
+_r
+`);
+    if (r.ok) {
+      let s = "<span class='v-ok'>✓ ACCEPTED</span> — every effect is honest.\n\n";
+      for (const [n, row] of Object.entries(r.fns))
+        s += "  <span class='v-key'>" + esc(n) + "</span> : <span class='v-eff'>" + esc(row.join(" · ")) + "</span>\n";
+      show(s);
+    } else {
+      show("<span class='v-bad'>✗ REJECTED</span> — the compiler refuses to run a lie.\n\n" +
+           r.errors.map(e => "  • " + esc(e)).join("\n"));
+    }
+  } catch(e){ show("<span class='v-bad'>error</span>\n" + esc(e)); }
+};
+
+$("bRun").onclick = () => {
+  if(!pyodide) return;
+  try {
+    const r = pyjson(`
+import json
+try:
+    _v, _out = loom.run_call(_src, "(main)")
+    _r = json.dumps({"ok": True, "value": repr(_v), "out": list(_out)})
+except Exception as _e:
+    _r = json.dumps({"ok": False, "error": str(_e)})
+_r
+`);
+    if (r.ok) {
+      let s = "";
+      if (r.out.length) s += r.out.map(esc).join("\n") + "\n";
+      s += "<span class='v-ok'>=> " + esc(r.value) + "</span>";
+      show(s);
+    } else {
+      show("<span class='v-bad'>✗ did not run</span> — rejected at the gate, or a runtime error.\n\n  • " + esc(r.error));
+    }
+  } catch(e){ show("<span class='v-bad'>error</span>\n" + esc(e)); }
+};
+
+$("bJs").onclick = () => {
+  if(!pyodide) return;
+  try {
+    pyodide.globals.set("_src", $("src").value);
+    const js = pyodide.runPython(`
+try: _j = loom.compile_js(_src)
+except Exception as _e: _j = "// REJECTED — nothing to compile:\\n// " + str(_e)
+_j
+`);
+    show("<span class='v-eff'>// LOOM → JavaScript (only checked code compiles)</span>\n\n" + esc(js));
+  } catch(e){ show("<span class='v-bad'>error</span>\n" + esc(e)); }
+};
+
+boot();
+</script>
+</body>
+</html>
