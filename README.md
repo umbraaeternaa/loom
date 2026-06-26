@@ -9,9 +9,9 @@ declaration is honest before a single line runs.
 
 > The slogan: **AI proposes, the compiler disposes.**
 
-[![Donate · Monobank](https://img.shields.io/badge/%E2%98%95_Donate-Monobank_jar-FFC400?style=for-the-badge)](https://send.monobank.ua/jar/AHaziFXjYX) &nbsp; built solo, in the open, from Ukraine 🇺🇦 — [support it](#support-this-work)
+[![Live site](https://img.shields.io/badge/%F0%9F%8C%90_Live_site-Visit-39d6c8?style=for-the-badge)](https://umbraaeternaa.github.io/loom/) &nbsp; [![Donate · Monobank](https://img.shields.io/badge/%E2%98%95_Donate-Monobank_jar-FFC400?style=for-the-badge)](https://send.monobank.ua/jar/AHaziFXjYX) &nbsp; built solo, in the open, from Ukraine 🇺🇦 — [support it](#support-this-work)
 
-🎬 **[Watch — LOOM in 30 seconds »](media/LOOM_intro.mp4)**
+🌐 **[Visit the live site → umbraaeternaa.github.io/loom »](https://umbraaeternaa.github.io/loom/)** &nbsp;·&nbsp; 🎬 **[Watch — LOOM in 30 seconds »](media/LOOM_intro.mp4)**
 
 LOOM is a small (~937-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript**. It is a research
