@@ -313,6 +313,34 @@ CASES = [
     ("D23 forbid declassify: caught inside a seam body", '(forbid declassify) (defx f (IO) (fn (x) (seam (IO) (declassify human (print x)))))', False),
     ("D23 forbid declassify: caught inside a match arm", '(forbid declassify) (defx f () (fn (e) (match e ((Some x) (declassify human x)) ((None) 0))))', False),
     ("D23 forbid Net does NOT ban declassify", '(forbid Net) (defx f () (fn () (trust (declassify human (prov ai 5)))))', True),
+    # --- grown 2026-06-26: D24 -- PROVENANCE DOES NOT SURVIVE PERSISTENCE. (recall e) models a value crossing a memory/RAG
+    #     store->recall boundary ACROSS TICKS; provenance is a static layer that does NOT serialize, so recall STRIPS all
+    #     inner anchors and marks the value ai-tainted (the fail-closed DUAL of D21 declassify). Defends MEMORY POISONING:
+    #     untrusted text persisted on tick 1 -> read back as 'trusted ground truth' on tick 2. Re-trust needs a LIVE vouch
+    #     applied AFTER recall (outside it); a vouch placed INSIDE recall did not survive serialization. ---
+    ("D24 recall: raw recalled value is untrusted", '(defx f () (fn () (trust 1 (recall 5))))', False),
+    ("D24 recall: inner human vouch does NOT survive persistence", '(defx f () (fn () (trust 1 (recall (prov human 5)))))', False),
+    ("D24 recall: inner role vouch does NOT survive persistence", '(defx f () (fn () (trust (roles code proof) (recall (by code human (by proof trace 5))))))', False),
+    ("D24 recall: LIVE re-vouch after recall is honored", '(defx f () (fn () (trust 1 (prov human (recall 5)))))', True),
+    ("D24 recall: persistence cannot launder an ai origin to trusted", '(defx f () (fn () (trust 1 (recall (prov ai 5)))))', False),
+    ("D24 recall: effects still pass through a recall", '(defx f (Net) (fn (u) (recall (net u))))', True),
+    ("D24 recall: bare recall tag never bites without a trust gate", '(defx f () (fn () (recall 5)))', True),
+    ("D24 recall: two live re-vouchers satisfy N=2 after recall", '(defx f () (fn () (trust 2 (prov human (prov audit (recall 5))))))', True),
+    # --- grown 2026-06-26: D25 — MULTI-HOP interprocedural provenance. A relay top -> mid -> g, where mid passes
+    #     its OWN raw param into g's trusted slot, now ACCEPTS when the ROOT caller supplies the anchor: a callee's
+    #     obligation PROPAGATES to the caller's param via the monotone preq fixpoint (like the effect row), and the
+    #     discharge DEFERS at the relay (our own raw param -> obligation rides up). Fail-closed everywhere else.
+    ("D25 multi-hop: 2-hop relay accepts human", '(defx g () (fn (x) (trust x))) (defx mid () (fn (x) (g x))) (defx top () (fn () (mid (prov human 5))))', True),
+    ("D25 multi-hop: 2-hop relay ai refused", '(defx g () (fn (x) (trust x))) (defx mid () (fn (x) (g x))) (defx top () (fn () (mid (prov ai 5))))', False),
+    ("D25 multi-hop: 2-hop relay unprovenanced refused", '(defx g () (fn (x) (trust x))) (defx mid () (fn (x) (g x))) (defx top () (fn () (mid 5)))', False),
+    ("D25 multi-hop: 3-hop relay accepts", '(defx g () (fn (x) (trust x))) (defx mid () (fn (x) (g x))) (defx mid2 () (fn (x) (mid x))) (defx top () (fn () (mid2 (prov human 5))))', True),
+    ("D25 multi-hop: relay defined but uncalled is not a lie", '(defx g () (fn (x) (trust x))) (defx mid () (fn (x) (g x)))', True),
+    ("D25 multi-hop: N=2 relay two anchors accepts", '(defx g () (fn (x) (trust 2 x))) (defx mid () (fn (x) (g x))) (defx top () (fn () (mid (prov human (prov audit 5)))))', True),
+    ("D25 multi-hop: N=2 relay one anchor refused", '(defx g () (fn (x) (trust 2 x))) (defx mid () (fn (x) (g x))) (defx top () (fn () (mid (prov human 5))))', False),
+    ("D25 multi-hop: caller supplies anchor via cross-stmt let", '(defx g () (fn (x) (trust x))) (defx mid () (fn (x) (g x))) (defx top () (fn () (let (v (prov human 5)) (mid v))))', True),
+    ("D25 multi-hop: relay fn used as value refused", '(defx g () (fn (x) (trust x))) (defx mid () (fn (x) (g x))) (defx ap (e) (fn ((f e) y) (f y))) (defx top () (fn () (ap mid (prov human 5))))', False),
+    ("D25 multi-hop: relay of ai-shadowed param refused", '(defx g () (fn (x) (trust x))) (defx mid () (fn (x) (let (x (prov ai 9)) (g x)))) (defx top () (fn () (mid (prov human 5))))', False),
+    ("D25 multi-hop: obligation tracks the right param position", '(defx g () (fn (x) (trust x))) (defx mid () (fn (a b) (g b))) (defx top () (fn () (mid (prov human 1) 5)))', False),
 ]
 
 
@@ -567,7 +595,13 @@ def main():
         print(f"  {'ok  ' if rz1 else 'FAIL'} runtime D21 declassify: (declassify human 42) => {vz1}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime D21 declassify: {e}")
-    total = len(CASES) + 33
+    try:                                               # runtime: D24 recall is value/taint-transparent at runtime
+        vr1, _ = run_call('(defx t () (fn () (recall 42)))', "(t)")
+        rr1 = (vr1 == 42); ok += rr1
+        print(f"  {'ok  ' if rr1 else 'FAIL'} runtime D24 recall: (recall 42) => {vr1}")
+    except (LoomError, RecursionError) as e:
+        print(f"  FAIL runtime D24 recall: {e}")
+    total = len(CASES) + 34
     print(f"{'PASS' if ok == total else 'FAIL'} — {ok}/{total} citadel checks")
 
 

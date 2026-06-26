@@ -199,6 +199,8 @@ def prov_of(node, penv=None):
         s = {node[2]}
         for x in node[3:]: s |= prov_of(x, penv)
         return s
+    if node[0] == "recall":  # D24: persistence strips in-program provenance (store->recall across ticks)
+        return {"ai"}  # drop ALL inner anchors, mark ai-tainted -> untrusted-by-default (fail-closed dual of declassify)
     if node[0] == "declassify":                          # D21: (declassify ROLE e) — a non-ai ROLE LAUNDERS the taint:
         inner = set()                                    # drop the `ai` provenance and add ROLE's vouch (ai-declassify caught in infer)
         for x in node[2:]: inner |= prov_of(x, penv)
@@ -221,6 +223,8 @@ def roles_of(node, penv=None):
         s = {(node[1], node[2])}
         for x in node[3:]: s |= roles_of(x, penv)
         return s
+    if node[0] == "recall":  # D24: no role vouch survives a persistence boundary -> recalled data carries NO role
+        return set()
     if node[0] == "let":
         np = dict(penv); np[node[1][0]] = roles_of(node[1][1], penv)
         s = set()
@@ -230,7 +234,7 @@ def roles_of(node, penv=None):
     for a in node[1:]: s |= roles_of(a, penv)
     return s
 
-def _prov_reqs(body, params):
+def _prov_reqs(body, params, fns=None):
     """D22: per-PARAMETER provenance obligations inferred from a fn body. A (trust [N] p) whose body is a
     RAW parameter p (count-form only — roles-form stays fail-closed) requires every CALLER to pass an
     argument carrying >= N independent (non-ai) anchors. Returns {param: need}; discharged at call sites."""
@@ -244,6 +248,12 @@ def _prov_reqs(body, params):
             else: need, tb = 1, n[1:]
             if need is not None and len(tb) == 1 and isinstance(tb[0], str) and tb[0] in params:
                 req[tb[0]] = max(req.get(tb[0], 0), need)
+        elif fns and isinstance(n[0], str) and n[0] in fns:           # D25: inherit a callee's obligation when we pass our
+            callee = fns[n[0]]; pn = [pname(p) for p in callee["params"]]   #   OWN raw param into its trusted slot (multi-hop relay)
+            for pp, cneed in callee.get("preq", {}).items():
+                cix = pn.index(pp)
+                if cix + 1 < len(n) and isinstance(n[cix+1], str) and n[cix+1] in params:
+                    req[n[cix+1]] = max(req.get(n[cix+1], 0), cneed)
         for c in n[1:]: walk(c)
     for b in body: walk(b)
     return req
@@ -445,6 +455,10 @@ def infer(node, fns, errs, penv=None):
         eff = set()
         for x in node[3:]: eff |= infer(x, fns, errs, penv)
         return eff
+    if h == "recall":  # D24: e crossed a persistence boundary; effects flow, provenance does not (see prov_of/roles_of)
+        eff = set()
+        for x in node[1:]: eff |= infer(x, fns, errs, penv)
+        return eff
     if h == "declassify":                               # (declassify ROLE e) — D21: a non-ai ROLE launders provenance taint
         if node[1] == "ai":                             # CORE anti-circularity rule: ai may not declassify its own output
             errs.append("declassify: 'ai' cannot declassify provenance — only a non-ai role may take responsibility")
@@ -483,7 +497,10 @@ def infer(node, fns, errs, penv=None):
         pn = [pname(p) for p in fns[h]["params"]]                        # D22: DISCHARGE the callee's provenance obligations —
         for pp, need in fns[h].get("preq", {}).items():                  #   the arg bound to a trusted param must carry the anchors
             ix = pn.index(pp)
-            anchors = (prov_of(node[ix+1], _TAINT_PROV) - {"ai"}) if ix + 1 < len(node) else set()
+            arg = node[ix+1] if ix + 1 < len(node) else None
+            if isinstance(arg, str) and arg in _POLICY.get("params", set()) and arg not in _TAINT_PROV:
+                continue                                             # D25: arg is OUR OWN raw param -> obligation rides up via our preq (deferred to callers)
+            anchors = (prov_of(arg, _TAINT_PROV) - {"ai"}) if arg is not None else set()
             if len(anchors) < need:
                 errs.append(f"call to {h}: arg for trusted param '{pp}' carries {len(anchors)} independent anchor(s) {sorted(anchors) or '(none)'}, needs >= {need} — provenance does not flow through (or is too self-referential)")
     elif h not in PURE_OPS:                             # unknown head -> REFUSE to verify (never assume pure)
@@ -547,8 +564,10 @@ def check(program):
             for b in body:
                 for e, c in _ucount(b, fns, i["penv"]).items(): uc[e] = _uadd(uc.get(e, 0), c)
             i["uc"] = uc
-    for n, i in fns.items():                            # D22: infer each fn's per-param provenance obligations (count-form)
-        i["preq"] = _prov_reqs(i["fn"][2:], {pname(p) for p in i["params"]})
+    for i in fns.values(): i["preq"] = {}               # D25: per-param provenance obligations to a FIXPOINT so they
+    for _ in range(len(fns) + 2):                       # PROPAGATE through calls (monotone — demand flows toward callers)
+        for n, i in fns.items():
+            i["preq"] = _prov_reqs(i["fn"][2:], {pname(p) for p in i["params"]}, fns)
     _obl = {n for n, i in fns.items() if i["preq"]}     # obligation-bearing fns: may ONLY be called directly (else refused)
     errors = []
     for n, i in fns.items():
@@ -654,6 +673,10 @@ def ev(node, env, fns, out, handlers=None):
     if h == "by":                                       # role-tagged provenance — runtime-transparent (static gate)
         r = None
         for x in node[3:]: r = ev(x, env, fns, out, handlers)
+        return r
+    if h == "recall":  # D24: persistence boundary -- runtime-transparent (taint is a static layer)
+        r = None
+        for x in node[1:]: r = ev(x, env, fns, out, handlers)
         return r
     if h == "declassify":                               # declassification — runtime-transparent (provenance is a static layer)
         r = None
@@ -777,6 +800,7 @@ def _emit(node):
     if h == "fn": return f"(lambda {','.join(pname(p) for p in node[1])}: {_emit(node[2:][-1])})"
     if h in ("seam", "seam1", "resource", "prov", "declassify"): return _emit(node[2:][-1])   # value-transparent (effects/prov are static layers)
     if h == "by": return _emit(node[3:][-1])                           # value-transparent (role tag is a static layer)
+    if h == "recall": return _emit(node[1:][-1])  # value-transparent (persistence taint is a static layer)
     if h == "trust": return _emit(node[1:][-1])                        # value-transparent (the trust gate is a static check)
     if h == "use": return "'<used>'"
     if h == "print": return f"_p({_emit(node[1])})"                     # IO: print AND return the value (as the interpreter)
@@ -850,6 +874,7 @@ def _emit_js(node):
     if h == "fn": return f"(({','.join(pname(p) for p in node[1])})=>{_emit_js(node[2:][-1])})"
     if h in ("seam", "seam1", "resource", "prov", "declassify"): return _emit_js(node[2:][-1])
     if h == "by": return _emit_js(node[3:][-1])
+    if h == "recall": return _emit_js(node[1:][-1])  # value-transparent (persistence taint is a static layer)
     if h == "trust": return _emit_js(node[1:][-1])
     if h == "use": return "'<used>'"
     if h == "print": return f"_p({_emit_js(node[1])})"                  # IO: print AND return the value
