@@ -466,6 +466,8 @@ def main():
                  ('(defx mk () (fn (x) (variant Ok x))) (defx main () (fn () (match (mk 7) ((Ok v) (+ v 1)) ((Err e) 0))))', "(main)"),  # SUM TYPE: variant+match compiles to BOTH Py and JS, each == interpreter (=> 8)
                  ('(defx f (Net) (fn () (seam (Net) (net 1))))', "(f)"),                       # EFFECT op net -> "<net 1>" on interp/Py/JS
                  ('(defx f (Alloc) (fn () (head (seam (Alloc) (alloc 3)))))', "(f)"),           # EFFECT op alloc -> [0,1,2], head => 0
+                 ('(defx fa (IO) (fn (x) (seam (IO) (ffi "logger" x))))', "(fa 5)"),            # FFI codegen: seam GRANTS IO -> foreign emits "foreign:5"; interp==Py==Node
+                 ('(defx fb () (fn (x) (seam (Pure) (ffi "logger" x))))', "(fb 5)"),             # FFI codegen FLAGSHIP: seam grants NOTHING -> foreign I/O SANDBOXED to silence on every backend
                  ('(defx f (Rand) (fn () (seam (Rand) (rand))))', "(f)"),                       # EFFECT op rand -> "<rand>"
                  ('(defx f () (fn () (handle (IO) (print 5))))', "(f)"),                        # HANDLE discharges IO -> value 5, output SUPPRESSED []
                  ('(defx mock () (fn (u) u)) (defx f () (fn () (with Net mock (net 5))))', "(f)"),  # WITH reinterprets Net via a pure mock -> (net 5) routes to mock => 5, no net

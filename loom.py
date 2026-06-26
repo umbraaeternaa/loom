@@ -798,7 +798,8 @@ def _emit(node):
     if h == "record": return "{" + ",".join(f"{fld[0]!r}:{_emit(fld[1])}" for fld in node[1:] if isinstance(fld, list)) + "}"
     if h == "get": return f"({_emit(node[1])}[{node[2]!r}])"
     if h == "fn": return f"(lambda {','.join(pname(p) for p in node[1])}: {_emit(node[2:][-1])})"
-    if h in ("seam", "seam1", "resource", "prov", "declassify"): return _emit(node[2:][-1])   # value-transparent (effects/prov are static layers)
+    if h in ("seam", "seam1"): return f"_seam({sorted(set(node[1])-{'Pure'})!r}, lambda: {_emit(node[2:][-1])})"   # seam SANDBOXES the body: push its granted row so foreign/ffi code is cap-gated exactly like the interpreter
+    if h in ("resource", "prov", "declassify"): return _emit(node[2:][-1])   # value-transparent (effects/prov are static layers)
     if h == "by": return _emit(node[3:][-1])                           # value-transparent (role tag is a static layer)
     if h == "recall": return _emit(node[1:][-1])  # value-transparent (persistence taint is a static layer)
     if h == "trust": return _emit(node[1:][-1])                        # value-transparent (the trust gate is a static check)
@@ -819,8 +820,7 @@ def _emit(node):
     if h == "with":
         op = OP.get(node[1])
         return f"_with({op!r}, {_emit(node[2])}, lambda: {_emit(node[3:][-1])})" if op else _emit(node[3:][-1])
-    if h == "ffi":
-        raise LoomError(f"codegen v0 does not cover '{h}' yet")
+    if h == "ffi": return f"_ffi({node[1]!r}, [{','.join(_emit(a) for a in node[2:])}])"   # foreign call via the emitted registry; cap-gated to mirror the interpreter
     return f"{h}(" + ",".join(_emit(a) for a in node[1:]) + ")"          # call: a user fn, or a closure-valued name
 
 def compile_py(program_src):
@@ -835,7 +835,12 @@ def compile_py(program_src):
              "def _nm(t):\n    raise Exception('no match arm for '+str(t))",
              "def _net(u): return _route('net', (u,), lambda: '<net '+str(u)+'>')",
              "def _alloc(n): return _route('alloc', (n,), lambda: list(range(n)))",
-             "def _rand(): return _route('rand', (), lambda: '<rand>')"]   # sink + handler-map (_with reinterpret) + no-match + effect ops
+             "def _rand(): return _route('rand', (), lambda: '<rand>')",
+             "_caps = []",
+             "def _cap_ok(e): return (not _caps) or (e in _caps[-1])",
+             "def _seam(row, thunk): _caps.append(set(row)); _r = thunk(); _caps.pop(); return _r",
+             "_FOREIGN = {'logger': (lambda a: (a[0], print('foreign:'+str(a[0])) if (_cap_ok('IO') and _sd[0]==0) else None)[0])}",
+             "def _ffi(name, args): return _FOREIGN[name](args)"]   # FFI codegen: cap stack (seam SANDBOX) + foreign registry -> ffi mirrors the interpreter (foreign I/O fires only if its seam granted it)
     for top in parse(program_src):
         if isinstance(top, list) and top and top[0] == "defx":
             fn = top[3]; ps = ",".join(pname(p) for p in fn[1]); body = _emit(fn[2:][-1]) if fn[2:] else "None"
@@ -872,7 +877,8 @@ def _emit_js(node):
     if h == "record": return "({" + ",".join(f"{fld[0]!r}:{_emit_js(fld[1])}" for fld in node[1:] if isinstance(fld, list)) + "})"
     if h == "get": return f"({_emit_js(node[1])}[{node[2]!r}])"
     if h == "fn": return f"(({','.join(pname(p) for p in node[1])})=>{_emit_js(node[2:][-1])})"
-    if h in ("seam", "seam1", "resource", "prov", "declassify"): return _emit_js(node[2:][-1])
+    if h in ("seam", "seam1"): return f"_seam({sorted(set(node[1])-{'Pure'})!r}, ()=>({_emit_js(node[2:][-1])}))"   # seam SANDBOXES the body (JS): cap-gate foreign code like the interpreter
+    if h in ("resource", "prov", "declassify"): return _emit_js(node[2:][-1])
     if h == "by": return _emit_js(node[3:][-1])
     if h == "recall": return _emit_js(node[1:][-1])  # value-transparent (persistence taint is a static layer)
     if h == "trust": return _emit_js(node[1:][-1])
@@ -893,8 +899,7 @@ def _emit_js(node):
     if h == "with":
         op = OP.get(node[1])
         return f"_with({op!r}, {_emit_js(node[2])}, ()=>({_emit_js(node[3:][-1])}))" if op else _emit_js(node[3:][-1])
-    if h == "ffi":
-        raise LoomError(f"JS codegen v0 does not cover '{h}' yet")
+    if h == "ffi": return f"_ffi({node[1]!r}, [{','.join(_emit_js(a) for a in node[2:])}])"   # foreign call via the emitted registry (JS); cap-gated to mirror the interpreter
     return f"{h}(" + ",".join(_emit_js(a) for a in node[1:]) + ")"
 
 def compile_js(program_src):
@@ -907,7 +912,12 @@ def compile_js(program_src):
              "function _p(x){ return _route('print',[x], ()=>{ if(_sd===0) console.log(x); return x; }); }",
              "function _handle(t){ _sd++; try{ return t(); } finally{ _sd--; } }",
              "function _nm(t){ throw new Error('no match arm for '+t); }",
-             "function _net(u){ return _route('net',[u], ()=>'<net '+u+'>'); }", "function _alloc(n){ return _route('alloc',[n], ()=>Array.from({length:n},(_,i)=>i)); }", "function _rand(){ return _route('rand',[], ()=>'<rand>'); }"]  # sink + handler-map + no-match + effect ops
+             "function _net(u){ return _route('net',[u], ()=>'<net '+u+'>'); }", "function _alloc(n){ return _route('alloc',[n], ()=>Array.from({length:n},(_,i)=>i)); }", "function _rand(){ return _route('rand',[], ()=>'<rand>'); }",
+             "let _caps=[];",
+             "function _cap_ok(e){ return (_caps.length===0)||_caps[_caps.length-1].has(e); }",
+             "function _seam(row,thunk){ _caps.push(new Set(row)); let _r=thunk(); _caps.pop(); return _r; }",
+             "const _FOREIGN={ logger:(a)=>{ if(_cap_ok('IO')&&_sd===0) console.log('foreign:'+String(a[0])); return a[0]; } };",
+             "function _ffi(name,args){ return _FOREIGN[name](args); }"]  # FFI codegen (JS): cap stack + foreign registry -> ffi mirrors the interpreter
     for top in parse(program_src):
         if isinstance(top, list) and top and top[0] == "defx":
             fn = top[3]; ps = ",".join(pname(p) for p in fn[1]); body = _emit_js(fn[2:][-1]) if fn[2:] else "null"
