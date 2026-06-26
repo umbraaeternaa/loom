@@ -122,6 +122,12 @@ const EXAMPLES = [
   (if (empty xs) 0 (+ (head xs) (sm (tail xs))))))
 
 (defx main () (fn () (sm (list 1 2 3 4 5))))` },
+  { name: "WASM · match", note: "→ WAT",
+    src: `; Sum types compile to WebAssembly too — a variant is a tagged
+; cell [tag|payload]. Run it (→ 5), or Compile → WAT for the tag compare.
+
+(defx main () (fn ()
+  (match (variant Some 5) ((Some x) x) ((None) 0))))` },
 ];
 
 const $ = id => document.getElementById(id);
@@ -234,7 +240,7 @@ $("bWat").onclick = () => {
     pyodide.globals.set("_src", $("src").value);
     const wat = pyodide.runPython(`
 try: _w = loom.emit_wat(_src)
-except Exception as _e: _w = "; not in the WASM backend yet — it covers ints, let, arithmetic, comparison, if,\\n; recursion and integer LISTS (closures / sum-types / effects are next). Try 'WASM · fib' or 'WASM · list-sum'.\\n; (" + str(_e) + ")"
+except Exception as _e: _w = "; not in the WASM backend yet — it covers ints, let, arithmetic, comparison, if, recursion,\\n; integer LISTS and sum types (variant/match). Closures + effects are the next frontier. Try a 'WASM · …' example.\\n; (" + str(_e) + ")"
 _w
 `);
     show("<span class='v-eff'>;; LOOM → WebAssembly text (WAT) — the integer core, as real assembly</span>\n\n" + esc(wat));

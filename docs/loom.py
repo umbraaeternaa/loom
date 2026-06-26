@@ -962,64 +962,99 @@ def _leb_s(n):
 
 _WBIN = {"+": 0x6a, "-": 0x6b, "*": 0x6c}; _WCMP = {"=": 0x46, "<": 0x48, ">": 0x4a}   # i32 add/sub/mul + eq/lt_s/gt_s
 
-def _emit_wasm(node, lmap, fmap, cons_i):                  # -> body bytes; lmap: name->local idx (params+lets); cons_i: $cons fn index
+def _emit_wasm(node, lmap, fmap, cons_i, tags, si):        # body bytes; lmap: name->local idx; cons_i: $cons idx; tags: tag->id; si: scrutinee local
     if isinstance(node, int): return b"\x41" + _leb_s(node)            # i32.const
     if isinstance(node, str):
         if node not in lmap: raise LoomError("wasm: free variable " + node)
-        return b"\x20" + _leb_u(lmap[node])                            # local.get (param or let-bound)
+        return b"\x20" + _leb_u(lmap[node])                            # local.get (param / let / match-bound)
     h = node[0]
     if h in ("+", "*"):
-        out = _emit_wasm(node[1], lmap, fmap, cons_i)
-        for a in node[2:]: out += _emit_wasm(a, lmap, fmap, cons_i) + bytes([_WBIN[h]])
+        out = _emit_wasm(node[1], lmap, fmap, cons_i, tags, si)
+        for a in node[2:]: out += _emit_wasm(a, lmap, fmap, cons_i, tags, si) + bytes([_WBIN[h]])
         return out
-    if h == "-": return _emit_wasm(node[1], lmap, fmap, cons_i) + _emit_wasm(node[2], lmap, fmap, cons_i) + b"\x6b"
-    if h in _WCMP: return _emit_wasm(node[1], lmap, fmap, cons_i) + _emit_wasm(node[2], lmap, fmap, cons_i) + bytes([_WCMP[h]])
+    if h == "-": return _emit_wasm(node[1], lmap, fmap, cons_i, tags, si) + _emit_wasm(node[2], lmap, fmap, cons_i, tags, si) + b"\x6b"
+    if h in _WCMP: return _emit_wasm(node[1], lmap, fmap, cons_i, tags, si) + _emit_wasm(node[2], lmap, fmap, cons_i, tags, si) + bytes([_WCMP[h]])
     if h == "if":                                                       # if (result i32) THEN else ELSE end
-        return (_emit_wasm(node[1], lmap, fmap, cons_i) + b"\x04\x7f" + _emit_wasm(node[2], lmap, fmap, cons_i)
-                + b"\x05" + _emit_wasm(node[3], lmap, fmap, cons_i) + b"\x0b")
+        return (_emit_wasm(node[1], lmap, fmap, cons_i, tags, si) + b"\x04\x7f" + _emit_wasm(node[2], lmap, fmap, cons_i, tags, si)
+                + b"\x05" + _emit_wasm(node[3], lmap, fmap, cons_i, tags, si) + b"\x0b")
     if h == "let":                                                      # (let (name val) body..) -> val; local.set name; body
-        out = _emit_wasm(node[1][1], lmap, fmap, cons_i) + b"\x21" + _leb_u(lmap[node[1][0]])
-        for b in node[2:]: out += _emit_wasm(b, lmap, fmap, cons_i)
+        out = _emit_wasm(node[1][1], lmap, fmap, cons_i, tags, si) + b"\x21" + _leb_u(lmap[node[1][0]])
+        for b in node[2:]: out += _emit_wasm(b, lmap, fmap, cons_i, tags, si)
         return out
     if h == "list":                                                     # (list a b ..) -> cons(a, cons(b, .. nil))
         if len(node) == 1: return b"\x41\x00"                           # nil = 0
-        out = b"".join(_emit_wasm(a, lmap, fmap, cons_i) for a in node[1:]) + b"\x41\x00"
+        out = b"".join(_emit_wasm(a, lmap, fmap, cons_i, tags, si) for a in node[1:]) + b"\x41\x00"
         return out + b"".join(b"\x10" + _leb_u(cons_i) for _ in node[1:])   # fold to the right via $cons
-    if h == "cons": return _emit_wasm(node[1], lmap, fmap, cons_i) + _emit_wasm(node[2], lmap, fmap, cons_i) + b"\x10" + _leb_u(cons_i)
-    if h == "head": return _emit_wasm(node[1], lmap, fmap, cons_i) + b"\x28\x02\x00"    # i32.load  (cell value)
-    if h == "tail": return _emit_wasm(node[1], lmap, fmap, cons_i) + b"\x28\x02\x04"    # i32.load offset 4 (next ptr)
-    if h == "empty": return _emit_wasm(node[1], lmap, fmap, cons_i) + b"\x45"           # i32.eqz   (ptr == nil)
+    if h == "cons": return _emit_wasm(node[1], lmap, fmap, cons_i, tags, si) + _emit_wasm(node[2], lmap, fmap, cons_i, tags, si) + b"\x10" + _leb_u(cons_i)
+    if h == "head": return _emit_wasm(node[1], lmap, fmap, cons_i, tags, si) + b"\x28\x02\x00"    # i32.load  (cell value / tag)
+    if h == "tail": return _emit_wasm(node[1], lmap, fmap, cons_i, tags, si) + b"\x28\x02\x04"    # i32.load offset 4 (next / payload)
+    if h == "empty": return _emit_wasm(node[1], lmap, fmap, cons_i, tags, si) + b"\x45"           # i32.eqz   (ptr == nil)
+    if h == "variant":                                                  # (variant Tag e) -> cons(tag_id, payload) -> cell [tag|payload]
+        return b"\x41" + _leb_s(tags[node[1]]) + _emit_wasm(node[2], lmap, fmap, cons_i, tags, si) + b"\x10" + _leb_u(cons_i)
+    if h == "match":                                                    # scrut->$s; chain: load tag; ==TAG; if (bind payload) body else .. unreachable
+        out = _emit_wasm(node[1], lmap, fmap, cons_i, tags, si) + b"\x21" + _leb_u(si)
+        def _arms(a):
+            if not a: return b"\x00"                                    # unreachable — no arm matched (the interpreter likewise errors)
+            pat, body = a[0][0], a[0][1]
+            chk = b"\x20" + _leb_u(si) + b"\x28\x02\x00" + b"\x41" + _leb_s(tags[pat[0]]) + b"\x46"   # $s.tag == TAG
+            bind = (b"\x20" + _leb_u(si) + b"\x28\x02\x04" + b"\x21" + _leb_u(lmap[pat[1]])) if len(pat) >= 2 else b""
+            return chk + b"\x04\x7f" + bind + _emit_wasm(body, lmap, fmap, cons_i, tags, si) + b"\x05" + _arms(a[1:]) + b"\x0b"
+        return out + _arms(node[2:])
     if h in fmap:                                                       # call $fn  (first-order / recursive)
-        return b"".join(_emit_wasm(a, lmap, fmap, cons_i) for a in node[1:]) + b"\x10" + _leb_u(fmap[h])
+        return b"".join(_emit_wasm(a, lmap, fmap, cons_i, tags, si) for a in node[1:]) + b"\x10" + _leb_u(fmap[h])
     raise LoomError("wasm: form not yet in the WASM backend: " + str(h))
 
 def _wasm_defxs(program_src):
     return [t for t in parse(program_src) if isinstance(t, list) and t and t[0] == "defx"]
 
-def _wasm_let_names(node, acc):                            # collect let-bound names in order (each gets a local slot)
+def _wasm_locals(node, names, flags):                      # collect let-names + match pattern-vars; flags['match']=True needs a scrutinee temp
     if not isinstance(node, list): return
     if node and node[0] == "let":
-        acc.append(node[1][0]); _wasm_let_names(node[1][1], acc)
-        for b in node[2:]: _wasm_let_names(b, acc)
+        names.append(node[1][0]); _wasm_locals(node[1][1], names, flags)
+        for b in node[2:]: _wasm_locals(b, names, flags)
+    elif node and node[0] == "match":
+        flags["match"] = True; _wasm_locals(node[1], names, flags)
+        for arm in node[2:]:
+            if len(arm[0]) >= 2: names.append(arm[0][1])               # the pattern's bound variable
+            _wasm_locals(arm[1], names, flags)
     else:
-        for a in node: _wasm_let_names(a, acc)
+        for a in node: _wasm_locals(a, names, flags)
+
+def _wasm_tags(program_src):                               # program-wide tag -> integer id (variant + match tags share one numbering)
+    tags = {}
+    def w(n):
+        if not isinstance(n, list): return
+        if n and n[0] == "variant":
+            tags.setdefault(n[1], len(tags))
+            for a in n[2:]: w(a)
+        elif n and n[0] == "match":
+            w(n[1])
+            for arm in n[2:]:
+                tags.setdefault(arm[0][0], len(tags)); w(arm[1])
+        else:
+            for a in n: w(a)
+    for t in _wasm_defxs(program_src): w(t[3])
+    return tags
 
 def compile_wasm(program_src):
     """Compile a CHECKED LOOM program (integers + let + integer lists) to a real WebAssembly module (bytes). Rejects if it fails the checker.
     VALUE RUNTIME: a linear-memory heap (global $hp bump pointer) + a $cons helper allocates [value|next] cells; lists are linked
-    in memory (head/tail = i32.load, empty = i32.eqz, nil = 0). Honest scope: ints + let + integer lists; sum-types/records/closures/
+    in memory (head/tail = i32.load, empty = i32.eqz, nil = 0). Honest scope: ints + let + integer lists + sum types (variant/match); records/closures/
     effects still need more runtime (next frontier) and stay fail-closed until then."""
     _, errs = check(parse(program_src))
     if errs: raise LoomError("; ".join(errs))
     ds = _wasm_defxs(program_src); fmap = {t[1]: i for i, t in enumerate(ds)}; cons_i = len(ds)   # $cons is the LAST function
+    tags = _wasm_tags(program_src)                          # program-wide tag -> id (for variant/match)
     funcs = []                                              # (arity, n_locals, code)
     for t in ds:
-        fn = t[3]; params = [pname(p) for p in fn[1]]; names = []
-        for b in fn[2:]: _wasm_let_names(b, names)
-        seen = list(dict.fromkeys(names))                   # unique let-names -> local slots after the params
+        fn = t[3]; params = [pname(p) for p in fn[1]]; names = []; flags = {"match": False}
+        for b in fn[2:]: _wasm_locals(b, names, flags)
+        seen = list(dict.fromkeys(names))                   # unique let-names + match-vars -> local slots after the params
         lmap = {p: i for i, p in enumerate(params)}
         for j, nm in enumerate(seen): lmap[nm] = len(params) + j
-        funcs.append((len(params), len(seen), _emit_wasm(fn[2:][-1] if fn[2:] else 0, lmap, fmap, cons_i) + b"\x0b"))
+        si = len(params) + len(seen)                        # one shared scrutinee temp per function (used by match)
+        nloc = len(seen) + (1 if flags["match"] else 0)
+        funcs.append((len(params), nloc, _emit_wasm(fn[2:][-1] if fn[2:] else 0, lmap, fmap, cons_i, tags, si) + b"\x0b"))
     cons_code = (b"\x23\x00\x21\x02" b"\x23\x00\x41\x08\x6a\x24\x00"             # $t = $hp ; $hp += 8
                  b"\x20\x02\x20\x00\x36\x02\x00" b"\x20\x02\x20\x01\x36\x02\x04"  # mem[t] = v ; mem[t+4] = rest
                  b"\x20\x02\x0b")                                                 # return $t
@@ -1042,10 +1077,10 @@ def compile_wasm(program_src):
 
 def emit_wat(program_src):
     """Human-readable WebAssembly Text (the 'assembler') for what compile_wasm encodes to bytes:
-    the integer core + let + integer lists (a linear-memory heap with a $cons cell allocator)."""
+    the integer core + let + integer lists + sum types (variant/match) on a linear-memory heap."""
     _, errs = check(parse(program_src))
     if errs: raise LoomError("; ".join(errs))
-    ds = _wasm_defxs(program_src); fmap = {t[1]: i for i, t in enumerate(ds)}; uses_heap = [False]
+    ds = _wasm_defxs(program_src); fmap = {t[1]: i for i, t in enumerate(ds)}; tags = _wasm_tags(program_src); uses_heap = [False]
     _OP = {"+": "i32.add", "-": "i32.sub", "*": "i32.mul", "=": "i32.eq", "<": "i32.lt_s", ">": "i32.gt_s"}
     def w(node, ind):
         if isinstance(node, int): return [ind + "i32.const " + str(node)]
@@ -1071,6 +1106,18 @@ def emit_wat(program_src):
         if h == "head": uses_heap[0] = True; return w(node[1], ind) + [ind + "i32.load"]
         if h == "tail": uses_heap[0] = True; return w(node[1], ind) + [ind + "i32.load offset=4"]
         if h == "empty": return w(node[1], ind) + [ind + "i32.eqz"]
+        if h == "variant":
+            uses_heap[0] = True
+            return [ind + "i32.const " + str(tags[node[1]]) + "  ;; tag " + node[1]] + w(node[2], ind) + [ind + "call $cons"]
+        if h == "match":
+            uses_heap[0] = True; o = w(node[1], ind) + [ind + "local.set $s"]
+            def arms(a, ii):
+                if not a: return [ii + "unreachable"]
+                pat, body = a[0][0], a[0][1]
+                ln = [ii + "local.get $s", ii + "i32.load", ii + "i32.const " + str(tags[pat[0]]) + "  ;; tag " + pat[0], ii + "i32.eq", ii + "if (result i32)"]
+                if len(pat) >= 2: ln += [ii + "  local.get $s", ii + "  i32.load offset=4", ii + "  local.set $" + pat[1]]
+                return ln + w(body, ii + "  ") + [ii + "else"] + arms(a[1:], ii + "  ") + [ii + "end"]
+            return o + arms(node[2:], ind)
         if h in fmap:
             o = []
             for a in node[1:]: o += w(a, ind)
@@ -1079,9 +1126,10 @@ def emit_wat(program_src):
     bodies = []
     for t in ds:
         fn = t[3]; pn = [pname(p) for p in fn[1]]; sig = " ".join("(param $" + p + " i32)" for p in pn)
-        nm = []
-        for b in fn[2:]: _wasm_let_names(b, nm)
+        nm = []; flags = {"match": False}
+        for b in fn[2:]: _wasm_locals(b, nm, flags)
         locs = " ".join("(local $" + x + " i32)" for x in dict.fromkeys(nm))
+        if flags["match"]: locs = (locs + " " if locs else "") + "(local $s i32)"
         head = "  (func $" + t[1] + ((" " + sig) if sig else "") + " (result i32)" + ((" " + locs) if locs else "")
         bodies.append([head] + w(fn[2:][-1] if fn[2:] else 0, "    ")
                       + ["  )", '  (export "' + t[1] + '" (func $' + t[1] + "))"])
