@@ -114,6 +114,14 @@ const EXAMPLES = [
   (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))))
 
 (defx main () (fn () (fib 10)))` },
+  { name: "WASM · list-sum", note: "→ WAT",
+    src: `; Integer LISTS now compile to WebAssembly too — a real heap in
+; linear memory. Run it (→ 15), or Compile → WAT to see the $cons allocator.
+
+(defx sm () (fn (xs)
+  (if (empty xs) 0 (+ (head xs) (sm (tail xs))))))
+
+(defx main () (fn () (sm (list 1 2 3 4 5))))` },
 ];
 
 const $ = id => document.getElementById(id);
@@ -226,7 +234,7 @@ $("bWat").onclick = () => {
     pyodide.globals.set("_src", $("src").value);
     const wat = pyodide.runPython(`
 try: _w = loom.emit_wat(_src)
-except Exception as _e: _w = "; outside the integer core — WebAssembly here covers ints, arithmetic,\\n; comparison, if and recursion. Try the 'WASM · fib' example.\\n; (" + str(_e) + ")"
+except Exception as _e: _w = "; not in the WASM backend yet — it covers ints, let, arithmetic, comparison, if,\\n; recursion and integer LISTS (closures / sum-types / effects are next). Try 'WASM · fib' or 'WASM · list-sum'.\\n; (" + str(_e) + ")"
 _w
 `);
     show("<span class='v-eff'>;; LOOM → WebAssembly text (WAT) — the integer core, as real assembly</span>\n\n" + esc(wat));

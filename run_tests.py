@@ -514,10 +514,14 @@ def main():
         wpairs = [('(defx main () (fn () (+ 2 (* 3 4))))', "(main)"),                                   # arithmetic -> 14
                   ('(defx mx () (fn (a b) (if (> a b) a b)))', "(mx 3 7)"),                              # comparison + if -> 7
                   ('(defx fib () (fn (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))))', "(fib 10)"),  # recursion -> 55
-                  ('(defx fac () (fn (n) (if (< n 1) 1 (* n (fac (- n 1))))))', "(fac 6)")]               # recursion -> 720
+                  ('(defx fac () (fn (n) (if (< n 1) 1 (* n (fac (- n 1))))))', "(fac 6)"),               # recursion -> 720
+                  ('(defx sq () (fn (x) (let (y (* x x)) (+ y y)))) (defx main () (fn () (sq 5)))', "(main)"),  # VALUE RUNTIME: let/local -> 50
+                  ('(defx sm () (fn (xs) (if (empty xs) 0 (+ (head xs) (sm (tail xs)))))) (defx main () (fn () (sm (list 1 2 3 4 5))))', "(main)"),  # integer LIST sum in linear memory -> 15
+                  ('(defx ln () (fn (xs) (if (empty xs) 0 (+ 1 (ln (tail xs)))))) (defx main () (fn () (ln (list 7 8 9))))', "(main)")]  # integer LIST length -> 3
         for prog, call in wpairs:                       # every program emits a valid wasm module (magic header)
             assert compile_wasm(prog)[:4] == b"\x00asm"
         assert emit_wat(wpairs[2][0]).startswith("(module") and "i32.lt_s" in emit_wat(wpairs[2][0])   # WAT 'assembler' is emitted
+        assert "call $cons" in emit_wat(wpairs[5][0])   # the list value-runtime ($cons heap) shows up in the WAT too
         if _sh.which("node"):
             wok = True
             for prog, call in wpairs:

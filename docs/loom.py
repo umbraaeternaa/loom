@@ -962,53 +962,90 @@ def _leb_s(n):
 
 _WBIN = {"+": 0x6a, "-": 0x6b, "*": 0x6c}; _WCMP = {"=": 0x46, "<": 0x48, ">": 0x4a}   # i32 add/sub/mul + eq/lt_s/gt_s
 
-def _emit_wasm(node, pmap, fmap):                          # -> body bytes for the wasm stack machine
+def _emit_wasm(node, lmap, fmap, cons_i):                  # -> body bytes; lmap: name->local idx (params+lets); cons_i: $cons fn index
     if isinstance(node, int): return b"\x41" + _leb_s(node)            # i32.const
     if isinstance(node, str):
-        if node not in pmap: raise LoomError("wasm: free variable " + node)
-        return b"\x20" + _leb_u(pmap[node])                            # local.get (param)
+        if node not in lmap: raise LoomError("wasm: free variable " + node)
+        return b"\x20" + _leb_u(lmap[node])                            # local.get (param or let-bound)
     h = node[0]
     if h in ("+", "*"):
-        out = _emit_wasm(node[1], pmap, fmap)
-        for a in node[2:]: out += _emit_wasm(a, pmap, fmap) + bytes([_WBIN[h]])
+        out = _emit_wasm(node[1], lmap, fmap, cons_i)
+        for a in node[2:]: out += _emit_wasm(a, lmap, fmap, cons_i) + bytes([_WBIN[h]])
         return out
-    if h == "-": return _emit_wasm(node[1], pmap, fmap) + _emit_wasm(node[2], pmap, fmap) + b"\x6b"
-    if h in _WCMP: return _emit_wasm(node[1], pmap, fmap) + _emit_wasm(node[2], pmap, fmap) + bytes([_WCMP[h]])
+    if h == "-": return _emit_wasm(node[1], lmap, fmap, cons_i) + _emit_wasm(node[2], lmap, fmap, cons_i) + b"\x6b"
+    if h in _WCMP: return _emit_wasm(node[1], lmap, fmap, cons_i) + _emit_wasm(node[2], lmap, fmap, cons_i) + bytes([_WCMP[h]])
     if h == "if":                                                       # if (result i32) THEN else ELSE end
-        return (_emit_wasm(node[1], pmap, fmap) + b"\x04\x7f" + _emit_wasm(node[2], pmap, fmap)
-                + b"\x05" + _emit_wasm(node[3], pmap, fmap) + b"\x0b")
+        return (_emit_wasm(node[1], lmap, fmap, cons_i) + b"\x04\x7f" + _emit_wasm(node[2], lmap, fmap, cons_i)
+                + b"\x05" + _emit_wasm(node[3], lmap, fmap, cons_i) + b"\x0b")
+    if h == "let":                                                      # (let (name val) body..) -> val; local.set name; body
+        out = _emit_wasm(node[1][1], lmap, fmap, cons_i) + b"\x21" + _leb_u(lmap[node[1][0]])
+        for b in node[2:]: out += _emit_wasm(b, lmap, fmap, cons_i)
+        return out
+    if h == "list":                                                     # (list a b ..) -> cons(a, cons(b, .. nil))
+        if len(node) == 1: return b"\x41\x00"                           # nil = 0
+        out = b"".join(_emit_wasm(a, lmap, fmap, cons_i) for a in node[1:]) + b"\x41\x00"
+        return out + b"".join(b"\x10" + _leb_u(cons_i) for _ in node[1:])   # fold to the right via $cons
+    if h == "cons": return _emit_wasm(node[1], lmap, fmap, cons_i) + _emit_wasm(node[2], lmap, fmap, cons_i) + b"\x10" + _leb_u(cons_i)
+    if h == "head": return _emit_wasm(node[1], lmap, fmap, cons_i) + b"\x28\x02\x00"    # i32.load  (cell value)
+    if h == "tail": return _emit_wasm(node[1], lmap, fmap, cons_i) + b"\x28\x02\x04"    # i32.load offset 4 (next ptr)
+    if h == "empty": return _emit_wasm(node[1], lmap, fmap, cons_i) + b"\x45"           # i32.eqz   (ptr == nil)
     if h in fmap:                                                       # call $fn  (first-order / recursive)
-        return b"".join(_emit_wasm(a, pmap, fmap) for a in node[1:]) + b"\x10" + _leb_u(fmap[h])
-    raise LoomError("wasm: form outside the integer core: " + str(h))
+        return b"".join(_emit_wasm(a, lmap, fmap, cons_i) for a in node[1:]) + b"\x10" + _leb_u(fmap[h])
+    raise LoomError("wasm: form not yet in the WASM backend: " + str(h))
 
 def _wasm_defxs(program_src):
     return [t for t in parse(program_src) if isinstance(t, list) and t and t[0] == "defx"]
 
+def _wasm_let_names(node, acc):                            # collect let-bound names in order (each gets a local slot)
+    if not isinstance(node, list): return
+    if node and node[0] == "let":
+        acc.append(node[1][0]); _wasm_let_names(node[1][1], acc)
+        for b in node[2:]: _wasm_let_names(b, acc)
+    else:
+        for a in node: _wasm_let_names(a, acc)
+
 def compile_wasm(program_src):
-    """Compile a CHECKED LOOM integer-core program to a real WebAssembly module (bytes). Rejects if it fails the checker."""
+    """Compile a CHECKED LOOM program (integers + let + integer lists) to a real WebAssembly module (bytes). Rejects if it fails the checker.
+    VALUE RUNTIME: a linear-memory heap (global $hp bump pointer) + a $cons helper allocates [value|next] cells; lists are linked
+    in memory (head/tail = i32.load, empty = i32.eqz, nil = 0). Honest scope: ints + let + integer lists; sum-types/records/closures/
+    effects still need more runtime (next frontier) and stay fail-closed until then."""
     _, errs = check(parse(program_src))
     if errs: raise LoomError("; ".join(errs))
-    ds = _wasm_defxs(program_src); fmap = {t[1]: i for i, t in enumerate(ds)}; funcs = []
+    ds = _wasm_defxs(program_src); fmap = {t[1]: i for i, t in enumerate(ds)}; cons_i = len(ds)   # $cons is the LAST function
+    funcs = []                                              # (arity, n_locals, code)
     for t in ds:
-        fn = t[3]; pmap = {pname(p): i for i, p in enumerate(fn[1])}
-        funcs.append((t[1], len(fn[1]), _emit_wasm(fn[2:][-1] if fn[2:] else 0, pmap, fmap) + b"\x0b"))
-    ar = sorted({n for _, n, _ in funcs}); ti = {a: i for i, a in enumerate(ar)}
+        fn = t[3]; params = [pname(p) for p in fn[1]]; names = []
+        for b in fn[2:]: _wasm_let_names(b, names)
+        seen = list(dict.fromkeys(names))                   # unique let-names -> local slots after the params
+        lmap = {p: i for i, p in enumerate(params)}
+        for j, nm in enumerate(seen): lmap[nm] = len(params) + j
+        funcs.append((len(params), len(seen), _emit_wasm(fn[2:][-1] if fn[2:] else 0, lmap, fmap, cons_i) + b"\x0b"))
+    cons_code = (b"\x23\x00\x21\x02" b"\x23\x00\x41\x08\x6a\x24\x00"             # $t = $hp ; $hp += 8
+                 b"\x20\x02\x20\x00\x36\x02\x00" b"\x20\x02\x20\x01\x36\x02\x04"  # mem[t] = v ; mem[t+4] = rest
+                 b"\x20\x02\x0b")                                                 # return $t
     def _sec(sid, c): return bytes([sid]) + _leb_u(len(c)) + c
+    ar = sorted({a for a, _, _ in funcs} | {2}); ti = {a: i for i, a in enumerate(ar)}   # arity-2 type covers $cons
     tc = _leb_u(len(ar)) + b"".join(b"\x60" + _leb_u(a) + b"\x7f" * a + b"\x01\x7f" for a in ar)   # type: (i32*)->i32
-    fc = _leb_u(len(funcs)) + b"".join(_leb_u(ti[n]) for _, n, _ in funcs)                         # function -> type
+    fc = _leb_u(len(funcs) + 1) + b"".join(_leb_u(ti[a]) for a, _, _ in funcs) + _leb_u(ti[2])     # +$cons
+    mc = _leb_u(1) + b"\x00" + _leb_u(1)                    # 1 memory, min 1 page (64 KiB heap)
+    gc = _leb_u(1) + b"\x7f\x01\x41\x08\x0b"                # 1 mutable i32 global $hp = 8 (offset 0 reserved as nil)
     ec = _leb_u(len(funcs))
-    for i, (nm, _, _) in enumerate(funcs):
-        nb = nm.encode(); ec += _leb_u(len(nb)) + nb + b"\x00" + _leb_u(i)                          # export func
-    cc = _leb_u(len(funcs))
-    for _, _, code in funcs:
-        e = _leb_u(0) + code; cc += _leb_u(len(e)) + e                                              # 0 locals + body
-    return b"\x00asm\x01\x00\x00\x00" + _sec(1, tc) + _sec(3, fc) + _sec(7, ec) + _sec(10, cc)
+    for i, t in enumerate(ds):
+        nb = t[1].encode(); ec += _leb_u(len(nb)) + nb + b"\x00" + _leb_u(i)                        # export func
+    cc = _leb_u(len(funcs) + 1)
+    for _, nloc, code in funcs:
+        loc = (_leb_u(1) + _leb_u(nloc) + b"\x7f") if nloc else _leb_u(0)                           # let-locals (i32)
+        e = loc + code; cc += _leb_u(len(e)) + e
+    e = (_leb_u(1) + _leb_u(1) + b"\x7f") + cons_code; cc += _leb_u(len(e)) + e                     # $cons: 1 local ($t)
+    return (b"\x00asm\x01\x00\x00\x00" + _sec(1, tc) + _sec(3, fc) + _sec(5, mc)
+            + _sec(6, gc) + _sec(7, ec) + _sec(10, cc))
 
 def emit_wat(program_src):
-    """Human-readable WebAssembly Text (the 'assembler') for the integer core — what compile_wasm encodes to bytes."""
+    """Human-readable WebAssembly Text (the 'assembler') for what compile_wasm encodes to bytes:
+    the integer core + let + integer lists (a linear-memory heap with a $cons cell allocator)."""
     _, errs = check(parse(program_src))
     if errs: raise LoomError("; ".join(errs))
-    ds = _wasm_defxs(program_src); fmap = {t[1]: i for i, t in enumerate(ds)}
+    ds = _wasm_defxs(program_src); fmap = {t[1]: i for i, t in enumerate(ds)}; uses_heap = [False]
     _OP = {"+": "i32.add", "-": "i32.sub", "*": "i32.mul", "=": "i32.eq", "<": "i32.lt_s", ">": "i32.gt_s"}
     def w(node, ind):
         if isinstance(node, int): return [ind + "i32.const " + str(node)]
@@ -1022,17 +1059,42 @@ def emit_wat(program_src):
         if h == "if":
             return (w(node[1], ind) + [ind + "if (result i32)"] + w(node[2], ind + "  ")
                     + [ind + "else"] + w(node[3], ind + "  ") + [ind + "end"])
+        if h == "let":
+            o = w(node[1][1], ind) + [ind + "local.set $" + node[1][0]]
+            for b in node[2:]: o += w(b, ind)
+            return o
+        if h == "list":
+            uses_heap[0] = True; o = []
+            for a in node[1:]: o += w(a, ind)
+            return o + [ind + "i32.const 0"] + [ind + "call $cons" for _ in node[1:]]
+        if h == "cons": uses_heap[0] = True; return w(node[1], ind) + w(node[2], ind) + [ind + "call $cons"]
+        if h == "head": uses_heap[0] = True; return w(node[1], ind) + [ind + "i32.load"]
+        if h == "tail": uses_heap[0] = True; return w(node[1], ind) + [ind + "i32.load offset=4"]
+        if h == "empty": return w(node[1], ind) + [ind + "i32.eqz"]
         if h in fmap:
             o = []
             for a in node[1:]: o += w(a, ind)
             return o + [ind + "call $" + h]
-        raise LoomError("wat: form outside the integer core: " + str(h))
-    lines = ["(module"]
+        raise LoomError("wat: form not yet in the WASM backend: " + str(h))
+    bodies = []
     for t in ds:
         fn = t[3]; pn = [pname(p) for p in fn[1]]; sig = " ".join("(param $" + p + " i32)" for p in pn)
-        lines.append("  (func $" + t[1] + ((" " + sig) if sig else "") + " (result i32)")
-        lines += w(fn[2:][-1] if fn[2:] else 0, "    ")
-        lines += ["  )", '  (export "' + t[1] + '" (func $' + t[1] + "))"]
+        nm = []
+        for b in fn[2:]: _wasm_let_names(b, nm)
+        locs = " ".join("(local $" + x + " i32)" for x in dict.fromkeys(nm))
+        head = "  (func $" + t[1] + ((" " + sig) if sig else "") + " (result i32)" + ((" " + locs) if locs else "")
+        bodies.append([head] + w(fn[2:][-1] if fn[2:] else 0, "    ")
+                      + ["  )", '  (export "' + t[1] + '" (func $' + t[1] + "))"])
+    lines = ["(module"]
+    if uses_heap[0]:
+        lines += ["  (memory 1)", "  (global $hp (mut i32) (i32.const 8))",
+                  "  (func $cons (param $v i32) (param $rest i32) (result i32) (local $t i32)",
+                  "    global.get $hp  local.set $t",
+                  "    global.get $hp  i32.const 8  i32.add  global.set $hp",
+                  "    local.get $t  local.get $v  i32.store",
+                  "    local.get $t  local.get $rest  i32.store offset=4",
+                  "    local.get $t)"]
+    for b in bodies: lines += b
     return "\n".join(lines + [")"])
 
 def run_wasm(program_src, call_src):
