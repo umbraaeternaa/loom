@@ -13,15 +13,15 @@ declaration is honest before a single line runs.
 
 🌐 **[Visit the live site → umbraaeternaa.github.io/loom »](https://umbraaeternaa.github.io/loom/)** &nbsp;·&nbsp; 🎬 **[Watch — LOOM in 30 seconds »](media/LOOM_intro.mp4)**
 
-LOOM is a small (~1281-line) s-expression language: a parser, a **static effect checker**, an
+LOOM is a small (~1296-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (and its integer core to real **WebAssembly**). It is a research
-kernel — small on purpose — and it is **self-verified by 308 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 333 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 308/308 citadel checks
+PASS — 333/333 citadel checks
 ```
 
 ## The idea in one screen

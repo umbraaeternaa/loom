@@ -172,6 +172,18 @@ CASES = [
     ("rand: handle discharges it",      '(defx f () (fn () (handle (Rand) (rand))))', True),
     ("rand: with reinterprets to pure", '(defx rr (Rand) (fn () (rand))) (defx mk () (fn () 4)) (defx t () (fn () (with Rand mk (rr))))', True),
     ("rand: flows through a call",      '(defx g (Rand) (fn () (rand))) (defx h () (fn () (g)))', False),  # h calls g (Rand) yet declares Pure
+    # --- grown 2026-06-27 (frontier pass 10): repro — a SCOPED, non-launderable REPRODUCIBILITY region.
+    #     Tamper-evident (signed) != falsifiable (re-derivable): a Rand draw on a recorded/gated path is a HIDDEN
+    #     INPUT that breaks re-derivation. `forbid`/`seal Rand` are GLOBAL; a bare `handle (Rand)` launders (op still
+    #     fires); `repro` scopes the bound to ONE path and is non-launderable (the determinism dual of `seam`). ---
+    ("repro: pure region accepts",          '(defx f () (fn (x) (repro (* x x))))', True),
+    ("repro: Rand op on path refused",      '(defx f (Rand) (fn () (repro (rand))))', False),
+    ("repro: Rand via call refused",        '(defx g (Rand) (fn () (rand))) (defx f (Rand) (fn () (repro (g))))', False),
+    ("repro: handle CANNOT launder Rand",   '(defx f () (fn () (repro (handle (Rand) (rand)))))', False),
+    ("repro: with-det reinterpret ok",      '(defx rr (Rand) (fn () (rand))) (defx mk () (fn () 4)) (defx f () (fn () (repro (with Rand mk (rr)))))', True),
+    ("repro: non-Rand effects pass through",'(defx f (IO) (fn (x) (repro (print x))))', True),
+    ("repro: scoped — Rand fine OUTSIDE",   '(defx f (Rand) (fn (x) (let (a (rand)) (repro (* x x)))))', True),
+    ("repro: Rand nested in if refused",    '(defx f (Rand) (fn (c) (repro (if c (rand) 0))))', False),
     # --- grown 2026-06-24: D10 — independence by ROLES. (by ROLE WHO e) tags who performed a role; (trust (r..) e) demands
     #     each required role be covered by a non-ai author AND >= 2 DISTINCT authors total — defends CIRCULAR trust where one
     #     author owns code+spec+proof. A count of anchors (D9.1) can't see role distribution; this can.
@@ -387,6 +399,19 @@ CASES = [
     ("D27 vouch: two distinct vouchers meet N=2", '(defx f () (fn (x) (trust 2 (seam (Pure) (vouch auditor alice "lib") (vouch sig bob "lib") (ffi "lib" x)))))', True),
     ("D27 vouch: role-quorum met by two component auditors", '(defx f () (fn (x) (trust (roles code proof) (seam (Pure) (vouch code alice "lib") (vouch proof bob "lib") (ffi "lib" x)))))', True),
     ("D27 vouch: nested (non-direct) ffi not covered -> stripped", '(defx f () (fn (x) (trust (seam (Pure) (vouch auditor alice "lib") (let (y (ffi "lib" x)) y)))))', False),
+    # --- grown 2026-06-27: D28 -- METERED attestation. seamN (the D27 metered seam) carried effect-grant + use-quantum but
+    #     DROPPED the (vouch ..) attestation a plain seam honors (prov_of/roles_of had no seamN case), so a metered+vouched
+    #     foreign call was over-rejected. Now seamN honors the SAME direct-body component attestation as seam/seam1 -- the one
+    #     seam carries grant + meter + attestation together. Direct-body ONLY (Horn B): a vouch does NOT reach an ffi nested
+    #     under computation (mirrors the line above). Signals: julelang/jule (compile-time capabilities), zen-holotype (imports+checks=one fits()). ---
+    ("D28 metered vouch: auditor signs a metered component -> trusted", '(defx f () (fn (x) (trust (seamN 2 (Pure) (vouch auditor alice "lib") (ffi "lib" x)))))', True),
+    ("D28 metered vouch: different component -> stripped", '(defx f () (fn (x) (trust (seamN 2 (Pure) (vouch auditor alice "other") (ffi "lib" x)))))', False),
+    ("D28 metered vouch: ai cannot self-vouch a metered component", '(defx f () (fn (x) (trust (seamN 2 (Pure) (vouch auditor ai "lib") (ffi "lib" x)))))', False),
+    ("D28 metered vouch: nested (non-direct) ffi still stripped (Horn B)", '(defx f () (fn (x) (trust (seamN 2 (Pure) (vouch auditor alice "lib") (let (y (ffi "lib" x)) y)))))', False),
+    ("D28 metered vouch: two distinct vouchers meet N=2", '(defx f () (fn (x) (trust 2 (seamN 2 (Pure) (vouch auditor alice "lib") (vouch sig bob "lib") (ffi "lib" x)))))', True),
+    ("D28 metered vouch: role-quorum met by two metered-component auditors", '(defx f () (fn (x) (trust (roles code proof) (seamN 2 (Pure) (vouch code alice "lib") (vouch proof bob "lib") (ffi "lib" x)))))', True),
+    ("D28 metered vouch: meter still bites alongside attestation", '(defx f (Net) (fn (x) (trust (seamN 1 (Net) (vouch auditor alice "lib") (net x) (net x) (ffi "lib" x)))))', False),
+    ("D28 metered vouch: one voucher does not meet N=2", '(defx f () (fn (x) (trust 2 (seamN 2 (Pure) (vouch auditor alice "lib") (ffi "lib" x)))))', False),
     # --- grown 2026-06-26 (pass 3): D27 -- the ShareLock INTERPROCEDURAL split. The GRANT (a (seam E)
     #     that performs E) and the LAUNDER (a (handle E) that drops E from the row) are split across
     #     TWO functions; each passes its local ceiling check, yet the composition performs E and the
@@ -412,6 +437,23 @@ CASES = [
     ("D26 boundary: by-form vouch on the foreign INPUT is stripped (through a let)", '(defx f () (fn () (let (y (seam (Pure) (ffi "x" (by code human 5)))) (trust y))))', False),
     ("D26 boundary: declassify placed BETWEEN seam and ffi re-trusts the result", '(defx f () (fn () (trust (seam (Pure) (declassify auditor (ffi "x" 5))))))', True),
     ("D26 boundary: N=2 cannot be padded by a foreign-stripped anchor", '(defx f () (fn () (trust 2 (prov human (seam (Pure) (ffi "x" (prov audit 5)))))))', False),
+    # --- grown 2026-06-27: D27 -- the ShareLock PROVENANCE split (answering D26 p3's deferred quorum question).
+    #     EFFECTS ride the fixpoint (joint judge); PROVENANCE does NOT -- prov_of/roles_of and both quorum checks
+    #     (require-N count, (roles ..) quorum) are SYNTACTIC over the SEAM BODY and never recurse into a callee.
+    #     So a 2nd author SCATTERED into a CALLEE is invisible: the split rejects EXACTLY like the 1-author control
+    #     (fail-closed -- under-count, never launder UP). The one true multi-anchor forgery is the SINGLE-FUNCTION
+    #     declassify double-tag (no split); (forbid declassify) closes it and it cannot cross a frame. loom.py
+    #     UNTOUCHED -- this PINS the fail-closed invariant so a future 'propagate provenance through calls' feature
+    #     (which would reopen cross-frame sum-laundering) is caught RED. ---
+    ("D27 quorum-split: require-N two authors in the seam body ok", '(require Net 2) (defx f (Net) (fn (u) (seam (Net) (by code human (by review alice (net u))))))', True),
+    ("D27 quorum-split: require-N 2nd author in a CALLEE does not count (fail-closed)", '(require Net 2) (defx vouch () (fn () (by review alice 1))) (defx f (Net) (fn (u) (seam (Net) (by code human (net (vouch))))))', False),
+    ("D27 quorum-split: require-N one author refused (control)", '(require Net 2) (defx f (Net) (fn (u) (seam (Net) (by code human (net u)))))', False),
+    ("D27 quorum-split: roles two authors in the seam body ok", '(defx f (Net) (fn (u) (seam (Net) (roles code review) (by code human (by review alice (net u))))))', True),
+    ("D27 quorum-split: roles 2nd author in a CALLEE does not count (fail-closed)", '(defx vouch () (fn () (by review alice 1))) (defx f (Net) (fn (u) (seam (Net) (roles code review) (by code human (net (vouch))))))', False),
+    ("D27 quorum-split: roles one author refused (control)", '(defx f (Net) (fn (u) (seam (Net) (roles code review) (by code human (net u)))))', False),
+    ("D27 quorum-split: single-fn double-declassify forges 2 anchors (no split needed)", '(defx f () (fn () (trust 2 (declassify alice (declassify bob (prov ai 5))))))', True),
+    ("D27 quorum-split: (forbid declassify) closes the double-declassify forgery", '(forbid declassify) (defx f () (fn () (trust 2 (declassify alice (declassify bob (prov ai 5))))))', False),
+    ("D27 quorum-split: declassify forgery hidden in a callee cannot cross the frame", '(defx launder () (fn () (declassify alice (declassify bob (prov ai 5))))) (defx f () (fn () (trust 2 (launder))))', False),
 ]
 
 

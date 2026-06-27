@@ -250,9 +250,9 @@ def prov_of(node, penv=None):
         return {"ai"}  # drop ALL inner anchors, mark ai-tainted -> untrusted-by-default (fail-closed dual of declassify)
     if node[0] == "ffi":  # D26: opaque FOREIGN code cannot be vouched for -> its RESULT strips provenance (dual of recall,
         return {"ai"}     #   at the interop/FFI boundary): the seam vouches what foreign code is GRANTED, never what it DID
-    if node[0] in ("seam", "seam1"):  # D27: a (vouch ROLE WHO COMP) seam clause names a non-ai authority WHO that SIGNS a
-        vmap = {}; sbody = []         #   specific foreign component COMP, so (ffi COMP ..) DIRECTLY in this seam body carries
-        for x in node[2:]:            #   WHO's anchor instead of the D26 strip -> graded (audited vs unaudited) trusted-FFI.
+    if node[0] in ("seam", "seam1", "seamN"):  # D27/D28: a (vouch ROLE WHO COMP) seam clause names a non-ai authority WHO that SIGNS a
+        vmap = {}; sbody = []         #   specific foreign COMP, so (ffi COMP ..) DIRECTLY in this (incl. METERED seamN) seam body
+        for x in (node[3:] if node[0] == "seamN" else node[2:]):   # carries WHO's anchor instead of the D26 strip -- D28 metered attestation
             if isinstance(x, list) and x and x[0] == "vouch" and len(x) >= 4: vmap.setdefault(x[3], set()).add(x[2])
             elif isinstance(x, list) and x and x[0] in ("roles", "sub", "needs"): pass
             else: sbody.append(x)
@@ -287,9 +287,9 @@ def roles_of(node, penv=None):
         return set()
     if node[0] == "ffi":  # D26: no role vouch survives the FOREIGN boundary either -> ffi result carries NO role
         return set()
-    if node[0] in ("seam", "seam1"):  # D27: a (vouch ROLE WHO COMP) clause re-grants (ROLE, WHO) to (ffi COMP ..) in body
+    if node[0] in ("seam", "seam1", "seamN"):  # D27/D28: (vouch ROLE WHO COMP) re-grants (ROLE, WHO) to (ffi COMP ..) in body (incl. metered seamN)
         vmap = {}; sbody = []
-        for x in node[2:]:
+        for x in (node[3:] if node[0] == "seamN" else node[2:]):
             if isinstance(x, list) and x and x[0] == "vouch" and len(x) >= 4: vmap.setdefault(x[3], set()).add((x[1], x[2]))
             elif isinstance(x, list) and x and x[0] in ("roles", "sub", "needs"): pass
             else: sbody.append(x)
@@ -464,6 +464,15 @@ def infer(node, fns, errs, penv=None):
             if K < 0 or K >= _NCAP or got > K:
                 errs.append('metered capability ' + str(E) + ' used more than its quantum ' + str(K) + ' (got ' + (str(got) if got < _NCAP else 'unbounded/opaque') + '; a call/recursion/reinterpret/discharge or unknown higher-order use counts as overflow -- fail-closed)')
         return decl
+    if h == "repro":                                    # (repro body..) -- pass-10 REPRODUCIBILITY region: this path must be
+        inner = set()                                   # re-DERIVABLE, not merely signed. No nondeterministic Rand may influence it;
+        for x in node[1:]: inner |= infer(x, fns, errs, penv)   # a handle CANNOT launder Rand to satisfy repro (the runtime op still
+        laundered = set()                               # fires -- the seal lesson), so we re-add any Rand an inner handle dropped;
+        for x in node[1:]: laundered |= _sealed_discharges(x, {"Rand"})   # a (with Rand det-fn) IS reproducible (allowed).
+        nd = (inner | laundered) & {"Rand"}
+        if nd:
+            errs.append(f"repro region performs nondeterministic {sorted(nd)} -- not reproducible/falsifiable (a Rand draw is a hidden input: capture it, remove it, or reinterpret it with `with`)")
+        return inner
     if h == "handle":                                   # (handle (E..) expr..) — DISCHARGE effects E locally (drop)
         hdl = set(node[1])
         bad = {e for e in hdl if e not in EFFECTS and not is_var(e)}
@@ -725,6 +734,10 @@ def ev(node, env, fns, out, handlers=None):
     h = node[0]
     if h == "fn": return Closure(node[1], node[2:], env)   # a lambda literal evaluates to a closure over env
     if h == 'seamN': return ev(['seam'] + node[2:], env, fns, out, handlers)   # D27 meter runs as a seam (cap stack); the quantum is a static check
+    if h == 'repro':                                    # pass-10 reproducibility region: value-transparent at runtime (a static-only assertion)
+        r = None
+        for x in node[1:]: r = ev(x, env, fns, out, handlers)
+        return r
     if h == "seam" or h == "seam1":                     # narrow runtime authority to exactly the granted row, then run
         _CAPS.append(set(node[1]) - {"Pure"})
         try:
@@ -891,6 +904,7 @@ def _emit(node):
     if h in ("resource", "prov", "declassify"): return _emit(node[2:][-1])   # value-transparent (effects/prov are static layers)
     if h == "by": return _emit(node[3:][-1])                           # value-transparent (role tag is a static layer)
     if h == "recall": return _emit(node[1:][-1])  # value-transparent (persistence taint is a static layer)
+    if h == "repro": return _emit(node[1:][-1])  # value-transparent (reproducibility is a static-only assertion)
     if h == "trust": return _emit(node[1:][-1])                        # value-transparent (the trust gate is a static check)
     if h == "use": return "'<used>'"
     if h == "print": return f"_p({_emit(node[1])})"                     # IO: print AND return the value (as the interpreter)
@@ -971,6 +985,7 @@ def _emit_js(node):
     if h in ("resource", "prov", "declassify"): return _emit_js(node[2:][-1])
     if h == "by": return _emit_js(node[3:][-1])
     if h == "recall": return _emit_js(node[1:][-1])  # value-transparent (persistence taint is a static layer)
+    if h == "repro": return _emit_js(node[1:][-1])  # value-transparent (reproducibility is a static-only assertion)
     if h == "trust": return _emit_js(node[1:][-1])
     if h == "use": return "'<used>'"
     if h == "print": return f"_p({_emit_js(node[1])})"                  # IO: print AND return the value
