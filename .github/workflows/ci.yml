@@ -1,0 +1,30 @@
+name: LOOM Citadel
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Compile Python sources
+        run: python -m py_compile loom.py loom_wasm.py docs/loom.py run_tests.py fuzz_tests.py
+      - name: Run citadel
+        run: python run_tests.py
+      - name: Run extended deterministic fuzz seeds
+        run: |
+          python fuzz_tests.py --cases 256 --seed 0xC17ADE1
+          python fuzz_tests.py --cases 256 --seed 0xBADC0DE
+          python fuzz_tests.py --cases 256 --seed 0xA11CE

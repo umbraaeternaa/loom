@@ -13,15 +13,15 @@ declaration is honest before a single line runs.
 
 🌐 **[Visit the live site → umbraaeternaa.github.io/loom »](https://umbraaeternaa.github.io/loom/)** &nbsp;·&nbsp; 🎬 **[Watch — LOOM in 30 seconds »](media/LOOM_intro.mp4)**
 
-LOOM is a small (~1296-line) s-expression language: a parser, a **static effect checker**, an
-interpreter, and **backends that compile checked code to Python and JavaScript** (and its integer core to real **WebAssembly**). It is a research
-kernel — small on purpose — and it is **self-verified by 333 checks** that the language can only ever
+LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
+interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** runtime with a human-readable **WAT/assembler** view). It is a research
+kernel — small on purpose — and it is **self-verified by 351 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 333/333 citadel checks
+PASS — 351/351 citadel checks
 ```
 
 ## The idea in one screen
@@ -97,7 +97,8 @@ authority handed across. The runtime enforces it: `(seam (Pure) (ffi untrusted))
 foreign code's IO/Net **physically impossible**, not merely undeclared. Soundness stops resting
 on trusting an annotation — *no capability granted ⇒ no effect possible*.
 
-- [`loom.py`](loom.py) — parser, effect checker, interpreter.
+- [`loom.py`](loom.py) — parser, effect checker, interpreter, and stable backend facade.
+- [`loom_wasm.py`](loom_wasm.py) — isolated WebAssembly/WAT compiler and ABI runtime.
 - [`run_tests.py`](run_tests.py) — the self-verifying suite: it accepts honest programs,
   rejects every flavor of lie, and runs real programs.
 
@@ -109,6 +110,21 @@ python3 run_tests.py
 
 No dependencies — pure Python 3.
 
+## Property fuzzing
+
+LOOM includes a deterministic, dependency-free property fuzzer. It checks parser failure safety,
+effect honesty, policy-state isolation, an independent i31 arithmetic oracle, structured tagged values,
+and differential execution across the interpreter, generated Python, JavaScript, and WebAssembly.
+
+```console
+python3 fuzz_tests.py                                  # stable default seed
+python3 fuzz_tests.py --cases 256 --seed 0xBADC0DE    # reproducible extended run
+python3 fuzz_tests.py --cases 256 --no-node           # parser/checker/Python plus JS/WASM compilation
+```
+
+Every failure prints its seed and the divergent generated expression. The default fuzz smoke is also
+part of `run_tests.py`; GitHub Actions runs the full citadel and three extended seeds on every push and pull request.
+
 ## Use it as a tool
 
 LOOM ships a small CLI — write a `.loom` file and run it:
@@ -117,10 +133,24 @@ LOOM ships a small CLI — write a `.loom` file and run it:
 python3 loom.py check examples/demo.loom            # prove every effect is honest (else REJECTED)
 python3 loom.py run   examples/demo.loom            # => [1, 4, 9, 16, 25]
 python3 loom.py build examples/demo.loom --target js   # compile the checked program to JavaScript
+python3 loom.py audit examples/demo.loom            # show declared-vs-performed capability surface
 ```
 
-The same verified program runs in the interpreter, compiles to **Python**, and compiles to
-**JavaScript** (Node / browser / any OS) — one checked source, many platforms.
+The same verified program runs in the interpreter, compiles to **Python** and **JavaScript**,
+and lowers tagged values, closures, structured data, and effects to **WebAssembly** — one checked source, many platforms. LOOM integers have one portable contract on every backend: signed i31 values (`-2^30..2^30-1`) with deterministic modulo-`2^31` wraparound; out-of-range literals are rejected before execution.
+
+The binary boundary is versioned and documented in the normative [LOOM WebAssembly ABI v1](docs/wasm_abi_v1.md); generated modules export `loom_abi_version = 1`, and hosts reject unknown versions.
+Binary and WAT compilation use isolated per-program contexts, so closure, helper, tag, and field layouts cannot leak between concurrent builds.
+
+## Try it in 60 seconds
+
+If you want the fastest external read of what LOOM is for, start here:
+
+- The machine-checked 60-second story is [here](docs/demo_loom_60s.md).
+- The live playground at [umbraaeternaa.github.io/loom/play.html](https://umbraaeternaa.github.io/loom/play.html) if you want to paste code and see the checker react.
+- [`loom audit`](#use-it-as-a-tool) if you want a CLI view of declared-vs-performed capability surface on real code.
+
+That is the shortest path from "what is this" to "I can see the row, the lie, and the boundary."
 
 ## The whole idea in one program
 

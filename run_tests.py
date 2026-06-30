@@ -2,13 +2,20 @@
 # ARGUS/plt CITADEL test suite — the growing, self-verifying proof that LOOM's design holds.
 # The organism appends new CASES here every cycle; the language only grows if ALL stay green.
 import sys
+import subprocess
+import tempfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
-from loom import parse, check, run_call, run_compiled, run_js, compile_js, compile_wasm, run_wasm, emit_wat, LoomError
+import loom as _loom
+from loom import parse, check, run_call, run_compiled, run_js, compile_js, compile_wasm, run_wasm, emit_wat, LoomError, _WASM_ABI_VERSION
 
 # (name, source, should_be_accepted)
 CASES = [
     ("pure square",          "(defx square () (fn (x) (* x x)))", True),
+    ("i31 min literal",      "(defx f () (fn () -1073741824))", True),
+    ("i31 max literal",      "(defx f () (fn () 1073741823))", True),
+    ("i31 below min refused", "(defx f () (fn () -1073741825))", False),
+    ("i31 above max refused", "(defx f () (fn () 1073741824))", False),
     ("honest IO",            '(defx greet (IO) (fn (n) (print n)))', True),
     ("lying: hidden IO",     '(defx sneaky () (fn (n) (print n)))', False),
     ("transitive honest",    '(defx log (IO) (fn (m) (print m))) (defx run (IO) (fn () (log "hi")))', True),
@@ -457,6 +464,16 @@ CASES = [
 ]
 
 
+def _capture9_program():
+    body = "((fn (x) (+ x " + " ".join(f"a{i}" for i in range(1, 10)) + ")) 10)"
+    for i in range(9, 0, -1):
+        body = f"(let (a{i} {i}) {body})"
+    return f"(defx t () (fn () {body}))"
+
+
+CAPTURE9_PROGRAM = _capture9_program()
+
+
 def main():
     ok = 0
     for name, src, accept in CASES:
@@ -477,6 +494,40 @@ def main():
         print(f"  {'ok  ' if run_ok2 else 'FAIL'} runtime (makebuf 3) = {val2}")
     except LoomError as e:
         print(f"  FAIL runtime alloc: {e}")
+    try:                                               # backend frontier: wasm alloc list decoding mirrors the interpreter
+        wval2, _ = run_wasm('(defx makebuf (Alloc) (fn (n) (alloc n)))', "(makebuf 3)")
+        w_ok2 = (wval2 == [0, 1, 2]); ok += w_ok2
+        print(f"  {'ok  ' if w_ok2 else 'FAIL'} backend(WASM): alloc (makebuf 3) = {wval2}")
+    except LoomError as e:
+        print(f"  FAIL backend(WASM) alloc: {e}")
+    try:                                               # tagged runtime: structured values cross the WASM host boundary exactly
+        wr, _ = run_wasm('(defx r () (fn () (record (a 1) (b 2))))', "(r)")
+        wv, _ = run_wasm('(defx v () (fn () (variant Some 5)))', "(v)")
+        wn, _ = run_wasm('(defx n () (fn () (record (xs (list 4 5)) (v (variant Ok 7)))))', "(n)")
+        w_struct = (wr == {"a": 1, "b": 2} and wv == ("Some", 5) and wn == {"xs": [4, 5], "v": ("Ok", 7)})
+        ok += w_struct
+        print(f"  {'ok  ' if w_struct else 'FAIL'} backend(WASM): tagged record/variant round-trip")
+    except LoomError as e:
+        print(f"  FAIL backend(WASM) structured values: {e}")
+    try:                                               # even immediates cannot alias odd tagged heap pointers
+        wa, _ = run_wasm('(defx alias () (fn () (let (x (list 1 2)) 9)))', "(alias)")
+        w_alias = (wa == 9); ok += w_alias
+        print(f"  {'ok  ' if w_alias else 'FAIL'} backend(WASM): integer/pointer anti-alias => {wa}")
+    except LoomError as e:
+        print(f"  FAIL backend(WASM) anti-alias: {e}")
+    try:                                               # i31 overflow semantics must match on every execution backend
+        import shutil as _num_sh
+        pnum = '(defx bounds () (fn () (record (add (+ 1073741823 1)) (sub (- -1073741824 1)) (mul (* 1073741823 2)) (wide (* 1073741823 1073741823)))))'
+        expected_num = {"add": -1073741824, "sub": 1073741823, "mul": -2, "wide": 1}
+        iv, _ = run_call(pnum, "(bounds)"); pv, _ = run_compiled(pnum, "(bounds)")
+        numeric_values = [iv, pv]
+        if _num_sh.which("node"):
+            jv, _ = run_js(pnum, "(bounds)"); wv_num, _ = run_wasm(pnum, "(bounds)")
+            numeric_values += [jv, wv_num]
+        numeric_ok = all(v == expected_num for v in numeric_values); ok += numeric_ok
+        print(f"  {'ok  ' if numeric_ok else 'FAIL'} numeric i31: cross-backend wraparound => {numeric_values}")
+    except Exception as e:
+        print(f"  FAIL numeric i31: {e}")
     try:                                               # runtime: handled IO is CAPTURED — never reaches output
         v3, out3 = run_call('(defx quiet () (fn (x) (handle (IO) (print x))))', "(quiet 42)")
         run_ok3 = (v3 == 42 and out3 == []); ok += run_ok3
@@ -618,12 +669,28 @@ def main():
                   ('(defx sm () (fn (xs) (if (empty xs) 0 (+ (head xs) (sm (tail xs)))))) (defx main () (fn () (sm (list 1 2 3 4 5))))', "(main)"),  # integer LIST sum in linear memory -> 15
                   ('(defx ln () (fn (xs) (if (empty xs) 0 (+ 1 (ln (tail xs)))))) (defx main () (fn () (ln (list 7 8 9))))', "(main)"),  # integer LIST length -> 3
                   ('(defx mk () (fn (x) (variant Ok x))) (defx un () (fn (r) (match r ((Ok v) (+ v 1)) ((Err e) 0)))) (defx main () (fn () (un (mk 7))))', "(main)"),  # SUM TYPE: variant + match -> 8
-                  ('(defx main () (fn () (match (variant Some 5) ((Some x) x) ((None) 0))))', "(main)")]  # match picks the Some arm + binds the payload -> 5
+                  ('(defx main () (fn () (match (variant Some 5) ((Some x) x) ((None) 0))))', "(main)"),  # match picks the Some arm + binds the payload -> 5
+                  ('(defx rg () (fn () (get (record (a 10) (b 20)) b)))', "(rg)")]                      # record build + get -> 20
         for prog, call in wpairs:                       # every program emits a valid wasm module (magic header)
             assert compile_wasm(prog)[:4] == b"\x00asm"
+        assert _WASM_ABI_VERSION == 1 and b"loom_abi_version" in compile_wasm(wpairs[0][0])  # ABI v1 is machine-readable
         assert emit_wat(wpairs[2][0]).startswith("(module") and "i32.lt_s" in emit_wat(wpairs[2][0])   # WAT 'assembler' is emitted
+        assert '(export "loom_abi_version"' in emit_wat(wpairs[0][0])  # WAT mirrors the binary ABI version export
         assert "call $cons" in emit_wat(wpairs[5][0])   # the list value-runtime ($cons heap) shows up in the WAT too
-        assert "tag Some" in emit_wat(wpairs[8][0])     # sum types (variant/match) render in the WAT too
+        assert "call $rec" in emit_wat(wpairs[9][0]) and "call $get" in emit_wat(wpairs[9][0])   # record helpers show up in the WAT too
+        assert "tag Some" in emit_wat(wpairs[8][0]) and "call $variant" in emit_wat(wpairs[8][0])  # explicit variant helper in WAT
+        wat_io = emit_wat('(defx t (IO) (fn () (print 7)))')
+        wat_with = emit_wat('(defx h () (fn (x) (* x 2))) (defx t () (fn () (with IO h (print 5))))')
+        wat_with_local = emit_wat('(defx t () (fn () (let (h (fn (x) (* x 2))) (with IO h (print 5)))))')
+        wat_closure = emit_wat('(defx ap (e) (fn ((f e) x) (f x))) (defx u () (fn (x) (ap (fn (y) (* y y)) x)))')
+        wat_apply2 = emit_wat('(defx t () (fn () (let (f (fn (a b) (+ a b))) (f 3 4))))')
+        wat_capture9 = emit_wat(CAPTURE9_PROGRAM)
+        assert 'import "env" "host_print"' in wat_io and "call $host_print" in wat_io   # WAT mirrors host-print import for IO
+        assert "call $apply1" in wat_with and "func $h" in wat_with   # WAT mirrors top-level with IO handler dispatch via closure apply
+        assert "call $apply1" in wat_with_local and "func $lam0" in wat_with_local   # WAT mirrors local closure-valued handler dispatch
+        assert "call $apply1" in wat_closure and "func $lam0" in wat_closure   # WAT mirrors closure literals + dispatcher
+        assert "call $apply2" in wat_apply2 and "func $lam0" in wat_apply2   # WAT mirrors 2-arg closure application
+        assert "func $lam0" in wat_capture9 and "call $apply1" in wat_capture9   # WAT mirrors closures with >8 captured values
         if _sh.which("node"):
             wok = True
             for prog, call in wpairs:
@@ -635,6 +702,92 @@ def main():
             ok += 1; print("  ok   backend(WASM): compile_wasm emits a valid module (node absent -> exec check skipped)")
     except Exception as e:
         print(f"  FAIL backend(WASM): {e}")
+    try:                                               # compiler contexts must not leak closure/layout state across invocations
+        from concurrent.futures import ThreadPoolExecutor
+        context_programs = [
+            '(defx a () (fn () (let (f (fn (x) (+ x 1))) (f 9))))',
+            '(defx b () (fn () (record (alpha (variant Left 3)) (beta (list 4 5)))))',
+        ]
+        expected = [(compile_wasm(p), emit_wat(p)) for p in context_programs]
+        def compile_isolated(i):
+            p = context_programs[i % len(context_programs)]
+            return i % len(context_programs), compile_wasm(p), emit_wat(p)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            isolated = list(pool.map(compile_isolated, range(32)))
+        legacy = ("_WASM_TOPDEFS", "_WASM_CLOSURES", "_WASM_CLOSURE_BY_ID",
+                  "_WASM_APPLY_IDS", "_WASM_APPLY1_ID", "_WASM_ALLOC_ID", "_WASM_VARIANT_ID")
+        is_browser_bundle = Path(_loom.__file__).parent.name == "docs"
+        boundary_ok = is_browser_bundle or getattr(_loom, "_loom_wasm", None).__name__ == "loom_wasm"
+        context_ok = (boundary_ok and not any(hasattr(_loom, name) for name in legacy) and
+                      all((wasm, wat) == expected[i] for i, wasm, wat in isolated))
+        ok += context_ok
+        print(f"  {'ok  ' if context_ok else 'FAIL'} backend(WASM): module boundary + isolated contexts (32 parallel builds)")
+    except Exception as e:
+        print(f"  FAIL backend(WASM) context isolation: {e}")
+    try:                                               # closure frontier: multi-arg lambda capture + application survives wasm
+        prog = '(defx t () (fn () (let (f (fn (a b) (+ a b))) (f 3 4))))'
+        wv, _ = run_wasm(prog, "(t)")
+        rv, _ = run_call(prog, "(t)")
+        r_wasm_closure = (wv == 7 and rv == 7)
+        ok += r_wasm_closure
+        print(f"  {'ok  ' if r_wasm_closure else 'FAIL'} backend(WASM): closures capture + apply2 => {wv} / {rv}")
+    except Exception as e:
+        print(f"  FAIL backend(WASM) closures: {e}")
+    try:                                               # closure frontier: capture count no longer capped at 8
+        prog = CAPTURE9_PROGRAM
+        wv, _ = run_wasm(prog, "(t)")
+        rv, _ = run_call(prog, "(t)")
+        r_capture9 = (wv == 55 and rv == 55)
+        ok += r_capture9
+        print(f"  {'ok  ' if r_capture9 else 'FAIL'} backend(WASM): closures capture 9 values => {wv} / {rv}")
+    except Exception as e:
+        print(f"  FAIL backend(WASM) capture9: {e}")
+    try:                                               # effect frontier: IO print import + handle(IO) discharge survive wasm
+        p1 = '(defx t (IO) (fn () (print 7)))'
+        p2 = '(defx t () (fn () (handle (IO) (print 5))))'
+        v31, o31 = run_wasm(p1, "(t)")
+        v32, o32 = run_wasm(p2, "(t)")
+        r31 = (v31 == 7 and o31 == ["7"] and v32 == 5 and o32 == [])
+        ok += r31
+        print(f"  {'ok  ' if r31 else 'FAIL'} backend(WASM): IO print + handle => ({v31}, {o31}) / ({v32}, {o32})")
+    except Exception as e:
+        print(f"  FAIL backend(WASM) effects: {e}")
+    try:                                               # effect frontier: IO `with` reinterprets print through a handler closure
+        prog = '(defx h () (fn (x) (* x 2))) (defx t () (fn () (with IO h (print 5))))'
+        v33, o33 = run_wasm(prog, "(t)")
+        rv33, ro33 = run_call(prog, "(t)")
+        r33 = (v33 == 10 and o33 == [] and rv33 == 10 and ro33 == [])
+        ok += r33
+        print(f"  {'ok  ' if r33 else 'FAIL'} backend(WASM): IO with handler => ({v33}, {o33}) / ({rv33}, {ro33})")
+    except Exception as e:
+        print(f"  FAIL backend(WASM) with: {e}")
+    try:                                               # runtime frontier: boxed Rand survives a non-IO handle in WASM/WAT
+        p_box = '(defx t () (fn () (handle (Rand) (rand))))'
+        v31, o31 = run_wasm(p_box, "(t)")
+        rv31, ro31 = run_call(p_box, "(t)")
+        r31 = (v31 == ("Rand", 0) and o31 == [] and rv31 == ("Rand", 0) and ro31 == [])
+        ok += r31
+        print(f"  {'ok  ' if r31 else 'FAIL'} backend(WASM): Rand handle boxes to {v31}")
+    except Exception as e:
+        print(f"  FAIL backend(WASM) handle-box: {e}")
+    try:                                               # runtime frontier: Rand with-handler reinterprets to a pure result
+        p_with = '(defx mk () (fn () 4)) (defx t () (fn () (with Rand mk (rand))))'
+        v32, o32 = run_wasm(p_with, "(t)")
+        rv32, ro32 = run_call(p_with, "(t)")
+        r32 = (v32 == 4 and o32 == [] and rv32 == 4 and ro32 == [])
+        ok += r32
+        print(f"  {'ok  ' if r32 else 'FAIL'} backend(WASM): Rand with reinterprets to {v32}")
+    except Exception as e:
+        print(f"  FAIL backend(WASM) with-box: {e}")
+    try:                                               # runtime frontier: Net with-handler now runs on WASM too
+        p_net = '(defx realwork (Net) (fn (x) (net x))) (defx mock () (fn (x) (* x 2))) (defx tested () (fn (x) (with Net mock (realwork x))))'
+        v33, o33 = run_wasm(p_net, "(tested 5)")
+        rv33, ro33 = run_call(p_net, "(tested 5)")
+        r33 = (v33 == 10 and o33 == [] and rv33 == 10 and ro33 == [])
+        ok += r33
+        print(f"  {'ok  ' if r33 else 'FAIL'} backend(WASM): Net with handler => {v33}")
+    except Exception as e:
+        print(f"  FAIL backend(WASM) net-with: {e}")
     try:                                               # runtime: variant + match extracts the payload / picks the arm
         v26, _ = run_call('(defx m1 () (fn () (match (variant Some 5) ((Some x) x) ((None) 0))))', "(m1)")
         v27, _ = run_call('(defx m2 () (fn () (match (variant None 0) ((Some x) x) ((None) 7))))', "(m2)")
@@ -659,7 +812,7 @@ def main():
     try:                                               # runtime: Rand op runs; `with` reinterprets nondeterminism to a pure mock
         vr1, _ = run_call('(defx rr (Rand) (fn () (rand)))', "(rr)")
         vr2, _ = run_call('(defx rr (Rand) (fn () (rand))) (defx mk () (fn () 4)) (defx t () (fn () (with Rand mk (rr))))', "(t)")
-        rr1 = (vr1 == "<rand>" and vr2 == 4); ok += rr1
+        rr1 = (vr1 == ("Rand", 0) and vr2 == 4); ok += rr1
         print(f"  {'ok  ' if rr1 else 'FAIL'} runtime Rand: (rr)={vr1} | with-mock (t)={vr2}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime Rand: {e}")
@@ -684,7 +837,7 @@ def main():
         print(f"  FAIL runtime D12 gated seam: {e}")
     try:                                               # runtime: D13 (needs ..) is TRANSPARENT — per-effect binding is a static check
         vn1, _ = run_call('(defx t (Net) (fn () (seam (Net) (needs Net review) (by review alice (net "u")))))', "(t)")
-        rn1 = (vn1 == "<net u>"); ok += rn1
+        rn1 = (vn1 == ("Net", "u")); ok += rn1
         print(f"  {'ok  ' if rn1 else 'FAIL'} runtime D13 needs: (seam (Net) (needs Net review) ..)={vn1}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime D13 needs: {e}")
@@ -709,7 +862,7 @@ def main():
         print(f"  FAIL runtime D16 forbid: {e}")
     try:                                               # runtime: D17 (require EFF N) is STATIC — a grant that meets it runs
         vq1, _ = run_call('(require Net 2) (defx t (Net) (fn () (seam (Net) (by a x (by b y (net "z"))))))', "(t)")
-        rq1 = (vq1 == "<net z>"); ok += rq1
+        rq1 = (vq1 == ("Net", "z")); ok += rq1
         print(f"  {'ok  ' if rq1 else 'FAIL'} runtime D17 require-N: grant with 2 authors runs => {vq1}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime D17 require-N: {e}")
@@ -743,8 +896,34 @@ def main():
         print(f"  {'ok  ' if rr1 else 'FAIL'} runtime D24 recall: (recall 42) => {vr1}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime D24 recall: {e}")
-    total = len(CASES) + 35   # +1: backend(WASM) cross-check (interpreter == node WebAssembly, integer core)
-    print(f"{'PASS' if ok == total else 'FAIL'} — {ok}/{total} citadel checks")
+    try:                                               # CLI: audit should surface clean code and fail closed on a lie
+        with tempfile.TemporaryDirectory() as td:
+            clean = Path(td) / "clean.loom"
+            liar = Path(td) / "liar.loom"
+            clean.write_text('(defx pure () (fn (x) (* x x)))\n')
+            liar.write_text('(defx sneaky () (fn (x) (print x)))\n')
+            loom = Path(__file__).with_name("loom.py")
+            a1 = subprocess.run([sys.executable, str(loom), "audit", str(clean)], capture_output=True, text=True)
+            a2 = subprocess.run([sys.executable, str(loom), "audit", str(liar)], capture_output=True, text=True)
+            r30 = (a1.returncode == 0 and "LOOM AUDIT" in a1.stdout and "[clean ] pure" in a1.stdout and
+                   a2.returncode == 1 and "FINDINGS" in a2.stdout and "sneaky" in a2.stdout)
+            ok += r30
+            print(f"  {'ok  ' if r30 else 'FAIL'} cli audit: clean surfaces clean, liar returns findings")
+    except Exception as e:
+        print(f"  FAIL cli audit: {e}")
+    try:                                               # deterministic property fuzz is part of the citadel, not an optional side script
+        fuzz = Path(__file__).with_name("fuzz_tests.py")
+        fr = subprocess.run([sys.executable, str(fuzz), "--cases", "64", "--seed", "0xC17ADE1"], capture_output=True, text=True)
+        fuzz_ok = (fr.returncode == 0 and "PASS property fuzz" in fr.stdout); ok += fuzz_ok
+        print(f"  {'ok  ' if fuzz_ok else 'FAIL'} property fuzz: parser/checker/interpreter/Python/JS/WASM")
+        if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
+    except Exception as e:
+        print(f"  FAIL property fuzz: {e}")
+    total = len(CASES) + 49   # runtime/backend smokes, including WASM context isolation and deterministic property fuzz
+    passed = (ok == total)
+    print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
+    return 0 if passed else 1
 
 
-main()
+if __name__ == "__main__":
+    sys.exit(main())

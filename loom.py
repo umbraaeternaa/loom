@@ -27,6 +27,32 @@ def _foreign_logger(args, out):                        # opaque foreign code tha
     if _cap_ok("IO"): out.append("foreign:" + str(args[0]))
     return args[0]
 FOREIGN = {"logger": _foreign_logger}                  # registry of effect-opaque foreign functions reached via (ffi ..)
+INT_BITS = 31
+INT_MIN = -(1 << (INT_BITS - 1))
+INT_MAX = (1 << (INT_BITS - 1)) - 1
+_INT_MOD = 1 << INT_BITS
+
+
+def _i31(n):
+    """Canonical signed i31 wraparound shared by every LOOM execution backend."""
+    return ((n - INT_MIN) % _INT_MOD) + INT_MIN
+
+
+def _int_literal_errors(nodes):
+    errors = []
+    def walk(node):
+        if isinstance(node, int):
+            if node < INT_MIN or node > INT_MAX:
+                errors.append(f"integer literal {node} outside LOOM i31 range [{INT_MIN}, {INT_MAX}]")
+        elif isinstance(node, list):
+            for item in node: walk(item)
+    for node in nodes: walk(node)
+    return errors
+
+
+def _check_call_literals(call_ast):
+    errors = _int_literal_errors(call_ast)
+    if errors: raise LoomError("; ".join(errors))
 
 
 def plin(p): return p[1] if (isinstance(p, list) and len(p) >= 2 and p[0] == "lin") else None   # (lin r) = LINEAR param
@@ -49,11 +75,19 @@ def tokenize(s):
 
 
 def _read(t):
+    if not t:
+        raise LoomError("unexpected end of input")
     x = t.pop(0)
+    if x == ")":
+        raise LoomError("unexpected ')'")
     if x == "(":
         l = []
-        while t[0] != ")": l.append(_read(t))
-        t.pop(0); return l
+        while True:
+            if not t:
+                raise LoomError("unclosed '('")
+            if t[0] == ")":
+                t.pop(0); return l
+            l.append(_read(t))
     if x.startswith('"'): return x[1:-1]
     try: return int(x)
     except ValueError: return x
@@ -130,6 +164,10 @@ def _ucount(node, fns, penv):
         add(_ucount(node[1][1], fns, penv))
         for x in node[2:]: add(_ucount(x, fns, penv))
         return out
+    if isinstance(h, list):
+        add(_ucount(h, fns, penv))
+        for a in node[1:]: add(_ucount(a, fns, penv))
+        return out
     if h == 'seamN': return _ucount(['seam'] + node[2:], fns, penv)   # D27 metered grant: pass-through for use-counting, like a seam
     if h in ("seam", "seam1"):                          # a grant is pass-through for counting (the check happens AT seam1)
         for x in _roleclauses(node[2:])[3]: add(_ucount(x, fns, penv))   # skip D12/D13 (roles..)/(sub..)/(needs..) clauses
@@ -184,6 +222,10 @@ def _ncount(node, fns, penv):                                        # D27 EXACT
     if h == 'let':
         add(_ncount(node[1][1], fns, penv))
         for x in node[2:]: add(_ncount(x, fns, penv))
+        return out
+    if isinstance(h, list):
+        add(_ncount(h, fns, penv))
+        for a in node[1:]: add(_ncount(a, fns, penv))
         return out
     if h == 'resource':
         spec = node[1]; rname, reffs = (spec[0], set(spec[1:])) if isinstance(spec, list) else (spec, set())
@@ -561,6 +603,10 @@ def infer(node, fns, errs, penv=None):
         eff = set()
         for x in node[2:]: eff |= infer(x, fns, errs, penv)
         return eff
+    if isinstance(h, list):                             # direct application of an inline closure / callable expression
+        eff = latent_of(h, fns, penv, errs)
+        for a in node[1:]: eff |= infer(a, fns, errs, penv)
+        return eff
     if h == "trust":                                    # (trust SPEC? expr) — D9/D10 GATE vs CIRCULAR / under-corroborated trust
         spec = node[1] if len(node) > 1 else None
         is_roles = isinstance(spec, list) and len(spec) > 0 and spec[0] == "roles"
@@ -665,7 +711,7 @@ def check(program):
         for n, i in fns.items():
             i["preq"] = _prov_reqs(i["fn"][2:], {pname(p) for p in i["params"]}, fns)
     _obl = {n for n, i in fns.items() if i["preq"]}     # obligation-bearing fns: may ONLY be called directly (else refused)
-    errors = []
+    errors = _int_literal_errors(program)
     for n, i in fns.items():
         _POLICY["params"] = {pname(p) for p in i["params"]}     # D22: params of THIS fn -> a (trust raw-param) defers to its callers
         for b in i["fn"][2:]: infer(b, fns, errors, i["penv"])   # collect seam/handle/with/lambda/unresolved violations + discharge obligations
@@ -819,11 +865,11 @@ def ev(node, env, fns, out, handlers=None):
         for x in node[2:]: r = ev(x, loc, fns, out, handlers)
         return r
     a = [ev(x, env, fns, out, handlers) for x in node[1:]]
-    if h == "+": return sum(a)
-    if h == "-": return a[0] - a[1]
+    if h == "+": return _i31(sum(a))
+    if h == "-": return _i31(a[0] - a[1])
     if h == "*":
         r = 1
-        for x in a: r *= x
+        for x in a: r = _i31(r * x)
         return r
     if h == "=": return 1 if a[0] == a[1] else 0
     if h == "<": return 1 if a[0] < a[1] else 0
@@ -840,13 +886,13 @@ def ev(node, env, fns, out, handlers=None):
         out.append(str(a[0])); return a[0]
     if h == "net":
         if not _cap_ok("Net"): raise LoomError("capability denied: Net not granted by enclosing seam")
-        return f"<net {a[0]}>"
+        return ("Net", a[0])
     if h == "alloc":
         if not _cap_ok("Alloc"): raise LoomError("capability denied: Alloc not granted by enclosing seam")
         return list(range(a[0])) if a else []
     if h == "rand":                                     # nondeterminism: only if Rand is granted by the enclosing seam
         if not _cap_ok("Rand"): raise LoomError("capability denied: Rand not granted by enclosing seam")
-        return "<rand>"                                 # deterministic placeholder — the point is effect-tracking, not real RNG
+        return ("Rand", 0)                              # deterministic opaque value — the point is effect-tracking, not real RNG
     fv = None                                           # resolve the head to a function: name, var->name, or closure
     if isinstance(h, str):
         if h in fns: fv = fns[h]
@@ -874,7 +920,8 @@ def run_call(program_src, call_src):
     if errs: raise LoomError("; ".join(errs))
     _CAPS.clear()
     out = []
-    return ev(parse(call_src)[0], {}, fns, out), out
+    call_ast = parse(call_src); _check_call_literals(call_ast)
+    return ev(call_ast[0], {}, fns, out), out
 
 
 # ---- BACKEND: compile CHECKED LOOM to portable target source (v0 target = Python; same emit pattern -> JS/C/WASM).
@@ -883,9 +930,9 @@ def _emit(node):
     if isinstance(node, int): return str(node)
     if isinstance(node, str): return node                              # variable / symbol
     h = node[0]
-    if h == "+": return "(" + "+".join(_emit(a) for a in node[1:]) + ")"
-    if h == "-": return f"({_emit(node[1])}-{_emit(node[2])})"
-    if h == "*": return "(" + "*".join(_emit(a) for a in node[1:]) + ")"
+    if h == "+": return "_i31(" + "+".join(_emit(a) for a in node[1:]) + ")"
+    if h == "-": return f"_i31(({_emit(node[1])})-({_emit(node[2])}))"
+    if h == "*": return "_i31(" + "*".join(_emit(a) for a in node[1:]) + ")"
     if h == "=": return f"(1 if ({_emit(node[1])}=={_emit(node[2])}) else 0)"
     if h == "<": return f"(1 if ({_emit(node[1])}<{_emit(node[2])}) else 0)"
     if h == ">": return f"(1 if ({_emit(node[1])}>{_emit(node[2])}) else 0)"
@@ -930,15 +977,16 @@ def compile_py(program_src):
     """Compile a CHECKED LOOM program to portable Python source (one def per defx). Rejects if it fails the checker."""
     fns, errs = check(parse(program_src))
     if errs: raise LoomError("; ".join(errs))
-    lines = ["_sd = [0]", "_h = {}",
+    lines = ["_sd = [0]", "_h = {}", f"_INT_MIN={INT_MIN}; _INT_MOD={_INT_MOD}",
+             "def _i31(n): return ((n-_INT_MIN)%_INT_MOD)+_INT_MIN",
              "def _route(name, args, default):\n    if name in _h:\n        f = _h.pop(name)\n        try: return f(*args)\n        finally: _h[name] = f\n    return default()",
              "def _with(name, hf, thunk):\n    had = name in _h; prev = _h.get(name)\n    _h[name] = hf\n    try: return thunk()\n    finally:\n        if had: _h[name] = prev\n        else: _h.pop(name, None)",
              "def _p(x): return _route('print', (x,), lambda: (print(x) if _sd[0]==0 else None) or x)",
              "def _handle(t):\n    _sd[0]+=1\n    try: return t()\n    finally: _sd[0]-=1",
              "def _nm(t):\n    raise Exception('no match arm for '+str(t))",
-             "def _net(u): return _route('net', (u,), lambda: '<net '+str(u)+'>')",
-             "def _alloc(n): return _route('alloc', (n,), lambda: list(range(n)))",
-             "def _rand(): return _route('rand', (), lambda: '<rand>')",
+            "def _net(u): return _route('net', (u,), lambda: ('Net', u))",
+            "def _alloc(n): return _route('alloc', (n,), lambda: list(range(n)))",
+            "def _rand(): return _route('rand', (), lambda: ('Rand', 0))",
              "_caps = []",
              "def _cap_ok(e): return (not _caps) or (e in _caps[-1])",
              "def _seam(row, thunk): _caps.append(set(row)); _r = thunk(); _caps.pop(); return _r",
@@ -953,9 +1001,10 @@ def compile_py(program_src):
 def run_compiled(program_src, call_src):
     """Compile to Python, run it; return (value, output-lines) — proof the emitted code MATCHES the interpreter."""
     import io, contextlib
+    call_ast = parse(call_src); _check_call_literals(call_ast)
     ns = {}; exec(compile_py(program_src), ns); buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        val = eval(_emit(parse(call_src)[0]), ns)
+        val = eval(_emit(call_ast[0]), ns)
     return val, buf.getvalue().splitlines()
 
 
@@ -964,9 +1013,12 @@ def _emit_js(node):
     if isinstance(node, int): return str(node)
     if isinstance(node, str): return node
     h = node[0]
-    if h == "+": return "(" + "+".join(_emit_js(a) for a in node[1:]) + ")"
-    if h == "-": return f"({_emit_js(node[1])}-{_emit_js(node[2])})"
-    if h == "*": return "(" + "*".join(_emit_js(a) for a in node[1:]) + ")"
+    if h == "+": return "_i31(" + "+".join(_emit_js(a) for a in node[1:]) + ")"
+    if h == "-": return f"_i31(({_emit_js(node[1])})-({_emit_js(node[2])}))"
+    if h == "*":
+        out = _emit_js(node[1])
+        for arg in node[2:]: out = f"_imul({out},{_emit_js(arg)})"
+        return out
     if h == "=": return f"(({_emit_js(node[1])}==={_emit_js(node[2])})?1:0)"
     if h == "<": return f"(({_emit_js(node[1])}<{_emit_js(node[2])})?1:0)"
     if h == ">": return f"(({_emit_js(node[1])}>{_emit_js(node[2])})?1:0)"
@@ -1012,12 +1064,14 @@ def compile_js(program_src):
     fns, errs = check(parse(program_src))
     if errs: raise LoomError("; ".join(errs))
     lines = ["let _sd=0; let _h={};",
+             "function _i31(n){ return (n<<1)>>1; }",
+             "function _imul(a,b){ return _i31(Math.imul(a,b)); }",
              "function _route(name,args,d){ if(name in _h){ let f=_h[name]; delete _h[name]; try{ return f(...args); } finally{ _h[name]=f; } } return d(); }",
              "function _with(name,hf,thunk){ let had=(name in _h), prev=_h[name]; _h[name]=hf; try{ return thunk(); } finally{ if(had) _h[name]=prev; else delete _h[name]; } }",
              "function _p(x){ return _route('print',[x], ()=>{ if(_sd===0) console.log(x); return x; }); }",
              "function _handle(t){ _sd++; try{ return t(); } finally{ _sd--; } }",
              "function _nm(t){ throw new Error('no match arm for '+t); }",
-             "function _net(u){ return _route('net',[u], ()=>'<net '+u+'>'); }", "function _alloc(n){ return _route('alloc',[n], ()=>Array.from({length:n},(_,i)=>i)); }", "function _rand(){ return _route('rand',[], ()=>'<rand>'); }",
+             "function _net(u){ return _route('net',[u], ()=>['Net',u]); }", "function _alloc(n){ return _route('alloc',[n], ()=>Array.from({length:n},(_,i)=>i)); }", "function _rand(){ return _route('rand',[], ()=>['Rand',0]); }",
              "let _caps=[];",
              "function _cap_ok(e){ return (_caps.length===0)||_caps[_caps.length-1].has(e); }",
              "function _seam(row,thunk){ _caps.push(new Set(row)); let _r=thunk(); _caps.pop(); return _r; }",
@@ -1032,236 +1086,41 @@ def compile_js(program_src):
 def run_js(program_src, call_src):
     """Compile to JS, run through Node; return (value, output-lines) — proof the JS target matches the interpreter. Needs node."""
     import subprocess, json as _json
-    js = compile_js(program_src) + "\nconsole.log('__R__'+JSON.stringify(" + _emit_js(parse(call_src)[0]) + "))"
+    def _norm(v):
+        if isinstance(v, dict):
+            return {k: _norm(x) for k, x in v.items()}
+        if isinstance(v, list):
+            vv = [_norm(x) for x in v]
+            return tuple(vv) if len(vv) == 2 and isinstance(vv[0], str) and vv[0][:1].isupper() else vv
+        return v
+    call_ast = parse(call_src); _check_call_literals(call_ast)
+    js = compile_js(program_src) + "\nconsole.log('__R__'+JSON.stringify(" + _emit_js(call_ast[0]) + "))"
     r = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=15)
     if r.returncode != 0: raise LoomError("node: " + r.stderr.strip()[:200])
     lines = r.stdout.splitlines(); val = None; out = []
     for ln in lines:
-        if ln.startswith("__R__"): val = _json.loads(ln[5:])
+        if ln.startswith("__R__"): val = _norm(_json.loads(ln[5:]))
         else: out.append(ln)
     return val, out
 
 
-# ---- THIRD TARGET: WebAssembly. The integer computational core compiles to REAL wasm bytes (run via node's built-in
-#      WebAssembly, ZERO deps) + a human-readable WAT "assembler". interp==Py==JS==WASM. Honest scope: the integer core
-#      only (+ - * / = < > / if / first-order calls + recursion); closures/lists/types/effects need a value runtime in
-#      linear memory -> the next frontier. Forms outside the core fail-closed (LoomError), never emit wrong code. ----
-def _leb_u(n):
-    o = bytearray()
-    while True:
-        b = n & 0x7f; n >>= 7; o.append(b | (0x80 if n else 0))
-        if not n: return bytes(o)
+# ---- THIRD TARGET: WebAssembly. The implementation lives in loom_wasm.py;
+#      this module supplies the checked LOOM frontend through an explicit dependency boundary. ----
+import loom_wasm as _loom_wasm
 
-def _leb_s(n):
-    o = bytearray(); more = True
-    while more:
-        b = n & 0x7f; n >>= 7
-        if (n == 0 and not (b & 0x40)) or (n == -1 and (b & 0x40)): more = False
-        else: b |= 0x80
-        o.append(b)
-    return bytes(o)
-
-_WBIN = {"+": 0x6a, "-": 0x6b, "*": 0x6c}; _WCMP = {"=": 0x46, "<": 0x48, ">": 0x4a}   # i32 add/sub/mul + eq/lt_s/gt_s
-
-def _emit_wasm(node, lmap, fmap, cons_i, tags, si):        # body bytes; lmap: name->local idx; cons_i: $cons idx; tags: tag->id; si: scrutinee local
-    if isinstance(node, int): return b"\x41" + _leb_s(node)            # i32.const
-    if isinstance(node, str):
-        if node not in lmap: raise LoomError("wasm: free variable " + node)
-        return b"\x20" + _leb_u(lmap[node])                            # local.get (param / let / match-bound)
-    h = node[0]
-    if h in ("+", "*"):
-        out = _emit_wasm(node[1], lmap, fmap, cons_i, tags, si)
-        for a in node[2:]: out += _emit_wasm(a, lmap, fmap, cons_i, tags, si) + bytes([_WBIN[h]])
-        return out
-    if h == "-": return _emit_wasm(node[1], lmap, fmap, cons_i, tags, si) + _emit_wasm(node[2], lmap, fmap, cons_i, tags, si) + b"\x6b"
-    if h in _WCMP: return _emit_wasm(node[1], lmap, fmap, cons_i, tags, si) + _emit_wasm(node[2], lmap, fmap, cons_i, tags, si) + bytes([_WCMP[h]])
-    if h == "if":                                                       # if (result i32) THEN else ELSE end
-        return (_emit_wasm(node[1], lmap, fmap, cons_i, tags, si) + b"\x04\x7f" + _emit_wasm(node[2], lmap, fmap, cons_i, tags, si)
-                + b"\x05" + _emit_wasm(node[3], lmap, fmap, cons_i, tags, si) + b"\x0b")
-    if h == "let":                                                      # (let (name val) body..) -> val; local.set name; body
-        out = _emit_wasm(node[1][1], lmap, fmap, cons_i, tags, si) + b"\x21" + _leb_u(lmap[node[1][0]])
-        for b in node[2:]: out += _emit_wasm(b, lmap, fmap, cons_i, tags, si)
-        return out
-    if h == "list":                                                     # (list a b ..) -> cons(a, cons(b, .. nil))
-        if len(node) == 1: return b"\x41\x00"                           # nil = 0
-        out = b"".join(_emit_wasm(a, lmap, fmap, cons_i, tags, si) for a in node[1:]) + b"\x41\x00"
-        return out + b"".join(b"\x10" + _leb_u(cons_i) for _ in node[1:])   # fold to the right via $cons
-    if h == "cons": return _emit_wasm(node[1], lmap, fmap, cons_i, tags, si) + _emit_wasm(node[2], lmap, fmap, cons_i, tags, si) + b"\x10" + _leb_u(cons_i)
-    if h == "head": return _emit_wasm(node[1], lmap, fmap, cons_i, tags, si) + b"\x28\x02\x00"    # i32.load  (cell value / tag)
-    if h == "tail": return _emit_wasm(node[1], lmap, fmap, cons_i, tags, si) + b"\x28\x02\x04"    # i32.load offset 4 (next / payload)
-    if h == "empty": return _emit_wasm(node[1], lmap, fmap, cons_i, tags, si) + b"\x45"           # i32.eqz   (ptr == nil)
-    if h == "variant":                                                  # (variant Tag e) -> cons(tag_id, payload) -> cell [tag|payload]
-        return b"\x41" + _leb_s(tags[node[1]]) + _emit_wasm(node[2], lmap, fmap, cons_i, tags, si) + b"\x10" + _leb_u(cons_i)
-    if h == "match":                                                    # scrut->$s; chain: load tag; ==TAG; if (bind payload) body else .. unreachable
-        out = _emit_wasm(node[1], lmap, fmap, cons_i, tags, si) + b"\x21" + _leb_u(si)
-        def _arms(a):
-            if not a: return b"\x00"                                    # unreachable — no arm matched (the interpreter likewise errors)
-            pat, body = a[0][0], a[0][1]
-            chk = b"\x20" + _leb_u(si) + b"\x28\x02\x00" + b"\x41" + _leb_s(tags[pat[0]]) + b"\x46"   # $s.tag == TAG
-            bind = (b"\x20" + _leb_u(si) + b"\x28\x02\x04" + b"\x21" + _leb_u(lmap[pat[1]])) if len(pat) >= 2 else b""
-            return chk + b"\x04\x7f" + bind + _emit_wasm(body, lmap, fmap, cons_i, tags, si) + b"\x05" + _arms(a[1:]) + b"\x0b"
-        return out + _arms(node[2:])
-    if h in fmap:                                                       # call $fn  (first-order / recursive)
-        return b"".join(_emit_wasm(a, lmap, fmap, cons_i, tags, si) for a in node[1:]) + b"\x10" + _leb_u(fmap[h])
-    raise LoomError("wasm: form not yet in the WASM backend: " + str(h))
-
-def _wasm_defxs(program_src):
-    return [t for t in parse(program_src) if isinstance(t, list) and t and t[0] == "defx"]
-
-def _wasm_locals(node, names, flags):                      # collect let-names + match pattern-vars; flags['match']=True needs a scrutinee temp
-    if not isinstance(node, list): return
-    if node and node[0] == "let":
-        names.append(node[1][0]); _wasm_locals(node[1][1], names, flags)
-        for b in node[2:]: _wasm_locals(b, names, flags)
-    elif node and node[0] == "match":
-        flags["match"] = True; _wasm_locals(node[1], names, flags)
-        for arm in node[2:]:
-            if len(arm[0]) >= 2: names.append(arm[0][1])               # the pattern's bound variable
-            _wasm_locals(arm[1], names, flags)
-    else:
-        for a in node: _wasm_locals(a, names, flags)
-
-def _wasm_tags(program_src):                               # program-wide tag -> integer id (variant + match tags share one numbering)
-    tags = {}
-    def w(n):
-        if not isinstance(n, list): return
-        if n and n[0] == "variant":
-            tags.setdefault(n[1], len(tags))
-            for a in n[2:]: w(a)
-        elif n and n[0] == "match":
-            w(n[1])
-            for arm in n[2:]:
-                tags.setdefault(arm[0][0], len(tags)); w(arm[1])
-        else:
-            for a in n: w(a)
-    for t in _wasm_defxs(program_src): w(t[3])
-    return tags
+_WASM_ABI_VERSION = _loom_wasm.WASM_ABI_VERSION
+_WASM_FRONTEND = _loom_wasm.Frontend(parse, check, pname, platent, LoomError, OP, _check_call_literals)
 
 def compile_wasm(program_src):
-    """Compile a CHECKED LOOM program (integers + let + integer lists) to a real WebAssembly module (bytes). Rejects if it fails the checker.
-    VALUE RUNTIME: a linear-memory heap (global $hp bump pointer) + a $cons helper allocates [value|next] cells; lists are linked
-    in memory (head/tail = i32.load, empty = i32.eqz, nil = 0). Honest scope: ints + let + integer lists + sum types (variant/match); records/closures/
-    effects still need more runtime (next frontier) and stay fail-closed until then."""
-    _, errs = check(parse(program_src))
-    if errs: raise LoomError("; ".join(errs))
-    ds = _wasm_defxs(program_src); fmap = {t[1]: i for i, t in enumerate(ds)}; cons_i = len(ds)   # $cons is the LAST function
-    tags = _wasm_tags(program_src)                          # program-wide tag -> id (for variant/match)
-    funcs = []                                              # (arity, n_locals, code)
-    for t in ds:
-        fn = t[3]; params = [pname(p) for p in fn[1]]; names = []; flags = {"match": False}
-        for b in fn[2:]: _wasm_locals(b, names, flags)
-        seen = list(dict.fromkeys(names))                   # unique let-names + match-vars -> local slots after the params
-        lmap = {p: i for i, p in enumerate(params)}
-        for j, nm in enumerate(seen): lmap[nm] = len(params) + j
-        si = len(params) + len(seen)                        # one shared scrutinee temp per function (used by match)
-        nloc = len(seen) + (1 if flags["match"] else 0)
-        funcs.append((len(params), nloc, _emit_wasm(fn[2:][-1] if fn[2:] else 0, lmap, fmap, cons_i, tags, si) + b"\x0b"))
-    cons_code = (b"\x23\x00\x21\x02" b"\x23\x00\x41\x08\x6a\x24\x00"             # $t = $hp ; $hp += 8
-                 b"\x20\x02\x20\x00\x36\x02\x00" b"\x20\x02\x20\x01\x36\x02\x04"  # mem[t] = v ; mem[t+4] = rest
-                 b"\x20\x02\x0b")                                                 # return $t
-    def _sec(sid, c): return bytes([sid]) + _leb_u(len(c)) + c
-    ar = sorted({a for a, _, _ in funcs} | {2}); ti = {a: i for i, a in enumerate(ar)}   # arity-2 type covers $cons
-    tc = _leb_u(len(ar)) + b"".join(b"\x60" + _leb_u(a) + b"\x7f" * a + b"\x01\x7f" for a in ar)   # type: (i32*)->i32
-    fc = _leb_u(len(funcs) + 1) + b"".join(_leb_u(ti[a]) for a, _, _ in funcs) + _leb_u(ti[2])     # +$cons
-    mc = _leb_u(1) + b"\x00" + _leb_u(1)                    # 1 memory, min 1 page (64 KiB heap)
-    gc = _leb_u(1) + b"\x7f\x01\x41\x08\x0b"                # 1 mutable i32 global $hp = 8 (offset 0 reserved as nil)
-    ec = _leb_u(len(funcs))
-    for i, t in enumerate(ds):
-        nb = t[1].encode(); ec += _leb_u(len(nb)) + nb + b"\x00" + _leb_u(i)                        # export func
-    cc = _leb_u(len(funcs) + 1)
-    for _, nloc, code in funcs:
-        loc = (_leb_u(1) + _leb_u(nloc) + b"\x7f") if nloc else _leb_u(0)                           # let-locals (i32)
-        e = loc + code; cc += _leb_u(len(e)) + e
-    e = (_leb_u(1) + _leb_u(1) + b"\x7f") + cons_code; cc += _leb_u(len(e)) + e                     # $cons: 1 local ($t)
-    return (b"\x00asm\x01\x00\x00\x00" + _sec(1, tc) + _sec(3, fc) + _sec(5, mc)
-            + _sec(6, gc) + _sec(7, ec) + _sec(10, cc))
+    return _loom_wasm.compile_wasm(program_src, _WASM_FRONTEND)
 
 def emit_wat(program_src):
-    """Human-readable WebAssembly Text (the 'assembler') for what compile_wasm encodes to bytes:
-    the integer core + let + integer lists + sum types (variant/match) on a linear-memory heap."""
-    _, errs = check(parse(program_src))
-    if errs: raise LoomError("; ".join(errs))
-    ds = _wasm_defxs(program_src); fmap = {t[1]: i for i, t in enumerate(ds)}; tags = _wasm_tags(program_src); uses_heap = [False]
-    _OP = {"+": "i32.add", "-": "i32.sub", "*": "i32.mul", "=": "i32.eq", "<": "i32.lt_s", ">": "i32.gt_s"}
-    def w(node, ind):
-        if isinstance(node, int): return [ind + "i32.const " + str(node)]
-        if isinstance(node, str): return [ind + "local.get $" + node]
-        h = node[0]
-        if h in ("+", "*"):
-            o = w(node[1], ind)
-            for a in node[2:]: o += w(a, ind) + [ind + _OP[h]]
-            return o
-        if h in ("-", "=", "<", ">"): return w(node[1], ind) + w(node[2], ind) + [ind + _OP[h]]
-        if h == "if":
-            return (w(node[1], ind) + [ind + "if (result i32)"] + w(node[2], ind + "  ")
-                    + [ind + "else"] + w(node[3], ind + "  ") + [ind + "end"])
-        if h == "let":
-            o = w(node[1][1], ind) + [ind + "local.set $" + node[1][0]]
-            for b in node[2:]: o += w(b, ind)
-            return o
-        if h == "list":
-            uses_heap[0] = True; o = []
-            for a in node[1:]: o += w(a, ind)
-            return o + [ind + "i32.const 0"] + [ind + "call $cons" for _ in node[1:]]
-        if h == "cons": uses_heap[0] = True; return w(node[1], ind) + w(node[2], ind) + [ind + "call $cons"]
-        if h == "head": uses_heap[0] = True; return w(node[1], ind) + [ind + "i32.load"]
-        if h == "tail": uses_heap[0] = True; return w(node[1], ind) + [ind + "i32.load offset=4"]
-        if h == "empty": return w(node[1], ind) + [ind + "i32.eqz"]
-        if h == "variant":
-            uses_heap[0] = True
-            return [ind + "i32.const " + str(tags[node[1]]) + "  ;; tag " + node[1]] + w(node[2], ind) + [ind + "call $cons"]
-        if h == "match":
-            uses_heap[0] = True; o = w(node[1], ind) + [ind + "local.set $s"]
-            def arms(a, ii):
-                if not a: return [ii + "unreachable"]
-                pat, body = a[0][0], a[0][1]
-                ln = [ii + "local.get $s", ii + "i32.load", ii + "i32.const " + str(tags[pat[0]]) + "  ;; tag " + pat[0], ii + "i32.eq", ii + "if (result i32)"]
-                if len(pat) >= 2: ln += [ii + "  local.get $s", ii + "  i32.load offset=4", ii + "  local.set $" + pat[1]]
-                return ln + w(body, ii + "  ") + [ii + "else"] + arms(a[1:], ii + "  ") + [ii + "end"]
-            return o + arms(node[2:], ind)
-        if h in fmap:
-            o = []
-            for a in node[1:]: o += w(a, ind)
-            return o + [ind + "call $" + h]
-        raise LoomError("wat: form not yet in the WASM backend: " + str(h))
-    bodies = []
-    for t in ds:
-        fn = t[3]; pn = [pname(p) for p in fn[1]]; sig = " ".join("(param $" + p + " i32)" for p in pn)
-        nm = []; flags = {"match": False}
-        for b in fn[2:]: _wasm_locals(b, nm, flags)
-        locs = " ".join("(local $" + x + " i32)" for x in dict.fromkeys(nm))
-        if flags["match"]: locs = (locs + " " if locs else "") + "(local $s i32)"
-        head = "  (func $" + t[1] + ((" " + sig) if sig else "") + " (result i32)" + ((" " + locs) if locs else "")
-        bodies.append([head] + w(fn[2:][-1] if fn[2:] else 0, "    ")
-                      + ["  )", '  (export "' + t[1] + '" (func $' + t[1] + "))"])
-    lines = ["(module"]
-    if uses_heap[0]:
-        lines += ["  (memory 1)", "  (global $hp (mut i32) (i32.const 8))",
-                  "  (func $cons (param $v i32) (param $rest i32) (result i32) (local $t i32)",
-                  "    global.get $hp  local.set $t",
-                  "    global.get $hp  i32.const 8  i32.add  global.set $hp",
-                  "    local.get $t  local.get $v  i32.store",
-                  "    local.get $t  local.get $rest  i32.store offset=4",
-                  "    local.get $t)"]
-    for b in bodies: lines += b
-    return "\n".join(lines + [")"])
+    return _loom_wasm.emit_wat(program_src, _WASM_FRONTEND)
 
 def run_wasm(program_src, call_src):
-    """Compile to wasm bytes, run via node's built-in WebAssembly; return (value, []) — proof wasm == interpreter. Needs node."""
-    import subprocess
-    c = parse(call_src)[0]                                  # call site = (NAME int-args...) for the integer core
-    name = c[0] if isinstance(c, list) else c
-    args = c[1:] if isinstance(c, list) else []
-    arr = ",".join(str(b) for b in compile_wasm(program_src))
-    js = ("WebAssembly.instantiate(new Uint8Array([" + arr + "]))"
-          ".then(m=>console.log(m.instance.exports[" + repr(name) + "](" + ",".join(str(a) for a in args) + ")))"
-          ".catch(e=>{console.error(String(e));process.exit(1)})")
-    r = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=15)
-    if r.returncode != 0: raise LoomError("node-wasm: " + r.stderr.strip()[:200])
-    return int(r.stdout.strip()), []
+    return _loom_wasm.run_wasm(program_src, call_src, _WASM_FRONTEND)
 
-
-# ---- CLI: turn the kernel into a usable TOOL. `python3 loom.py <check|run|build> file.loom [call] [--target py|js|wat]` ----
+# ---- CLI: turn the kernel into a usable TOOL. `python3 loom.py <check|run|build|audit> file.loom [call] [--target py|js|wat]` ----
 def _cli(argv):
     flags, pos, i = {}, [], 0
     while i < len(argv):
@@ -1270,7 +1129,7 @@ def _cli(argv):
         elif a.startswith("--target="): flags["target"] = a.split("=", 1)[1]; i += 1
         else: pos.append(a); i += 1
     if len(pos) < 2:
-        print("usage: python3 loom.py <check|run|build> FILE [call] [--target py|js]"); return 2
+        print("usage: python3 loom.py <check|run|build|audit> FILE [call] [--target py|js]"); return 2
     cmd, path = pos[0], pos[1]; call = pos[2] if len(pos) > 2 else "(main)"
     try: src = open(path).read()
     except OSError as e: print("cannot read file: " + str(e)); return 2
@@ -1289,6 +1148,30 @@ def _cli(argv):
         try: print(emit_wat(src) if tgt == "wat" else (compile_js(src) if tgt == "js" else compile_py(src)))
         except LoomError as e: print("REJECTED: " + str(e)); return 1
         return 0
+    if cmd == "audit":                                  # DISTRIBUTION: surface the capability surface of AI-written code
+        fns, errs = check(parse(src))                   # check infers every row even when a lie makes it REJECT
+        ftab = {}                                        # name-attributed violations ONLY (check()-level errors are "name: ...")
+        for e in errs:                                   # infer()-level errors (seam/trust/unresolved) are NOT prefixed
+            k = e.split(": ", 1)[0]
+            if k in fns: ftab.setdefault(k, []).append(e)
+        SENS = {"Net", "IO", "FFI", "Alloc"}             # capabilities a human auditor must scrutinise (Pure is safe)
+        print("LOOM AUDIT - capability surface of AI-written code (DECLARED vs actually PERFORMED)")
+        for name, info in fns.items():
+            decl = set(info["decl"]); perf = set(info["eff"]) - {"?"}   # '?' = un-seamed foreign marker, not a capability
+            mine = ftab.get(name, [])
+            lies = bool(mine) or bool(perf - decl) or ("?" in info["eff"]) or bool(set(info.get("req", set())) - perf)
+            caps = sorted(perf & SENS)
+            tag = "LIE   " if lies else ("REVIEW" if caps else "clean ")
+            d = " ".join(sorted(decl)) or "Pure"; a = " ".join(sorted(perf)) or "Pure"
+            extra = ("  <- holds: " + ", ".join(caps)) if (caps and not lies) else ""
+            print(f"  [{tag}] {name}: declared ({d}) | performs ({a}){extra}")
+            for e in mine: print("           ! " + e)
+        if errs:
+            print(f"-- FINDINGS ({len(errs)}), every violation verbatim:")
+            for e in errs: print("   ! " + e)
+        else:
+            print("-- no violations; review every non-Pure capability above")
+        return 1 if errs else 0
     print("unknown command: " + cmd); return 2
 
 if __name__ == "__main__":
