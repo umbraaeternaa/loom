@@ -20,7 +20,7 @@ jobs:
         with:
           node-version: "22"
       - name: Compile Python sources
-        run: python -m py_compile loom.py loom_wasm.py docs/loom.py run_tests.py fuzz_tests.py
+        run: python -m py_compile loom.py loom_codegen.py loom_wasm.py docs/loom.py run_tests.py fuzz_tests.py
       - name: Run citadel
         run: python run_tests.py
       - name: Run extended deterministic fuzz seeds

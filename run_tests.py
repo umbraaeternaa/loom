@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import loom as _loom
-from loom import parse, check, run_call, run_compiled, run_js, compile_js, compile_wasm, run_wasm, emit_wat, LoomError, _WASM_ABI_VERSION
+from loom import parse, check, run_call, compile_py, run_compiled, run_js, compile_js, compile_wasm, run_wasm, emit_wat, LoomError, _WASM_ABI_VERSION
 
 # (name, source, should_be_accepted)
 CASES = [
@@ -659,6 +659,23 @@ def main():
             ok += 1; print("  ok   backend(JS): compile_js emits source (node absent -> exec check skipped)")
     except Exception as e:
         print(f"  FAIL backend(JS): {e}")
+    try:                                               # Python/JS generators live behind a stable facade in development builds
+        codegen_program = '(defx t () (fn () (record (n (+ 2 3)) (v (variant Ok 7)))))'
+        is_browser_bundle = Path(_loom.__file__).parent.name == "docs"
+        if is_browser_bundle:
+            codegen_boundary_ok = True                 # published Pyodide artifact is intentionally one self-contained file
+        else:
+            impl = getattr(_loom, "_loom_codegen", None)
+            frontend = getattr(_loom, "_CODEGEN_FRONTEND", None)
+            codegen_boundary_ok = (
+                getattr(impl, "__name__", None) == "loom_codegen"
+                and compile_py(codegen_program) == impl.compile_py(codegen_program, frontend)
+                and compile_js(codegen_program) == impl.compile_js(codegen_program, frontend)
+            )
+        ok += codegen_boundary_ok
+        print(f"  {'ok  ' if codegen_boundary_ok else 'FAIL'} backend(Python/JS): stable module boundary")
+    except Exception as e:
+        print(f"  FAIL backend(Python/JS) module boundary: {e}")
     try:                                               # THIRD TARGET (WASM): real wasm bytes via node's WebAssembly == interpreter (integer core)
         import shutil as _sh
         wpairs = [('(defx main () (fn () (+ 2 (* 3 4))))', "(main)"),                                   # arithmetic -> 14
@@ -919,7 +936,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 49   # runtime/backend smokes, including WASM context isolation and deterministic property fuzz
+    total = len(CASES) + 50   # runtime/backend smokes, including backend module boundaries and deterministic property fuzz
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

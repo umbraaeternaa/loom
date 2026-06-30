@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** runtime with a human-readable **WAT/assembler** view). It is a research
-kernel — small on purpose — and it is **self-verified by 351 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 352 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 351/351 citadel checks
+PASS — 352/352 citadel checks
 ```
 
 ## The idea in one screen
@@ -98,6 +98,7 @@ foreign code's IO/Net **physically impossible**, not merely undeclared. Soundnes
 on trusting an annotation — *no capability granted ⇒ no effect possible*.
 
 - [`loom.py`](loom.py) — parser, effect checker, interpreter, and stable backend facade.
+- [`loom_codegen.py`](loom_codegen.py) — isolated portable Python/JavaScript generators.
 - [`loom_wasm.py`](loom_wasm.py) — isolated WebAssembly/WAT compiler and ABI runtime.
 - [`run_tests.py`](run_tests.py) — the self-verifying suite: it accepts honest programs,
   rejects every flavor of lie, and runs real programs.
