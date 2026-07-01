@@ -7,7 +7,6 @@
 # a pure fn => networked code becomes provably pure). Plus control flow (if/let), recursion, and first-class
 # functions with ROW-POLYMORPHISM + anonymous LAMBDAS/CLOSURES. A tiny s-expr language + static effect checker
 # + interpreter. Grown nightly by the organism, verified by run_tests.py — the language only ever grows GREEN.
-import re
 from contextvars import ContextVar
 
 EFFECTS = {"Pure", "IO", "Net", "Alloc", "FFI", "Rand"}   # Rand = nondeterminism (randomness / wall-clock)
@@ -85,38 +84,6 @@ def is_fn_expr(e, fns, penv):                                    # does this exp
     return (isinstance(e, list) and len(e) > 0 and e[0] == "fn") or (isinstance(e, str) and (e in fns or e in penv))
 
 
-def tokenize(s):
-    # strip `;`-to-end-of-line comments FIRST, but never inside a string literal: the alternation matches a whole
-    # "..." first (kept verbatim, so a ';' within it survives), otherwise a comment (dropped).
-    s = re.sub(r'"[^"]*"|;[^\n]*', lambda m: m.group(0) if m.group(0)[:1] == '"' else '', s)
-    return re.findall(r'"[^"]*"|[()]|[^\s()]+', s)
-
-
-def _read(t):
-    if not t:
-        raise LoomError("unexpected end of input")
-    x = t.pop(0)
-    if x == ")":
-        raise LoomError("unexpected ')'")
-    if x == "(":
-        l = []
-        while True:
-            if not t:
-                raise LoomError("unclosed '('")
-            if t[0] == ")":
-                t.pop(0); return l
-            l.append(_read(t))
-    if x.startswith('"'): return x[1:-1]
-    try: return int(x)
-    except ValueError: return x
-
-
-def parse(s):
-    t = tokenize(s); out = []
-    while t: out.append(_read(t))
-    return out
-
-
 class LoomError(Exception): pass
 
 
@@ -125,7 +92,10 @@ class Closure:                                          # an inline lambda evalu
     def __init__(self, params, body, env): self.params, self.body, self.env = params, body, env
 
 
+import loom_parse as _loom_parse
 import loom_checker as _loom_checker
+
+_PARSE_FRONTEND = _loom_parse.Frontend(LoomError)
 
 _CHECKER_FRONTEND = _loom_checker.Frontend(
     EFFECTS,
@@ -140,6 +110,18 @@ _CHECKER_FRONTEND = _loom_checker.Frontend(
     _MISS,
     LoomError,
 )
+
+
+def tokenize(s):
+    return _loom_parse.tokenize(_PARSE_FRONTEND, s)
+
+
+def _read(t):
+    return _loom_parse._read(_PARSE_FRONTEND, t)
+
+
+def parse(s):
+    return _loom_parse.parse(_PARSE_FRONTEND, s)
 
 
 def _roleclauses(tail):

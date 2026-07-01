@@ -510,6 +510,26 @@ def main():
         print(f"  {'ok  ' if checker_context_ok else 'FAIL'} checker: module boundary + isolated contexts (64 parallel checks)")
     except Exception as e:
         print(f"  FAIL checker context isolation: {e}")
+    try:                                               # parser stays deterministic and modular under concurrent use
+        from concurrent.futures import ThreadPoolExecutor
+        parser_sources = [
+            '(defx f () (fn () 1))',
+            '(defx f () (fn () "a;b")) ; trailing comment',
+            '(defx f () (fn () (list 1 (record (a 2)))))',
+        ]
+        expected = [parse(src) for src in parser_sources]
+        def parse_isolated(i):
+            src = parser_sources[i % len(parser_sources)]
+            return i % len(parser_sources), parse(src)
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            isolated = list(pool.map(parse_isolated, range(64)))
+        is_browser_bundle = Path(_loom.__file__).parent.name == "docs"
+        boundary_ok = is_browser_bundle or getattr(_loom, "_loom_parse", None).__name__ == "loom_parse"
+        parser_ok = boundary_ok and all(got == expected[i] for i, got in isolated)
+        ok += parser_ok
+        print(f"  {'ok  ' if parser_ok else 'FAIL'} parser: module boundary + isolated parses (64 parallel reads)")
+    except Exception as e:
+        print(f"  FAIL parser module boundary: {e}")
     try:                                               # every runtime call owns its capability stack
         from concurrent.futures import ThreadPoolExecutor
         runtime_programs = [
@@ -985,7 +1005,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 52   # runtime/backend smokes, including checker/runtime/backend isolation and deterministic property fuzz
+    total = len(CASES) + 53   # runtime/backend smokes, including parser/checker/runtime/backend isolation and deterministic property fuzz
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1
