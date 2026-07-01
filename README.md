@@ -14,14 +14,14 @@ declaration is honest before a single line runs.
 🌐 **[Visit the live site → umbraaeternaa.github.io/loom »](https://umbraaeternaa.github.io/loom/)** &nbsp;·&nbsp; 🎬 **[Watch — LOOM in 30 seconds »](media/LOOM_intro.mp4)**
 
 LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
-interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** runtime with a human-readable **WAT/assembler** view). It is a research
-kernel — small on purpose — and it is **self-verified by 353 checks** that the language can only ever
+interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
+kernel — small on purpose — and it is **self-verified by 365 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 363/363 citadel checks
+PASS — 365/365 citadel checks
 ```
 
 ## The idea in one screen

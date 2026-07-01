@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LOOM — trust only the code you can prove</title>
-<meta name="description" content="LOOM is a trust layer for AI-written code: it proves, at a gate, exactly what code is allowed to do. Open source, 333 self-verifying checks, from Ukraine.">
+<meta name="description" content="LOOM is a trust layer for AI-written code: it proves, at a gate, exactly what code is allowed to do — then runs it in your browser as real WebAssembly. Open source, 365 self-verifying checks, from Ukraine.">
 <meta property="og:title" content="LOOM — a trust layer for AI-written code">
 <meta property="og:description" content="It doesn't just run code — it proves, at a gate, exactly what the code is allowed to do.">
 <meta property="og:type" content="website">
@@ -143,7 +143,7 @@
       </div>
       <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px;">
         <div style="padding: 38px 30px; border-radius: 16px; background: linear-gradient(180deg, rgba(57,214,200,0.07), rgba(57,214,200,0.02)); border: 1px solid rgba(57,214,200,0.22); text-align: center;">
-          <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: clamp(40px,5vw,58px); line-height: 1; color: #39d6c8;">333</div>
+          <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: clamp(40px,5vw,58px); line-height: 1; color: #39d6c8;">365</div>
           <div style="font-size: 15px; color: rgba(231,236,255,0.7); margin-top: 14px;">self-verifying checks</div>
         </div>
         <div style="padding: 38px 30px; border-radius: 16px; background: rgba(231,236,255,0.025); border: 1px solid rgba(139,123,255,0.16); text-align: center; display: flex; flex-direction: column; justify-content: center;">
@@ -160,8 +160,8 @@
     <section data-reveal style="max-width: 980px; margin: 0 auto; padding: clamp(20px,3vw,40px) clamp(20px,5vw,48px);">
       <div style="position: relative; border-radius: 20px; padding: clamp(32px,5vw,52px); background: linear-gradient(180deg, rgba(57,214,200,0.07), rgba(9,12,26,0.6)); border: 1px solid rgba(57,214,200,0.22); overflow: hidden;">
         <div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: 0.22em; color: #39d6c8; margin-bottom: 20px;">NEW — RUNS AS WEBASSEMBLY</div>
-        <h2 style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: clamp(26px, 3.4vw, 40px); line-height: 1.12; letter-spacing: -0.015em; margin: 0 0 20px;">Checked code becomes real WebAssembly — by hand.</h2>
-        <p style="font-size: clamp(15px,1.5vw,18px); line-height: 1.65; color: rgba(231,236,255,0.66); max-width: 660px; margin: 0 0 28px;">No toolchain: LOOM emits the wasm bytes itself and runs them in your browser. The computational core — arithmetic, <span style="color:#8b7bff;">let</span>, recursion, integer <span style="color:#e7ecff;">lists</span> and <span style="color:#e7ecff;">sum types</span> — compiles to a real linear-memory runtime, identical to the interpreter. Type a program, press <span style="color:#39d6c8;">Compile&nbsp;→&nbsp;WAT</span>, and watch it become assembly.</p>
+        <h2 style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: clamp(26px, 3.4vw, 40px); line-height: 1.12; letter-spacing: -0.015em; margin: 0 0 20px;">Checked code runs as real WebAssembly — in your browser.</h2>
+        <p style="font-size: clamp(15px,1.5vw,18px); line-height: 1.65; color: rgba(231,236,255,0.66); max-width: 660px; margin: 0 0 28px;">No toolchain: LOOM emits the wasm bytes itself and executes them in your tab. Not just arithmetic and recursion — <span style="color:#e7ecff;">records</span>, <span style="color:#e7ecff;">closures</span>, <span style="color:#8b7bff;">effects</span> (IO), the foreign-call boundary, and even the <span style="color:#39d6c8;">trust&nbsp;&amp;&nbsp;provenance</span> layer itself now lower to a real linear-memory runtime, identical to the interpreter. In the playground, press <span style="color:#39d6c8;">Run&nbsp;→&nbsp;WASM</span> to run it live — or <span style="color:#39d6c8;">Compile&nbsp;→&nbsp;WAT</span> to read the assembler.</p>
         <a href="./play.html" style="display: inline-flex; align-items: center; gap: 9px; font-family: 'Space Grotesk', sans-serif; font-weight: 500; font-size: 15px; text-decoration: none; color: #05070f; background: linear-gradient(100deg, #39d6c8, #6ee8dc); padding: 13px 24px; border-radius: 12px;">▶ Try it live in the playground</a>
       </div>
     </section>
