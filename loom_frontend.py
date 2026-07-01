@@ -42,3 +42,16 @@ class RuntimeFrontend(BackendFrontend):
         super().__init__(parse, check, pname, error, op, check_call_literals)
         self.roleclauses = roleclauses
         self.i31 = i31
+
+
+class CliFrontend:
+    __slots__ = ("parse", "check", "run_call", "compile_py", "compile_js", "emit_wat", "error")
+
+    def __init__(self, parse, check, run_call, compile_py, compile_js, emit_wat, error):
+        self.parse = parse
+        self.check = check
+        self.run_call = run_call
+        self.compile_py = compile_py
+        self.compile_js = compile_js
+        self.emit_wat = emit_wat
+        self.error = error

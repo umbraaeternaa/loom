@@ -60,6 +60,7 @@ class LoomError(Exception): pass
 import loom_parse as _loom_parse
 import loom_checker as _loom_checker
 import loom_runtime as _loom_runtime
+import loom_cli as _loom_cli
 
 _PARSE_FRONTEND = _loom_parse.Frontend(LoomError)
 
@@ -157,58 +158,11 @@ def run_wasm(program_src, call_src):
     return _loom_wasm.run_wasm(program_src, call_src, _WASM_FRONTEND)
 
 # ---- CLI: turn the kernel into a usable TOOL. `python3 loom.py <check|run|build|audit> file.loom [call] [--target py|js|wat]` ----
+_CLI_FRONTEND = _loom_cli.Frontend(parse, check, run_call, compile_py, compile_js, emit_wat, LoomError)
+
+
 def _cli(argv):
-    flags, pos, i = {}, [], 0
-    while i < len(argv):
-        a = argv[i]
-        if a == "--target" and i + 1 < len(argv): flags["target"] = argv[i+1]; i += 2
-        elif a.startswith("--target="): flags["target"] = a.split("=", 1)[1]; i += 1
-        else: pos.append(a); i += 1
-    if len(pos) < 2:
-        print("usage: python3 loom.py <check|run|build|audit> FILE [call] [--target py|js]"); return 2
-    cmd, path = pos[0], pos[1]; call = pos[2] if len(pos) > 2 else "(main)"
-    try: src = open(path).read()
-    except OSError as e: print("cannot read file: " + str(e)); return 2
-    if cmd == "check":
-        _, errs = check(parse(src))
-        if errs:
-            print("REJECTED:"); [print("  - " + e) for e in errs]; return 1
-        print(f"OK — checked, all effects honest"); return 0
-    if cmd == "run":
-        try: val, out = run_call(src, call)
-        except LoomError as e: print("REJECTED: " + str(e)); return 1
-        for line in out: print(line)
-        print("=> " + repr(val)); return 0
-    if cmd == "build":
-        tgt = flags.get("target", "py")
-        try: print(emit_wat(src) if tgt == "wat" else (compile_js(src) if tgt == "js" else compile_py(src)))
-        except LoomError as e: print("REJECTED: " + str(e)); return 1
-        return 0
-    if cmd == "audit":                                  # DISTRIBUTION: surface the capability surface of AI-written code
-        fns, errs = check(parse(src))                   # check infers every row even when a lie makes it REJECT
-        ftab = {}                                        # name-attributed violations ONLY (check()-level errors are "name: ...")
-        for e in errs:                                   # infer()-level errors (seam/trust/unresolved) are NOT prefixed
-            k = e.split(": ", 1)[0]
-            if k in fns: ftab.setdefault(k, []).append(e)
-        SENS = {"Net", "IO", "FFI", "Alloc"}             # capabilities a human auditor must scrutinise (Pure is safe)
-        print("LOOM AUDIT - capability surface of AI-written code (DECLARED vs actually PERFORMED)")
-        for name, info in fns.items():
-            decl = set(info["decl"]); perf = set(info["eff"]) - {"?"}   # '?' = un-seamed foreign marker, not a capability
-            mine = ftab.get(name, [])
-            lies = bool(mine) or bool(perf - decl) or ("?" in info["eff"]) or bool(set(info.get("req", set())) - perf)
-            caps = sorted(perf & SENS)
-            tag = "LIE   " if lies else ("REVIEW" if caps else "clean ")
-            d = " ".join(sorted(decl)) or "Pure"; a = " ".join(sorted(perf)) or "Pure"
-            extra = ("  <- holds: " + ", ".join(caps)) if (caps and not lies) else ""
-            print(f"  [{tag}] {name}: declared ({d}) | performs ({a}){extra}")
-            for e in mine: print("           ! " + e)
-        if errs:
-            print(f"-- FINDINGS ({len(errs)}), every violation verbatim:")
-            for e in errs: print("   ! " + e)
-        else:
-            print("-- no violations; review every non-Pure capability above")
-        return 1 if errs else 0
-    print("unknown command: " + cmd); return 2
+    return _loom_cli.cli(argv, _CLI_FRONTEND)
 
 if __name__ == "__main__":
     import sys

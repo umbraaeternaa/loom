@@ -1034,6 +1034,32 @@ def main():
             print(f"  {'ok  ' if r30 else 'FAIL'} cli audit: clean surfaces clean, liar returns findings")
     except Exception as e:
         print(f"  FAIL cli audit: {e}")
+    try:                                               # CLI lives behind a stable facade in development builds
+        import io, contextlib
+        is_browser_bundle = Path(_loom.__file__).parent.name == "docs"
+        if is_browser_bundle:
+            cli_boundary_ok = True                     # published Pyodide artifact is intentionally one self-contained file
+        else:
+            impl = getattr(_loom, "_loom_cli", None)
+            frontend = getattr(_loom, "_CLI_FRONTEND", None)
+            with tempfile.TemporaryDirectory() as td:
+                sample = Path(td) / "sample.loom"
+                sample.write_text('(defx pure () (fn (x) (* x x)))\n')
+                left = io.StringIO()
+                right = io.StringIO()
+                with contextlib.redirect_stdout(left):
+                    left_code = _loom._cli(["check", str(sample)])
+                with contextlib.redirect_stdout(right):
+                    right_code = impl.cli(["check", str(sample)], frontend)
+            cli_boundary_ok = (
+                getattr(impl, "__name__", None) == "loom_cli"
+                and left_code == right_code == 0
+                and left.getvalue() == right.getvalue()
+            )
+        ok += cli_boundary_ok
+        print(f"  {'ok  ' if cli_boundary_ok else 'FAIL'} cli: stable module facade")
+    except Exception as e:
+        print(f"  FAIL cli module facade: {e}")
     try:                                               # deterministic property fuzz is part of the citadel, not an optional side script
         fuzz = Path(__file__).with_name("fuzz_tests.py")
         fr = subprocess.run([sys.executable, str(fuzz), "--cases", "64", "--seed", "0xC17ADE1"], capture_output=True, text=True)
@@ -1042,7 +1068,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 55   # runtime/backend smokes, including parser/checker/runtime/backend isolation, runtime facade, shared backend contracts, and deterministic property fuzz
+    total = len(CASES) + 56   # runtime/backend smokes, including parser/checker/runtime/backend isolation, runtime/cli facades, shared backend contracts, and deterministic property fuzz
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1
