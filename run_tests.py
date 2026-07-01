@@ -543,14 +543,35 @@ def main():
             return i % len(runtime_programs), run_call(program, call)
         with ThreadPoolExecutor(max_workers=8) as pool:
             isolated = list(pool.map(run_isolated, range(64)))
+        is_browser_bundle = Path(_loom.__file__).parent.name == "docs"
+        boundary_ok = is_browser_bundle or getattr(_loom, "_loom_runtime", None).__name__ == "loom_runtime"
         runtime_context_ok = (
+            boundary_ok
+            and
             not hasattr(_loom, "_CAPS")
             and all(got == expected[i] for i, got in isolated)
         )
         ok += runtime_context_ok
-        print(f"  {'ok  ' if runtime_context_ok else 'FAIL'} runtime: isolated capability contexts (64 parallel calls)")
+        print(f"  {'ok  ' if runtime_context_ok else 'FAIL'} runtime: module boundary + isolated capability contexts (64 parallel calls)")
     except Exception as e:
         print(f"  FAIL runtime capability isolation: {e}")
+    try:                                               # runtime facade must stay a thin wrapper over the extracted module
+        runtime_program = '(defx rt () (fn (x) (if (> x 0) (+ x 1) x)))'
+        is_browser_bundle = Path(_loom.__file__).parent.name == "docs"
+        if is_browser_bundle:
+            runtime_facade_ok = True                   # published Pyodide artifact is intentionally one self-contained file
+        else:
+            impl = getattr(_loom, "_loom_runtime", None)
+            frontend = getattr(_loom, "_RUNTIME_FRONTEND", None)
+            runtime_facade_ok = (
+                getattr(impl, "__name__", None) == "loom_runtime"
+                and run_call(runtime_program, "(rt 4)") == impl.run_call(runtime_program, "(rt 4)", frontend)
+                and getattr(_loom, "Closure", None) is getattr(impl, "Closure", None)
+            )
+        ok += runtime_facade_ok
+        print(f"  {'ok  ' if runtime_facade_ok else 'FAIL'} runtime: stable module facade")
+    except Exception as e:
+        print(f"  FAIL runtime module facade: {e}")
     try:                                               # runtime smoke: an honest program actually RUNS
         val, _ = run_call('(defx square () (fn (x) (* x x)))', "(square 7)")
         run_ok = (val == 49); ok += run_ok
@@ -1021,7 +1042,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 54   # runtime/backend smokes, including parser/checker/runtime/backend isolation, shared backend contracts, and deterministic property fuzz
+    total = len(CASES) + 55   # runtime/backend smokes, including parser/checker/runtime/backend isolation, runtime facade, shared backend contracts, and deterministic property fuzz
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

@@ -33,3 +33,12 @@ class WasmFrontend(BackendFrontend):
     def __init__(self, parse, check, pname, error, op, check_call_literals, platent):
         super().__init__(parse, check, pname, error, op, check_call_literals)
         self.platent = platent
+
+
+class RuntimeFrontend(BackendFrontend):
+    __slots__ = ("roleclauses", "i31")
+
+    def __init__(self, parse, check, pname, error, op, check_call_literals, roleclauses, i31):
+        super().__init__(parse, check, pname, error, op, check_call_literals)
+        self.roleclauses = roleclauses
+        self.i31 = i31
