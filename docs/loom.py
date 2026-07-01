@@ -65,7 +65,14 @@ def _cap_ok(eff):
 def _foreign_logger(args, out):                        # opaque foreign code that WANTS IO; emits ONLY if IO was granted
     if _cap_ok("IO"): out.append("foreign:" + str(args[0]))
     return args[0]
-FOREIGN = {"logger": _foreign_logger}                  # registry of effect-opaque foreign functions reached via (ffi ..)
+def _foreign_opaque(args, out):                        # opaque foreign component used to exercise attested ffi paths
+    return args[0] if args else 0
+FOREIGN = {
+    "logger": _foreign_logger,
+    "lib": _foreign_opaque,
+    "x": _foreign_opaque,
+    "other": _foreign_opaque,
+}                  # registry of effect-opaque foreign functions reached via (ffi ..)
 INT_BITS = 31
 INT_MIN = -(1 << (INT_BITS - 1))
 INT_MAX = (1 << (INT_BITS - 1)) - 1
@@ -1042,7 +1049,7 @@ def compile_py(program_src):
              "_caps = []",
              "def _cap_ok(e): return (not _caps) or (e in _caps[-1])",
              "def _seam(row, thunk): _caps.append(set(row)); _r = thunk(); _caps.pop(); return _r",
-             "_FOREIGN = {'logger': (lambda a: (a[0], print('foreign:'+str(a[0])) if (_cap_ok('IO') and _sd[0]==0) else None)[0])}",
+             "_FOREIGN = {'logger': (lambda a: (a[0], print('foreign:'+str(a[0])) if (_cap_ok('IO') and _sd[0]==0) else None)[0]), 'lib': (lambda a: a[0] if a else 0), 'x': (lambda a: a[0] if a else 0), 'other': (lambda a: a[0] if a else 0)}",
              "def _ffi(name, args): return _FOREIGN[name](args)"]   # FFI codegen: cap stack (seam SANDBOX) + foreign registry -> ffi mirrors the interpreter (foreign I/O fires only if its seam granted it)
     for top in parse(program_src):
         if isinstance(top, list) and top and top[0] == "defx":
@@ -1127,7 +1134,7 @@ def compile_js(program_src):
              "let _caps=[];",
              "function _cap_ok(e){ return (_caps.length===0)||_caps[_caps.length-1].has(e); }",
              "function _seam(row,thunk){ _caps.push(new Set(row)); let _r=thunk(); _caps.pop(); return _r; }",
-             "const _FOREIGN={ logger:(a)=>{ if(_cap_ok('IO')&&_sd===0) console.log('foreign:'+String(a[0])); return a[0]; } };",
+             "const _FOREIGN={ logger:(a)=>{ if(_cap_ok('IO')&&_sd===0) console.log('foreign:'+String(a[0])); return a[0]; }, lib:(a)=>a.length?a[0]:0, x:(a)=>a.length?a[0]:0, other:(a)=>a.length?a[0]:0 };",
              "function _ffi(name,args){ return _FOREIGN[name](args); }"]  # FFI codegen (JS): cap stack + foreign registry -> ffi mirrors the interpreter
     for top in parse(program_src):
         if isinstance(top, list) and top and top[0] == "defx":
@@ -2080,7 +2087,7 @@ def run_wasm(program_src, call_src):
           "const __pop_caps=()=>{ __caps.pop(); return 0; };"
           "const __has_cap=(e)=>{ if(!__caps.length) return 1; const m=__caps[__caps.length-1]|0; return ((m >>> (e|0)) & 1) ? 1 : 0; };"
           "const __eff_name=(k)=>({0:'IO',1:'Net',2:'Rand',3:'Alloc'}[k]??k);"
-          "const __ffi=(id,args,silent)=>{ const name=__foreigns[String(id)]??String(id); if(name==='logger'){ const argv=__dec(args); const raw0=(args===3)?0:__rd((args&-2)+4); if(__has_cap(0) && !silent) __out.push('foreign:'+String(argv[0])); return raw0|0; } throw new Error('unknown foreign fn: '+name); };"
+          "const __ffi=(id,args,silent)=>{ const name=__foreigns[String(id)]??String(id); if(name==='logger'){ const argv=__dec(args); const raw0=(args===3)?0:__rd((args&-2)+4); if(__has_cap(0) && !silent) __out.push('foreign:'+String(argv[0])); return raw0|0; } if(name==='lib'||name==='x'||name==='other') return (args===3)?0:__rd((args&-2)+4); throw new Error('unknown foreign fn: '+name); };"
           "const __imports={env:{push_handler:__push,pop_handler:__pop,current_handler:__cur,host_print:(x)=>{__out.push(String(__dec(x)));return x|0;},push_caps:__push_caps,pop_caps:__pop_caps,has_cap:__has_cap,host_ffi:(id,args,silent)=>__ffi(id|0,args|0,silent|0)}};"
           "WebAssembly.instantiate(new Uint8Array([" + arr + "]), __imports)"
           ".then(m=>{__mem=m.instance.exports.memory ? new DataView(m.instance.exports.memory.buffer) : null;"

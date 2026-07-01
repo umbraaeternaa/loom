@@ -934,7 +934,7 @@ def run_wasm(program_src, call_src, frontend):
           "const __pop_caps=()=>{ __caps.pop(); return 0; };"
           "const __has_cap=(e)=>{ if(!__caps.length) return 1; const m=__caps[__caps.length-1]|0; return ((m >>> (e|0)) & 1) ? 1 : 0; };"
           "const __eff_name=(k)=>({0:'IO',1:'Net',2:'Rand',3:'Alloc'}[k]??k);"
-          "const __ffi=(id,args,silent)=>{ const name=__foreigns[String(id)]??String(id); if(name==='logger'){ const argv=__dec(args); const raw0=(args===3)?0:__rd((args&-2)+4); if(__has_cap(0) && !silent) __out.push('foreign:'+String(argv[0])); return raw0|0; } throw new Error('unknown foreign fn: '+name); };"
+          "const __ffi=(id,args,silent)=>{ const name=__foreigns[String(id)]??String(id); const argv=__dec(args); const raw0=(args===3)?0:__rd((args&-2)+4); if(name==='logger'){ if(__has_cap(0) && !silent) __out.push('foreign:'+String(argv[0])); return raw0|0; } if(name==='lib'||name==='x'||name==='other') return raw0|0; throw new Error('unknown foreign fn: '+name); };"
           "const __imports={env:{push_handler:__push,pop_handler:__pop,current_handler:__cur,host_print:(x)=>{__out.push(String(__dec(x)));return x|0;},push_caps:__push_caps,pop_caps:__pop_caps,has_cap:__has_cap,host_ffi:(id,args,silent)=>__ffi(id|0,args|0,silent|0)}};"
           "WebAssembly.instantiate(new Uint8Array([" + arr + "]), __imports)"
           ".then(m=>{__mem=m.instance.exports.memory ? new DataView(m.instance.exports.memory.buffer) : null;"

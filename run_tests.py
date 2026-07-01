@@ -682,8 +682,15 @@ def main():
     try:                                               # runtime: the SAME opaque foreign call, bounded by its seam's grant
         v19, o19 = run_call('(defx fa (IO) (fn (x) (seam (IO) (ffi "logger" x))))', "(fa 7)")
         v20, o20 = run_call('(defx fb () (fn (x) (seam (Pure) (ffi "logger" x))))', "(fb 7)")
-        r19 = (v19 == 7 and o19 == ["foreign:7"] and v20 == 7 and o20 == []); ok += r19
-        print(f"  {'ok  ' if r19 else 'FAIL'} runtime ffi: IO-granted emits {o19} | sandboxed-to-pure emits {o20}")
+        v21a, o21a = run_call('(defx fv () (fn (x) (trust (seam (Pure) (vouch auditor alice "lib") (ffi "lib" x)))))', "(fv 7)")
+        v21b, o21b = run_call('(defx fm () (fn (x) (trust (seamN 2 (Pure) (vouch auditor alice "lib") (ffi "lib" x)))))', "(fm 7)")
+        denied_unknown = False
+        try:
+            run_call('(defx fu (IO) (fn (x) (seam (IO) (ffi "ghost" x))))', "(fu 7)")
+        except LoomError:
+            denied_unknown = True
+        r19 = (v19 == 7 and o19 == ["foreign:7"] and v20 == 7 and o20 == [] and v21a == 7 and o21a == [] and v21b == 7 and o21b == [] and denied_unknown); ok += r19
+        print(f"  {'ok  ' if r19 else 'FAIL'} runtime ffi: logger={o19} | pure={o20} | vouched lib={v21a} | metered lib={v21b}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime ffi: {e}")
     try:                                               # runtime: a linear resource program actually runs
@@ -732,6 +739,8 @@ def main():
                  ('(defx f (Alloc) (fn () (head (seam (Alloc) (alloc 3)))))', "(f)"),           # EFFECT op alloc -> [0,1,2], head => 0
                  ('(defx fa (IO) (fn (x) (seam (IO) (ffi "logger" x))))', "(fa 5)"),            # FFI codegen: seam GRANTS IO -> foreign emits "foreign:5"; interp==Py==Node
                  ('(defx fb () (fn (x) (seam (Pure) (ffi "logger" x))))', "(fb 5)"),             # FFI codegen FLAGSHIP: seam grants NOTHING -> foreign I/O SANDBOXED to silence on every backend
+                 ('(defx fv () (fn (x) (trust (seam (Pure) (vouch auditor alice "lib") (ffi "lib" x)))))', "(fv 5)"),  # attested opaque foreign component: accepted statically, pure at runtime, identity payload everywhere
+                 ('(defx fm () (fn (x) (trust (seamN 2 (Pure) (vouch auditor alice "lib") (ffi "lib" x)))))', "(fm 5)"),  # metered attested opaque foreign component keeps the same backend/runtime value path
                  ('(defx f (Rand) (fn () (seam (Rand) (rand))))', "(f)"),                       # EFFECT op rand -> "<rand>"
                  ('(defx f () (fn () (handle (IO) (print 5))))', "(f)"),                        # HANDLE discharges IO -> value 5, output SUPPRESSED []
                  ('(defx mock () (fn (u) u)) (defx f () (fn () (with Net mock (net 5))))', "(f)"),  # WITH reinterprets Net via a pure mock -> (net 5) routes to mock => 5, no net
@@ -814,6 +823,7 @@ def main():
         assert "tag Some" in emit_wat(wpairs[8][0]) and "call $variant" in emit_wat(wpairs[8][0])  # explicit variant helper in WAT
         wat_io = emit_wat('(defx t (IO) (fn () (print 7)))')
         wat_ffi = emit_wat('(defx t (IO) (fn (x) (seam (IO) (ffi "logger" x))))')
+        wat_lib_ffi = emit_wat('(defx t () (fn (x) (seam (Pure) (ffi "lib" x))))')
         wat_with = emit_wat('(defx h () (fn (x) (* x 2))) (defx t () (fn () (with IO h (print 5))))')
         wat_with_local = emit_wat('(defx t () (fn () (let (h (fn (x) (* x 2))) (with IO h (print 5)))))')
         wat_closure = emit_wat('(defx ap (e) (fn ((f e) x) (f x))) (defx u () (fn (x) (ap (fn (y) (* y y)) x)))')
@@ -821,6 +831,7 @@ def main():
         wat_capture9 = emit_wat(CAPTURE9_PROGRAM)
         assert 'import "env" "host_print"' in wat_io and "call $host_print" in wat_io   # WAT mirrors host-print import for IO
         assert 'import "env" "host_ffi"' in wat_ffi and "call $host_ffi" in wat_ffi   # WAT mirrors the foreign boundary import too
+        assert 'call $host_ffi' in wat_lib_ffi and 'foreign lib' in wat_lib_ffi   # opaque lib component lowers through the same WASM foreign boundary
         assert "call $apply1" in wat_with and "func $h" in wat_with   # WAT mirrors top-level with IO handler dispatch via closure apply
         assert "call $apply1" in wat_with_local and "func $lam0" in wat_with_local   # WAT mirrors local closure-valued handler dispatch
         assert "call $apply1" in wat_closure and "func $lam0" in wat_closure   # WAT mirrors closure literals + dispatcher
@@ -957,15 +968,27 @@ def main():
         p_io = '(defx fa (IO) (fn (x) (seam (IO) (ffi "logger" x))))'
         p_pure = '(defx fb () (fn (x) (seam (Pure) (ffi "logger" x))))'
         p_handled = '(defx fh () (fn (x) (handle (IO) (seam (IO) (ffi "logger" x)))))'
+        p_lib = '(defx fv () (fn (x) (seam (Pure) (ffi "lib" x))))'
+        p_metered_lib = '(defx fm () (fn (x) (seamN 2 (Pure) (ffi "lib" x))))'
         w37, o37 = run_wasm(p_io, "(fa 7)")
         w38, o38 = run_wasm(p_pure, "(fb 7)")
         w39, o39 = run_wasm(p_handled, "(fh 7)")
+        w40, o40 = run_wasm(p_lib, "(fv 7)")
+        w41, o41 = run_wasm(p_metered_lib, "(fm 7)")
         r37, i37 = run_call(p_io, "(fa 7)")
         r38, i38 = run_call(p_pure, "(fb 7)")
         r39, i39 = run_call(p_handled, "(fh 7)")
-        ffi_wasm_ok = ((w37, o37) == (r37, i37) and (w38, o38) == (r38, i38) and (w39, o39) == (r39, i39))
+        r40, i40 = run_call(p_lib, "(fv 7)")
+        r41, i41 = run_call(p_metered_lib, "(fm 7)")
+        denied_unknown = False
+        try:
+            run_wasm('(defx fu (IO) (fn (x) (seam (IO) (ffi "ghost" x))))', "(fu 7)")
+        except LoomError:
+            denied_unknown = True
+        ffi_wasm_ok = ((w37, o37) == (r37, i37) and (w38, o38) == (r38, i38) and (w39, o39) == (r39, i39)
+                       and (w40, o40) == (r40, i40) and (w41, o41) == (r41, i41) and denied_unknown)
         ok += ffi_wasm_ok
-        print(f"  {'ok  ' if ffi_wasm_ok else 'FAIL'} backend(WASM): ffi logger parity => ({w37}, {o37}) / ({w38}, {o38}) / handled {o39}")
+        print(f"  {'ok  ' if ffi_wasm_ok else 'FAIL'} backend(WASM): ffi logger/lib parity => ({w37}, {o37}) / ({w38}, {o38}) / handled {o39} / lib {w40} / metered-lib {w41}")
     except Exception as e:
         print(f"  FAIL backend(WASM) ffi: {e}")
     try:                                               # runtime: variant + match extracts the payload / picks the arm

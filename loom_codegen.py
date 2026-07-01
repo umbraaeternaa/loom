@@ -71,7 +71,7 @@ def compile_py(program_src, frontend):
              "_caps = []",
              "def _cap_ok(e): return (not _caps) or (e in _caps[-1])",
              "def _seam(row, thunk): _caps.append(set(row)); _r = thunk(); _caps.pop(); return _r",
-             "_FOREIGN = {'logger': (lambda a: (a[0], print('foreign:'+str(a[0])) if (_cap_ok('IO') and _sd[0]==0) else None)[0])}",
+             "_FOREIGN = {'logger': (lambda a: (a[0], print('foreign:'+str(a[0])) if (_cap_ok('IO') and _sd[0]==0) else None)[0]), 'lib': (lambda a: a[0] if a else 0), 'x': (lambda a: a[0] if a else 0), 'other': (lambda a: a[0] if a else 0)}",
              "def _ffi(name, args): return _FOREIGN[name](args)"]   # FFI codegen: cap stack (seam SANDBOX) + foreign registry -> ffi mirrors the interpreter (foreign I/O fires only if its seam granted it)
     for top in frontend.parse(program_src):
         if isinstance(top, list) and top and top[0] == "defx":
@@ -156,7 +156,7 @@ def compile_js(program_src, frontend):
              "let _caps=[];",
              "function _cap_ok(e){ return (_caps.length===0)||_caps[_caps.length-1].has(e); }",
              "function _seam(row,thunk){ _caps.push(new Set(row)); let _r=thunk(); _caps.pop(); return _r; }",
-             "const _FOREIGN={ logger:(a)=>{ if(_cap_ok('IO')&&_sd===0) console.log('foreign:'+String(a[0])); return a[0]; } };",
+             "const _FOREIGN={ logger:(a)=>{ if(_cap_ok('IO')&&_sd===0) console.log('foreign:'+String(a[0])); return a[0]; }, lib:(a)=>((a.length>0)?a[0]:0), x:(a)=>((a.length>0)?a[0]:0), other:(a)=>((a.length>0)?a[0]:0) };",
              "function _ffi(name,args){ return _FOREIGN[name](args); }"]  # FFI codegen (JS): cap stack + foreign registry -> ffi mirrors the interpreter
     for top in frontend.parse(program_src):
         if isinstance(top, list) and top and top[0] == "defx":

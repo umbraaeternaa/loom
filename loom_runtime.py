@@ -49,7 +49,16 @@ def _foreign_logger(args, out):
     return args[0]
 
 
-FOREIGN = {"logger": _foreign_logger}
+def _foreign_opaque(args, out):
+    return args[0] if args else 0
+
+
+FOREIGN = {
+    "logger": _foreign_logger,
+    "lib": _foreign_opaque,
+    "x": _foreign_opaque,
+    "other": _foreign_opaque,
+}
 
 
 def _eval_seq(frontend, body, env, fns, out, handlers):
