@@ -499,12 +499,15 @@ def main():
         with ThreadPoolExecutor(max_workers=8) as pool:
             isolated = list(pool.map(check_isolated, range(64)))
         legacy = ("_POLICY", "_RENV", "_TAINT_PROV", "_TAINT_ROLE")
+        is_browser_bundle = Path(_loom.__file__).parent.name == "docs"
+        boundary_ok = is_browser_bundle or getattr(_loom, "_loom_checker", None).__name__ == "loom_checker"
         checker_context_ok = (
-            not any(hasattr(_loom, name) for name in legacy)
+            boundary_ok
+            and not any(hasattr(_loom, name) for name in legacy)
             and all(got == expected[i] for i, got in isolated)
         )
         ok += checker_context_ok
-        print(f"  {'ok  ' if checker_context_ok else 'FAIL'} checker: isolated contexts (64 parallel checks)")
+        print(f"  {'ok  ' if checker_context_ok else 'FAIL'} checker: module boundary + isolated contexts (64 parallel checks)")
     except Exception as e:
         print(f"  FAIL checker context isolation: {e}")
     try:                                               # every runtime call owns its capability stack
