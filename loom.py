@@ -8,6 +8,7 @@
 # functions with ROW-POLYMORPHISM + anonymous LAMBDAS/CLOSURES. A tiny s-expr language + static effect checker
 # + interpreter. Grown nightly by the organism, verified by run_tests.py — the language only ever grows GREEN.
 import re
+from contextvars import ContextVar
 
 EFFECTS = {"Pure", "IO", "Net", "Alloc", "FFI", "Rand"}   # Rand = nondeterminism (randomness / wall-clock)
 # checker vocab MUST stay == interpreter (ev) vocab — no form the checker knows that the runtime can't run.
@@ -17,12 +18,32 @@ PURE_OPS = {"+", "-", "*", "=", "<", ">",          # pure ops the interpreter ru
 OP = {"IO": "print", "Net": "net", "Alloc": "alloc", "Rand": "rand"}   # which builtin operation a `with`-handler reinterprets
 _CAPS = []                                              # runtime capability stack: each seam pushes the authority it grants
 def _cap_ok(eff): return (not _CAPS) or (eff in _CAPS[-1])  # top-level host is unrestricted; a seam SANDBOXES its body
-_POLICY = {"rank": {}, "require": {}, "forbid": set(), "author": {}, "confine": []}   # D15/D16 + D20: author[NAME]={(role,who)..}; confine=[(EFF,role)..]; program-wide trust policy (STATIC): (rank LOW HIGH) global subsumption;
-#   require[EFF] = {role..} every seam granting EFF must vouch; forbid = {EFF..} the effect may not escape any function's row. check() RESETS it.
-_RENV = []                                              # static stack of {resource-name: effect-set} for typed resources
 _MISS = object()                                        # sentinel for scoped save/restore
-_TAINT_PROV = {}                                        # D19 cross-statement TAINT: var -> provenance set (built by `let` in infer,
-_TAINT_ROLE = {}                                        #   read by the gates) so a (let (y (prov ai ..)) ..) flows into a trust LATER in scope
+
+
+class _CheckerState:
+    """Mutable checker state scoped to one check() invocation."""
+    __slots__ = ("policy", "renv", "taint_prov", "taint_role")
+
+    def __init__(self):
+        self.policy = {
+            "rank": {}, "require": {}, "forbid": set(), "author": {},
+            "confine": [], "seal": set(), "params": set(),
+        }
+        self.renv = []
+        self.taint_prov = {}
+        self.taint_role = {}
+
+
+_CHECKER_STATE = ContextVar("loom_checker_state", default=None)
+
+
+def _checker_state():
+    state = _CHECKER_STATE.get()
+    if state is None:
+        state = _CheckerState()
+        _CHECKER_STATE.set(state)
+    return state
 def _foreign_logger(args, out):                        # opaque foreign code that WANTS IO; emits ONLY if IO was granted
     if _cap_ok("IO"): out.append("foreign:" + str(args[0]))
     return args[0]
@@ -422,9 +443,9 @@ def _roleclauses(tail):
 
 def _with_policy_rank(up):
     """D15: fold the program-wide (rank LOW HIGH) edges into a gate's local subsumption map (purely additive)."""
-    if not _POLICY["rank"]: return up
+    if not _checker_state().policy["rank"]: return up
     m = {k: set(v) for k, v in up.items()}
-    for lo, his in _POLICY["rank"].items(): m.setdefault(lo, set()).update(his)
+    for lo, his in _checker_state().policy["rank"].items(): m.setdefault(lo, set()).update(his)
     return m
 
 def _direct_effects(node):
@@ -467,7 +488,7 @@ def infer(node, fns, errs, penv=None):
         if inner - decl:
             errs.append(f"seam under-declares: wraps {sorted(inner)} but contract says {sorted(decl)}")
         if role_spec is not None:                       # D12: grant the dangerous effect ONLY to independently-vouched code
-            missing, authors = _quorum_check(set(role_spec[1:]), up, body, _TAINT_ROLE)
+            missing, authors = _quorum_check(set(role_spec[1:]), up, body, _checker_state().taint_role)
             if missing:
                 errs.append(f"seam grant denied: capability {sorted(decl)} requires role(s) {sorted(missing)} — not independently vouched (need a non-ai author, or a subsuming role)")
             elif len(authors) < 2:
@@ -475,15 +496,15 @@ def infer(node, fns, errs, penv=None):
         for (eff, role) in needs:                       # D13: a SPECIFIC effect is granted only if its OWN role vouches for it
             if eff not in decl:
                 errs.append(f"seam: (needs {eff} {role}) names {eff}, not granted by this seam {sorted(decl)}")
-            elif _quorum_check({role}, up, body, _TAINT_ROLE)[0]:    # missing non-empty => role not covered (by a non-ai author or a subsuming role)
+            elif _quorum_check({role}, up, body, _checker_state().taint_role)[0]:    # missing non-empty => role not covered (by a non-ai author or a subsuming role)
                 errs.append(f"seam grant denied: effect {eff} requires role '{role}' — not vouched by a non-ai author (or a subsuming role)")
         for eff in sorted(decl):                        # D15/D17: program-wide (require EFF spec) per granted effect
-            for spec in sorted(_POLICY["require"].get(eff, ()), key=str):
+            for spec in sorted(_checker_state().policy["require"].get(eff, ()), key=str):
                 if isinstance(spec, int):               # D17: the grant needs >= N DISTINCT independent (non-ai) authors
-                    independent = {p for x in body for p in prov_of(x, _TAINT_PROV)} - {"ai"}
+                    independent = {p for x in body for p in prov_of(x, _checker_state().taint_prov)} - {"ai"}
                     if len(independent) < spec:
                         errs.append(f"policy: effect {eff} requires >= {spec} independent authors (program-wide (require {eff} {spec})), got {len(independent)} {sorted(independent) or '(none)'}")
-                elif _quorum_check({spec}, up, body, _TAINT_ROLE)[0]:  # D15: a SPECIFIC role must be covered (subsumption applies)
+                elif _quorum_check({spec}, up, body, _checker_state().taint_role)[0]:  # D15: a SPECIFIC role must be covered (subsumption applies)
                     errs.append(f"policy: effect {eff} requires role '{spec}' (program-wide (require {eff} {spec})) — not vouched by a non-ai author")
         if h == "seam1":                                # affinity rides AS A PER-SEAM MULTIPLICITY — the row stays a flat
             uc = {}                                     # idempotent SET (superset inference untouched); we additionally
@@ -531,7 +552,7 @@ def infer(node, fns, errs, penv=None):
         for x in node[3:]: inner |= infer(x, fns, errs, penv)
         return (inner - {E}) | hlat
     if h == "use":                                      # consume a linear resource; its USE performs the resource's effect
-        for frame in reversed(_RENV):                   # (a typed resource unifies linear use-once WITH an effect)
+        for frame in reversed(_checker_state().renv):                   # (a typed resource unifies linear use-once WITH an effect)
             if node[1] in frame: return set(frame[node[1]])
         return set()
     if h == "resource":                                 # (resource r body) or (resource (r E..) body): LINEAR + effect E
@@ -546,12 +567,12 @@ def infer(node, fns, errs, penv=None):
                 errs.append(f"resource {rname}: effect(s) {sorted(amb)} performed ambiently inside its scope — "
                             f"route through (use {rname}); the resource is E's sole bearer "
                             f"(a declared (seam ..) re-grant is allowed)")
-        _RENV.append({rname: reffs})                    # in scope, (use rname) performs reffs
+        _checker_state().renv.append({rname: reffs})                    # in scope, (use rname) performs reffs
         try:
             eff = set()
             for x in node[2:]: eff |= infer(x, fns, errs, penv)
         finally:
-            _RENV.pop()
+            _checker_state().renv.pop()
         uc = {}
         for x in node[2:]:
             for e, c in _ucount(x, fns, penv).items(): uc[e] = _uadd(uc.get(e, 0), c)
@@ -577,13 +598,13 @@ def infer(node, fns, errs, penv=None):
         name, val = node[1][0], node[1][1]
         eff = infer(val, fns, errs, penv)               # the bound value's OWN effects (defining a lambda = none)
         bp = {**penv, name: latent_of(val, fns, penv, errs)} if is_fn_expr(val, fns, penv) else penv
-        sp = _TAINT_PROV.get(name, _MISS); sr = _TAINT_ROLE.get(name, _MISS)   # D19: bind name's provenance for the body's scope
-        _TAINT_PROV[name] = prov_of(val, _TAINT_PROV); _TAINT_ROLE[name] = roles_of(val, _TAINT_ROLE)   # (chained lets resolve)
+        sp = _checker_state().taint_prov.get(name, _MISS); sr = _checker_state().taint_role.get(name, _MISS)   # D19: bind name's provenance for the body's scope
+        _checker_state().taint_prov[name] = prov_of(val, _checker_state().taint_prov); _checker_state().taint_role[name] = roles_of(val, _checker_state().taint_role)   # (chained lets resolve)
         try:
             for x in node[2:]: eff |= infer(x, fns, errs, bp)   # a let-bound function becomes callable; the gate sees the taint
         finally:                                        # restore (shadowing-safe), so the binding never leaks past its scope
-            (_TAINT_PROV.__setitem__(name, sp) if sp is not _MISS else _TAINT_PROV.pop(name, None))
-            (_TAINT_ROLE.__setitem__(name, sr) if sr is not _MISS else _TAINT_ROLE.pop(name, None))
+            (_checker_state().taint_prov.__setitem__(name, sp) if sp is not _MISS else _checker_state().taint_prov.pop(name, None))
+            (_checker_state().taint_role.__setitem__(name, sr) if sr is not _MISS else _checker_state().taint_role.pop(name, None))
         return eff
     if h == "prov":                                     # (prov P expr) — tag PROVENANCE P (who authored it); a channel
         eff = set()                                     # SEPARATE from effects: prov flows up, effects pass through unchanged
@@ -613,7 +634,7 @@ def infer(node, fns, errs, penv=None):
         if is_roles:                                     # D10 ROLE-QUORUM + D11 role LATTICE: (trust (roles ..) (sub LOW HIGH).. e)
             _, up, _, body = _roleclauses(node[1:])       # node[1] IS the (roles ..) spec — consume it + any (sub LOW HIGH) clauses
             roles_req = set(spec[1:])                     # up[LOW] = {HIGH..}: a higher role can STAND IN FOR a lower one (D11)
-            missing, authors = _quorum_check(roles_req, _with_policy_rank(up), body, _TAINT_ROLE)   # D15: ranks; D19: taint env
+            missing, authors = _quorum_check(roles_req, _with_policy_rank(up), body, _checker_state().taint_role)   # D15: ranks; D19: taint env
             if missing:
                 errs.append(f"trust gate (roles): role(s) {sorted(missing)} not independently covered (need a non-ai author, or a role that subsumes it) — self-certified")
             elif len(authors) < 2:
@@ -622,9 +643,9 @@ def infer(node, fns, errs, penv=None):
             has_n = isinstance(spec, int)                #                 INDEPENDENT anchors (provenance != 'ai'); N defaults 1
             need = spec if has_n else 1
             body = node[2:] if has_n else node[1:]       # independence is a QUANTITY = count of distinct non-ai sources;
-            independent = {p for x in body for p in prov_of(x, _TAINT_PROV)} - {"ai"} # SET; D19: taint env so bound vars carry prov
+            independent = {p for x in body for p in prov_of(x, _checker_state().taint_prov)} - {"ai"} # SET; D19: taint env so bound vars carry prov
             p0 = body[0] if len(body) == 1 else None     # D22: (trust [N] raw-param) DEFERS to the call site, where
-            deferred = isinstance(p0, str) and p0 in _POLICY.get("params", set()) and p0 not in _TAINT_PROV  # the arg's provenance discharges it; only a RAW param (untainted + unshadowed) defers
+            deferred = isinstance(p0, str) and p0 in _checker_state().policy.get("params", set()) and p0 not in _checker_state().taint_prov  # the arg's provenance discharges it; only a RAW param (untainted + unshadowed) defers
             if len(independent) < need and not deferred:
                 errs.append(f"trust gate: need >= {need} independent anchor(s), got {len(independent)} {sorted(independent) or '(none)'} — value too self-referential / under-corroborated")
         eff = set()
@@ -640,9 +661,9 @@ def infer(node, fns, errs, penv=None):
         for pp, need in fns[h].get("preq", {}).items():                  #   the arg bound to a trusted param must carry the anchors
             ix = pn.index(pp)
             arg = node[ix+1] if ix + 1 < len(node) else None
-            if isinstance(arg, str) and arg in _POLICY.get("params", set()) and arg not in _TAINT_PROV:
+            if isinstance(arg, str) and arg in _checker_state().policy.get("params", set()) and arg not in _checker_state().taint_prov:
                 continue                                             # D25: arg is OUR OWN raw param -> obligation rides up via our preq (deferred to callers)
-            anchors = (prov_of(arg, _TAINT_PROV) - {"ai"}) if arg is not None else set()
+            anchors = (prov_of(arg, _checker_state().taint_prov) - {"ai"}) if arg is not None else set()
             if len(anchors) < need:
                 errs.append(f"call to {h}: arg for trusted param '{pp}' carries {len(anchors)} independent anchor(s) {sorted(anchors) or '(none)'}, needs >= {need} — provenance does not flow through (or is too self-referential)")
     elif h not in PURE_OPS:                             # unknown head -> REFUSE to verify (never assume pure)
@@ -671,23 +692,23 @@ def _has_head(node, head):
     return any(_has_head(c, head) for c in node[1:])
 
 
-def check(program):
+def _check_program(program):
     """Returns (fns, errors). errors empty == program type/effect-checks (is accepted)."""
-    _POLICY["rank"] = {}; _POLICY["require"] = {}; _POLICY["forbid"] = set(); _POLICY["author"] = {}; _POLICY["confine"] = []; _POLICY["seal"] = set()   # D15/D16/D20/D22: RESET policy first (never leaks between programs)
-    _TAINT_PROV.clear(); _TAINT_ROLE.clear()             # D19: RESET cross-statement taint env
+    _checker_state().policy["rank"] = {}; _checker_state().policy["require"] = {}; _checker_state().policy["forbid"] = set(); _checker_state().policy["author"] = {}; _checker_state().policy["confine"] = []; _checker_state().policy["seal"] = set()   # D15/D16/D20/D22: RESET policy first (never leaks between programs)
+    _checker_state().taint_prov.clear(); _checker_state().taint_role.clear()             # D19: RESET cross-statement taint env
     for top in program:                                  # collect (rank LOW HIGH) / (require EFF role) / (forbid EFF) BEFORE inference
         if isinstance(top, list) and len(top) >= 3 and top[0] == "rank":
-            _POLICY["rank"].setdefault(top[1], set()).add(top[2])
+            _checker_state().policy["rank"].setdefault(top[1], set()).add(top[2])
         elif isinstance(top, list) and len(top) >= 3 and top[0] == "require":
-            _POLICY["require"].setdefault(top[1], set()).add(top[2])
+            _checker_state().policy["require"].setdefault(top[1], set()).add(top[2])
         elif isinstance(top, list) and len(top) >= 2 and top[0] == "forbid":
-            _POLICY["forbid"].add(top[1])
+            _checker_state().policy["forbid"].add(top[1])
         elif isinstance(top, list) and len(top) >= 4 and top[0] == "author":   # D20: (author NAME role WHO)
-            _POLICY["author"].setdefault(top[1], set()).add((top[2], top[3]))
+            _checker_state().policy["author"].setdefault(top[1], set()).add((top[2], top[3]))
         elif isinstance(top, list) and len(top) >= 3 and top[0] == "confine":   # D20: (confine EFF role)
-            _POLICY["confine"].append((top[1], top[2]))
+            _checker_state().policy["confine"].append((top[1], top[2]))
         elif isinstance(top, list) and len(top) >= 2 and top[0] == "seal":   # D22: (seal EFF) -- complete-mediation: refuse a static-only discharge
-            _POLICY["seal"].add(top[1])
+            _checker_state().policy["seal"].add(top[1])
     fns = {}
     for top in program:
         if isinstance(top, list) and top and top[0] == "defx":
@@ -713,7 +734,7 @@ def check(program):
     _obl = {n for n, i in fns.items() if i["preq"]}     # obligation-bearing fns: may ONLY be called directly (else refused)
     errors = _int_literal_errors(program)
     for n, i in fns.items():
-        _POLICY["params"] = {pname(p) for p in i["params"]}     # D22: params of THIS fn -> a (trust raw-param) defers to its callers
+        _checker_state().policy["params"] = {pname(p) for p in i["params"]}     # D22: params of THIS fn -> a (trust raw-param) defers to its callers
         for b in i["fn"][2:]: infer(b, fns, errors, i["penv"])   # collect seam/handle/with/lambda/unresolved violations + discharge obligations
         for b in i["fn"][2:]:                           # D22 soundness: an obligation-bearing fn used as a VALUE escapes discharge
             for nm in _value_uses(b, _obl): errors.append(f"{n}: '{nm}' carries a provenance obligation {sorted(fns[nm]['preq'])} and is used as a value — call it directly so it is discharged at the call site")
@@ -723,7 +744,7 @@ def check(program):
             eff = eff - {"?"}
         if eff - i["decl"]:                                 # CEILING: a capability you may not exceed (upper bound)
             errors.append(f"{n}: performs undeclared {sorted(eff - i['decl'])} (declared {sorted(i['decl'])})")
-        banned = eff & _POLICY["forbid"]                    # D16: a program-wide (forbid EFF) — the effect must NOT escape into
+        banned = eff & _checker_state().policy["forbid"]                    # D16: a program-wide (forbid EFF) — the effect must NOT escape into
         if banned:                                          # any function's row (discharge it locally with with/handle, or don't)
             errors.append(f"{n}: performs {sorted(banned)} — forbidden program-wide (forbid {sorted(banned)[0]}); discharge it locally or remove it")
         missing = i["req"] - eff                            # FLOOR: a REQUIRED effect (E!) must ACTUALLY be performed —
@@ -738,26 +759,35 @@ def check(program):
                 cnt = i["uc"].get(rn, 0)
                 if cnt == 0: errors.append(f"{n}: linear param {rn} never used (must be used exactly once)")
                 elif cnt == "M": errors.append(f"{n}: linear param {rn} used more than once")
-    if _POLICY["confine"]:                              # D20: capability CONFINEMENT by author — the COMPOSITION GRAPH
+    if _checker_state().policy["confine"]:                              # D20: capability CONFINEMENT by author — the COMPOSITION GRAPH
         up = _with_policy_rank({})                      # program-wide (rank ..) edges apply to clearance subsumption too
-        for eff, role in _POLICY["confine"]:
+        for eff, role in _checker_state().policy["confine"]:
             for n_, i in fns.items():
                 if eff in i["eff"] and eff in _direct_effects(i["fn"]):   # this defx WIELDS the confined effect directly
-                    if not _author_covers(_POLICY["author"].get(n_, {("ai", "ai")}), role, up):
+                    if not _author_covers(_checker_state().policy["author"].get(n_, {("ai", "ai")}), role, up):
                         errors.append(f"{n_}: wields confined effect {eff} but is not authored by a cleared '{role}' "
                                       f"(program-wide (confine {eff} {role})) — uncleared component in the capability graph")
-    if _POLICY["seal"]:                                 # D22: COMPLETE MEDIATION -- a sealed effect may not be silently
+    if _checker_state().policy["seal"]:                                 # D22: COMPLETE MEDIATION -- a sealed effect may not be silently
         for n_, i in fns.items():                       # dropped by `handle` (a static-only discharge that still FIRES at
-            bad = _sealed_discharges(i["fn"], _POLICY["seal"])   # runtime for a non-IO effect -- the unfireable-kernel gap)
+            bad = _sealed_discharges(i["fn"], _checker_state().policy["seal"])   # runtime for a non-IO effect -- the unfireable-kernel gap)
             if bad:
                 errors.append(f"{n_}: discharges sealed effect(s) {sorted(bad)} via handle "
                     f"(program-wide (seal {sorted(bad)[0]})) -- a sealed effect may not be dropped to nothing; "
                     f"keep it in the accountable row or genuinely reinterpret it with `with`")
-    if "declassify" in _POLICY["forbid"]:               # D23: NEGATIVE trust policy -- (forbid declassify) bans the D21
+    if "declassify" in _checker_state().policy["forbid"]:               # D23: NEGATIVE trust policy -- (forbid declassify) bans the D21
         for n_, i in fns.items():                       # laundering hatch program-wide. A high-assurance codebase can
             if any(_has_head(b, "declassify") for b in i["fn"][2:]):   # guarantee NO ai-derived value is rubber-stamped
                 errors.append(f"{n_}: uses (declassify ..) but it is forbidden program-wide (forbid declassify) -- no ai-derived value may be laundered into trust; remove the declassify or lift the policy")
     return fns, errors
+
+
+def check(program):
+    """Check one program with policy, resource, and taint state isolated from every other invocation."""
+    token = _CHECKER_STATE.set(_CheckerState())
+    try:
+        return _check_program(program)
+    finally:
+        _CHECKER_STATE.reset(token)
 
 
 def call_fn(val, args, fns, out, handlers):

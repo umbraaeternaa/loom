@@ -482,6 +482,31 @@ def main():
         good = (got == accept); ok += good
         why = f"  [{errs[0]}]" if errs else ""
         print(f"  {'ok  ' if good else 'FAIL'} {name:22} expect={'accept' if accept else 'reject':6} got={'accept' if got else 'reject'}{why}")
+    try:                                               # every check owns its policy/resource/taint context
+        from concurrent.futures import ThreadPoolExecutor
+        isolation_programs = [
+            '(rank reviewer auditor) (defx f () (fn () (trust (roles code reviewer) (by code human (by auditor alice 1)))))',
+            '(defx f () (fn () (trust (roles code reviewer) (by code human (by auditor alice 1)))))',
+            '(forbid Net) (defx f (Net) (fn (u) (net u)))',
+            '(defx f (Net) (fn (u) (net u)))',
+            '(require Net 2) (defx f (Net) (fn (u) (seam (Net) (by code human (net u)))))',
+            '(defx f () (fn () (let (v (prov ai 5)) (trust v))))',
+        ]
+        expected = [not bool(check(parse(p))[1]) for p in isolation_programs]
+        def check_isolated(i):
+            p = isolation_programs[i % len(isolation_programs)]
+            return i % len(isolation_programs), not bool(check(parse(p))[1])
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            isolated = list(pool.map(check_isolated, range(64)))
+        legacy = ("_POLICY", "_RENV", "_TAINT_PROV", "_TAINT_ROLE")
+        checker_context_ok = (
+            not any(hasattr(_loom, name) for name in legacy)
+            and all(got == expected[i] for i, got in isolated)
+        )
+        ok += checker_context_ok
+        print(f"  {'ok  ' if checker_context_ok else 'FAIL'} checker: isolated contexts (64 parallel checks)")
+    except Exception as e:
+        print(f"  FAIL checker context isolation: {e}")
     try:                                               # runtime smoke: an honest program actually RUNS
         val, _ = run_call('(defx square () (fn (x) (* x x)))', "(square 7)")
         run_ok = (val == 49); ok += run_ok
@@ -936,7 +961,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 50   # runtime/backend smokes, including backend module boundaries and deterministic property fuzz
+    total = len(CASES) + 51   # runtime/backend smokes, including checker/backend isolation and deterministic property fuzz
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1
