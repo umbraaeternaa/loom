@@ -507,6 +507,27 @@ def main():
         print(f"  {'ok  ' if checker_context_ok else 'FAIL'} checker: isolated contexts (64 parallel checks)")
     except Exception as e:
         print(f"  FAIL checker context isolation: {e}")
+    try:                                               # every runtime call owns its capability stack
+        from concurrent.futures import ThreadPoolExecutor
+        runtime_programs = [
+            ('(defx fa (IO) (fn (x) (seam (IO) (ffi "logger" x))))', "(fa 7)"),
+            ('(defx fb () (fn (x) (seam (Pure) (ffi "logger" x))))', "(fb 7)"),
+            ('(defx fc (IO) (fn (x) (let (y (seam (Pure) (ffi "logger" x))) (seam (IO) (ffi "logger" y)))))', "(fc 7)"),
+        ]
+        expected = [run_call(program, call) for program, call in runtime_programs]
+        def run_isolated(i):
+            program, call = runtime_programs[i % len(runtime_programs)]
+            return i % len(runtime_programs), run_call(program, call)
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            isolated = list(pool.map(run_isolated, range(64)))
+        runtime_context_ok = (
+            not hasattr(_loom, "_CAPS")
+            and all(got == expected[i] for i, got in isolated)
+        )
+        ok += runtime_context_ok
+        print(f"  {'ok  ' if runtime_context_ok else 'FAIL'} runtime: isolated capability contexts (64 parallel calls)")
+    except Exception as e:
+        print(f"  FAIL runtime capability isolation: {e}")
     try:                                               # runtime smoke: an honest program actually RUNS
         val, _ = run_call('(defx square () (fn (x) (* x x)))', "(square 7)")
         run_ok = (val == 49); ok += run_ok
@@ -961,7 +982,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 51   # runtime/backend smokes, including checker/backend isolation and deterministic property fuzz
+    total = len(CASES) + 52   # runtime/backend smokes, including checker/runtime/backend isolation and deterministic property fuzz
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

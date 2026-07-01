@@ -21,7 +21,7 @@ grow *greener* (every new feature must keep them all passing).
 ```console
 $ python3 run_tests.py
 ...
-PASS — 353/353 citadel checks
+PASS — 354/354 citadel checks
 ```
 
 ## The idea in one screen

@@ -16,9 +16,15 @@ BUILTIN_EFF = {"print": {"IO"}, "net": {"Net"}, "alloc": {"Alloc"}, "rand": {"Ra
 PURE_OPS = {"+", "-", "*", "=", "<", ">",          # pure ops the interpreter runs; legitimate heads, zero effect
             "list", "cons", "head", "tail", "empty"}  # pure list primitives (map/fold are then DEFINABLE in LOOM)
 OP = {"IO": "print", "Net": "net", "Alloc": "alloc", "Rand": "rand"}   # which builtin operation a `with`-handler reinterprets
-_CAPS = []                                              # runtime capability stack: each seam pushes the authority it grants
-def _cap_ok(eff): return (not _CAPS) or (eff in _CAPS[-1])  # top-level host is unrestricted; a seam SANDBOXES its body
 _MISS = object()                                        # sentinel for scoped save/restore
+
+
+class _RuntimeState:
+    """Mutable runtime capability state scoped to one run_call() invocation."""
+    __slots__ = ("caps",)
+
+    def __init__(self):
+        self.caps = []
 
 
 class _CheckerState:
@@ -36,6 +42,15 @@ class _CheckerState:
 
 
 _CHECKER_STATE = ContextVar("loom_checker_state", default=None)
+_RUNTIME_STATE = ContextVar("loom_runtime_state", default=None)
+
+
+def _runtime_state():
+    state = _RUNTIME_STATE.get()
+    if state is None:
+        state = _RuntimeState()
+        _RUNTIME_STATE.set(state)
+    return state
 
 
 def _checker_state():
@@ -44,6 +59,9 @@ def _checker_state():
         state = _CheckerState()
         _CHECKER_STATE.set(state)
     return state
+def _cap_ok(eff):
+    caps = _runtime_state().caps
+    return (not caps) or (eff in caps[-1])              # top-level host is unrestricted; a seam SANDBOXES its body
 def _foreign_logger(args, out):                        # opaque foreign code that WANTS IO; emits ONLY if IO was granted
     if _cap_ok("IO"): out.append("foreign:" + str(args[0]))
     return args[0]
@@ -815,12 +833,13 @@ def ev(node, env, fns, out, handlers=None):
         for x in node[1:]: r = ev(x, env, fns, out, handlers)
         return r
     if h == "seam" or h == "seam1":                     # narrow runtime authority to exactly the granted row, then run
-        _CAPS.append(set(node[1]) - {"Pure"})
+        caps = _runtime_state().caps
+        caps.append(set(node[1]) - {"Pure"})
         try:
             r = None
             for x in _roleclauses(node[2:])[3]: r = ev(x, env, fns, out, handlers)   # skip D12/D13 (roles..)/(sub..)/(needs..) clauses
         finally:
-            _CAPS.pop()
+            caps.pop()
         return r
     if h == "ffi":                                      # foreign call: run the registered fn under the current grant
         f = FOREIGN.get(node[1])
@@ -948,10 +967,13 @@ def run_call(program_src, call_src):
     """Static-check a program, then evaluate one call against it. Rejects if it fails the effect checker."""
     fns, errs = check(parse(program_src))
     if errs: raise LoomError("; ".join(errs))
-    _CAPS.clear()
-    out = []
-    call_ast = parse(call_src); _check_call_literals(call_ast)
-    return ev(call_ast[0], {}, fns, out), out
+    token = _RUNTIME_STATE.set(_RuntimeState())
+    try:
+        out = []
+        call_ast = parse(call_src); _check_call_literals(call_ast)
+        return ev(call_ast[0], {}, fns, out), out
+    finally:
+        _RUNTIME_STATE.reset(token)
 
 
 # ---- BACKEND: compile CHECKED LOOM to portable target source (v0 target = Python; same emit pattern -> JS/C/WASM).
