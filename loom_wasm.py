@@ -27,7 +27,7 @@ def _leb_s(n):
     return bytes(o)
 
 _WBIN = {"+": 0x6a, "-": 0x6b, "*": 0x6c}; _WCMP = {"=": 0x46, "<": 0x48, ">": 0x4a}   # i32 add/sub/mul + eq/lt_s/gt_s
-_WASM_IMPORTS = 7
+_WASM_IMPORTS = 8
 _WASM_I_PUSH = 0
 _WASM_I_POP = 1
 _WASM_I_CURRENT = 2
@@ -35,6 +35,7 @@ _WASM_I_PRINT = 3
 _WASM_I_PUSH_CAPS = 4
 _WASM_I_POP_CAPS = 5
 _WASM_I_HAS_CAP = 6
+_WASM_I_FFI = 7
 WASM_ABI_VERSION = 1
 EFFECT_IDS = {"IO": 0, "Net": 1, "Rand": 2, "Alloc": 3}
 _WASM_NIL = 3
@@ -181,6 +182,13 @@ def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ca
         for b in node[2:]:
             out += _emit_wasm(ctx, b, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
         return out
+    if h == "ffi":
+        if not isinstance(node[1], str):
+            raise frontend.error("wasm: ffi name must be a string literal")
+        return (_wasm_const(ctx.foreigns[node[1]])
+                + _emit_wasm(ctx, ["list"] + node[2:], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
+                + _wasm_const(1 if "IO" in handled_effs else 0)
+                + b"\x10" + _leb_u(_WASM_I_FFI))
     if h == "use":
         return _wasm_const(ctx.resources[node[1]]) + b"\x10" + _leb_u(ctx.resource_use_id + _WASM_IMPORTS)
     if h == "record":
@@ -417,11 +425,24 @@ def _wasm_resources(program_src, frontend):
         w(t[3])
     return resources
 
+def _wasm_foreigns(program_src, frontend):
+    foreigns = {}
+    def w(n):
+        if not isinstance(n, list) or not n:
+            return
+        if n[0] == "ffi" and len(n) >= 2 and isinstance(n[1], str):
+            foreigns.setdefault(n[1], len(foreigns))
+        for a in n[1:]:
+            w(a)
+    for t in _wasm_defxs(program_src, frontend):
+        w(t[3])
+    return foreigns
+
 class _WasmContext:
     """All program-specific WASM state, isolated per compilation."""
     __slots__ = ("frontend", "defs", "top", "closures", "closure_by_id", "order", "topdefs",
                  "helper_base", "apply_arities", "apply_ids", "apply1_id",
-                 "variant_id", "alloc_id", "resource_use_id", "tags", "fields", "resources")
+                 "variant_id", "alloc_id", "resource_use_id", "tags", "fields", "resources", "foreigns")
 
     def __init__(self, program_src, frontend):
         self.frontend = frontend
@@ -449,6 +470,7 @@ class _WasmContext:
         capture_slots = max([8] + [len(spec["captures"]) for spec in self.order])
         self.fields = _wasm_fields(program_src, frontend, capture_slots)
         self.resources = _wasm_resources(program_src, frontend)
+        self.foreigns = _wasm_foreigns(program_src, frontend)
 
 def compile_wasm(program_src, frontend):
     """Compile checked LOOM to a real WebAssembly module.
@@ -544,14 +566,15 @@ def compile_wasm(program_src, frontend):
     gc = (_leb_u(2)
           + b"\x7f\x01\x41\x08\x0b"                       # mutable i32 $hp = 8
           + b"\x7f\x00" + _wasm_const(WASM_ABI_VERSION) + b"\x0b")  # immutable raw ABI version
-    ic = (_leb_u(7)
+    ic = (_leb_u(8)
           + _leb_u(len("env")) + b"env" + _leb_u(len("push_handler")) + b"push_handler" + b"\x00" + _leb_u(ti[2])
           + _leb_u(len("env")) + b"env" + _leb_u(len("pop_handler")) + b"pop_handler" + b"\x00" + _leb_u(ti[1])
           + _leb_u(len("env")) + b"env" + _leb_u(len("current_handler")) + b"current_handler" + b"\x00" + _leb_u(ti[1])
           + _leb_u(len("env")) + b"env" + _leb_u(len("host_print")) + b"host_print" + b"\x00" + _leb_u(ti[1])
           + _leb_u(len("env")) + b"env" + _leb_u(len("push_caps")) + b"push_caps" + b"\x00" + _leb_u(ti[1])
           + _leb_u(len("env")) + b"env" + _leb_u(len("pop_caps")) + b"pop_caps" + b"\x00" + _leb_u(ti[0])
-          + _leb_u(len("env")) + b"env" + _leb_u(len("has_cap")) + b"has_cap" + b"\x00" + _leb_u(ti[1]))
+          + _leb_u(len("env")) + b"env" + _leb_u(len("has_cap")) + b"has_cap" + b"\x00" + _leb_u(ti[1])
+          + _leb_u(len("env")) + b"env" + _leb_u(len("host_ffi")) + b"host_ffi" + b"\x00" + _leb_u(ti[3]))
     ec = _leb_u(len(funcs) + 2)
     ec += _leb_u(len("memory")) + b"memory" + b"\x02" + _leb_u(0)                  # export linear memory for the heap-backed runtime
     abi_name = b"loom_abi_version"
@@ -694,6 +717,14 @@ def emit_wat(program_src, frontend):
             for b in node[2:]:
                 o += w(b, ind, handled_effs, with_handlers, callable_env)
             return o
+        if h == "ffi":
+            if not isinstance(node[1], str):
+                raise frontend.error("wat: ffi name must be a string literal")
+            uses_heap[0] = True
+            return ([ind + "i32.const " + str(ctx.foreigns[node[1]]) + "  ;; foreign " + node[1]]
+                    + w(["list"] + node[2:], ind, handled_effs, with_handlers, callable_env)
+                    + [ind + "i32.const " + ("1" if "IO" in handled_effs else "0"),
+                       ind + "call $host_ffi"])
         if h == "use":
             uses_heap[0] = True
             return [ind + "i32.const " + str(ctx.resources[node[1]]) + "  ;; resource " + node[1], ind + "call $resuse"]
@@ -848,7 +879,8 @@ def emit_wat(program_src, frontend):
               '  (import "env" "host_print" (func $host_print (param i32) (result i32)))',
               '  (import "env" "push_caps" (func $push_caps (param i32) (result i32)))',
               '  (import "env" "pop_caps" (func $pop_caps (result i32)))',
-              '  (import "env" "has_cap" (func $has_cap (param i32) (result i32)))']
+              '  (import "env" "has_cap" (func $has_cap (param i32) (result i32)))',
+              '  (import "env" "host_ffi" (func $host_ffi (param i32 i32 i32) (result i32)))']
     if order:
         def _apply_cases(cases, indent, arity):
             if not cases: return [indent + "unreachable"]
@@ -890,9 +922,10 @@ def run_wasm(program_src, call_src, frontend):
     tags_json = _json.dumps({str(v): k for k, v in _wasm_tags(program_src, frontend).items()})
     fields_json = _json.dumps({str(v): k for k, v in _wasm_fields(program_src, frontend, capture_slots).items()})
     resources_json = _json.dumps({str(v): k for k, v in _wasm_resources(program_src, frontend).items()})
+    foreigns_json = _json.dumps({str(v): k for k, v in _wasm_foreigns(program_src, frontend).items()})
     arr = ",".join(str(b) for b in compile_wasm(program_src, frontend))
-    js = ("const __out=[]; const __hs=[[],[],[],[]]; const __caps=[];"
-          "const __tags=" + tags_json + "; const __fields=" + fields_json + "; const __resources=" + resources_json + ";"
+    js = ("const __out=[]; const __hs=[[],[],[],[]]; const __caps=[]; let __mem=null; const __rd=(p)=>__mem.getInt32(p,true);"
+          "const __tags=" + tags_json + "; const __fields=" + fields_json + "; const __resources=" + resources_json + "; const __foreigns=" + foreigns_json + ";"
           "let __dec=(v)=>((Number.isInteger(v)&&(v&1)===0)?(v>>1):v);"
           "const __push=(e,h)=>{ __hs[e|0].push(h|0); return 0; };"
           "const __pop=(e)=>{ __hs[e|0].pop(); return 0; };"
@@ -901,11 +934,11 @@ def run_wasm(program_src, call_src, frontend):
           "const __pop_caps=()=>{ __caps.pop(); return 0; };"
           "const __has_cap=(e)=>{ if(!__caps.length) return 1; const m=__caps[__caps.length-1]|0; return ((m >>> (e|0)) & 1) ? 1 : 0; };"
           "const __eff_name=(k)=>({0:'IO',1:'Net',2:'Rand',3:'Alloc'}[k]??k);"
-          "const __imports={env:{push_handler:__push,pop_handler:__pop,current_handler:__cur,host_print:(x)=>{__out.push(String(__dec(x)));return x|0;},push_caps:__push_caps,pop_caps:__pop_caps,has_cap:__has_cap}};"
+          "const __ffi=(id,args,silent)=>{ const name=__foreigns[String(id)]??String(id); if(name==='logger'){ const argv=__dec(args); const raw0=(args===3)?0:__rd((args&-2)+4); if(__has_cap(0) && !silent) __out.push('foreign:'+String(argv[0])); return raw0|0; } throw new Error('unknown foreign fn: '+name); };"
+          "const __imports={env:{push_handler:__push,pop_handler:__pop,current_handler:__cur,host_print:(x)=>{__out.push(String(__dec(x)));return x|0;},push_caps:__push_caps,pop_caps:__pop_caps,has_cap:__has_cap,host_ffi:(id,args,silent)=>__ffi(id|0,args|0,silent|0)}};"
           "WebAssembly.instantiate(new Uint8Array([" + arr + "]), __imports)"
-          ".then(m=>{const __mem=m.instance.exports.memory ? new DataView(m.instance.exports.memory.buffer) : null;"
+          ".then(m=>{__mem=m.instance.exports.memory ? new DataView(m.instance.exports.memory.buffer) : null;"
           "const __abi=m.instance.exports.loom_abi_version;if(!__abi||__abi.value!==" + str(WASM_ABI_VERSION) + ")throw new Error('unsupported LOOM WASM ABI');"
-          "const __rd=(p)=>__mem.getInt32(p,true);"
           "const __raw=(v)=>v&-2; const __valid=(p,n)=>p>=8&&p+n<=__mem.byteLength;"
           "__dec=(v)=>{"
           "if(!Number.isInteger(v)) return v; if((v&1)===0) return v>>1; if(v===3) return [];"

@@ -813,12 +813,14 @@ def main():
         assert "call $rec" in emit_wat(wpairs[9][0]) and "call $get" in emit_wat(wpairs[9][0])   # record helpers show up in the WAT too
         assert "tag Some" in emit_wat(wpairs[8][0]) and "call $variant" in emit_wat(wpairs[8][0])  # explicit variant helper in WAT
         wat_io = emit_wat('(defx t (IO) (fn () (print 7)))')
+        wat_ffi = emit_wat('(defx t (IO) (fn (x) (seam (IO) (ffi "logger" x))))')
         wat_with = emit_wat('(defx h () (fn (x) (* x 2))) (defx t () (fn () (with IO h (print 5))))')
         wat_with_local = emit_wat('(defx t () (fn () (let (h (fn (x) (* x 2))) (with IO h (print 5)))))')
         wat_closure = emit_wat('(defx ap (e) (fn ((f e) x) (f x))) (defx u () (fn (x) (ap (fn (y) (* y y)) x)))')
         wat_apply2 = emit_wat('(defx t () (fn () (let (f (fn (a b) (+ a b))) (f 3 4))))')
         wat_capture9 = emit_wat(CAPTURE9_PROGRAM)
         assert 'import "env" "host_print"' in wat_io and "call $host_print" in wat_io   # WAT mirrors host-print import for IO
+        assert 'import "env" "host_ffi"' in wat_ffi and "call $host_ffi" in wat_ffi   # WAT mirrors the foreign boundary import too
         assert "call $apply1" in wat_with and "func $h" in wat_with   # WAT mirrors top-level with IO handler dispatch via closure apply
         assert "call $apply1" in wat_with_local and "func $lam0" in wat_with_local   # WAT mirrors local closure-valued handler dispatch
         assert "call $apply1" in wat_closure and "func $lam0" in wat_closure   # WAT mirrors closure literals + dispatcher
@@ -951,6 +953,21 @@ def main():
         print(f"  {'ok  ' if denied else 'FAIL'} backend(WASM): Pure seam blocks Net")
     except Exception as e:
         print(f"  FAIL backend(WASM) seam gate: {e}")
+    try:                                               # runtime frontier: ffi parity now reaches WASM too, including handled-IO silence
+        p_io = '(defx fa (IO) (fn (x) (seam (IO) (ffi "logger" x))))'
+        p_pure = '(defx fb () (fn (x) (seam (Pure) (ffi "logger" x))))'
+        p_handled = '(defx fh () (fn (x) (handle (IO) (seam (IO) (ffi "logger" x)))))'
+        w37, o37 = run_wasm(p_io, "(fa 7)")
+        w38, o38 = run_wasm(p_pure, "(fb 7)")
+        w39, o39 = run_wasm(p_handled, "(fh 7)")
+        r37, i37 = run_call(p_io, "(fa 7)")
+        r38, i38 = run_call(p_pure, "(fb 7)")
+        r39, i39 = run_call(p_handled, "(fh 7)")
+        ffi_wasm_ok = ((w37, o37) == (r37, i37) and (w38, o38) == (r38, i38) and (w39, o39) == (r39, i39))
+        ok += ffi_wasm_ok
+        print(f"  {'ok  ' if ffi_wasm_ok else 'FAIL'} backend(WASM): ffi logger parity => ({w37}, {o37}) / ({w38}, {o38}) / handled {o39}")
+    except Exception as e:
+        print(f"  FAIL backend(WASM) ffi: {e}")
     try:                                               # runtime: variant + match extracts the payload / picks the arm
         v26, _ = run_call('(defx m1 () (fn () (match (variant Some 5) ((Some x) x) ((None) 0))))', "(m1)")
         v27, _ = run_call('(defx m2 () (fn () (match (variant None 0) ((Some x) x) ((None) 7))))', "(m2)")
@@ -1129,7 +1146,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 61   # runtime/backend smokes, including parser/checker/runtime/backend isolation, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 62   # runtime/backend smokes, including parser/checker/runtime/backend isolation, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1
