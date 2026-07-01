@@ -1,19 +1,11 @@
 #!/usr/bin/env python3
 """Portable Python and JavaScript code generators for checked LOOM programs."""
 
+from loom_frontend import CodegenFrontend as _CodegenFrontend
 
-class Frontend:
-    __slots__ = ("parse", "check", "pname", "error", "op", "int_min", "int_mod", "check_call_literals")
 
-    def __init__(self, parse, check, pname, error, op, int_min, int_mod, check_call_literals):
-        self.parse = parse
-        self.check = check
-        self.pname = pname
-        self.error = error
-        self.op = op
-        self.int_min = int_min
-        self.int_mod = int_mod
-        self.check_call_literals = check_call_literals
+class Frontend(_CodegenFrontend):
+    __slots__ = ()
 
 def _emit(frontend, node):
     if isinstance(node, int): return str(node)

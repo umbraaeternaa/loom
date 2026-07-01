@@ -5,18 +5,11 @@ The backend is independent of the LOOM frontend. Parser/checker services are
 provided explicitly through Frontend, avoiding imports and circular loading.
 """
 
+from loom_frontend import WasmFrontend as _WasmFrontend
 
-class Frontend:
-    __slots__ = ("parse", "check", "pname", "platent", "error", "op", "check_call_literals")
 
-    def __init__(self, parse, check, pname, platent, error, op, check_call_literals):
-        self.parse = parse
-        self.check = check
-        self.pname = pname
-        self.platent = platent
-        self.error = error
-        self.op = op
-        self.check_call_literals = check_call_literals
+class Frontend(_WasmFrontend):
+    __slots__ = ()
 
 def _leb_u(n):
     o = bytearray()

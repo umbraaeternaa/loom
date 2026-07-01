@@ -745,6 +745,22 @@ def main():
         print(f"  {'ok  ' if codegen_boundary_ok else 'FAIL'} backend(Python/JS): stable module boundary")
     except Exception as e:
         print(f"  FAIL backend(Python/JS) module boundary: {e}")
+    try:                                               # modular backends share one narrow frontend contract without re-coupling to loom.py
+        is_browser_bundle = Path(_loom.__file__).parent.name == "docs"
+        if is_browser_bundle:
+            shared_frontend_ok = True                  # published Pyodide artifact is intentionally one self-contained file
+        else:
+            import loom_frontend as _loom_frontend
+            shared_frontend_ok = (
+                isinstance(getattr(_loom, "_CODEGEN_FRONTEND", None), _loom_frontend.CodegenFrontend)
+                and isinstance(getattr(_loom, "_WASM_FRONTEND", None), _loom_frontend.WasmFrontend)
+                and getattr(getattr(_loom, "_loom_codegen", None), "Frontend").__mro__[1] is _loom_frontend.CodegenFrontend
+                and getattr(getattr(_loom, "_loom_wasm", None), "Frontend").__mro__[1] is _loom_frontend.WasmFrontend
+            )
+        ok += shared_frontend_ok
+        print(f"  {'ok  ' if shared_frontend_ok else 'FAIL'} backend(frontend): shared backend contract")
+    except Exception as e:
+        print(f"  FAIL backend(frontend) contract: {e}")
     try:                                               # THIRD TARGET (WASM): real wasm bytes via node's WebAssembly == interpreter (integer core)
         import shutil as _sh
         wpairs = [('(defx main () (fn () (+ 2 (* 3 4))))', "(main)"),                                   # arithmetic -> 14
@@ -1005,7 +1021,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 53   # runtime/backend smokes, including parser/checker/runtime/backend isolation and deterministic property fuzz
+    total = len(CASES) + 54   # runtime/backend smokes, including parser/checker/runtime/backend isolation, shared backend contracts, and deterministic property fuzz
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

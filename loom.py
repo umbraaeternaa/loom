@@ -304,7 +304,7 @@ def run_call(program_src, call_src):
 # ---- PORTABLE CODEGEN: implementation lives in loom_codegen.py; public facade stays stable. ----
 import loom_codegen as _loom_codegen
 
-_CODEGEN_FRONTEND = _loom_codegen.Frontend(parse, check, pname, LoomError, OP, INT_MIN, _INT_MOD, _check_call_literals)
+_CODEGEN_FRONTEND = _loom_codegen.Frontend(parse, check, pname, LoomError, OP, _check_call_literals, INT_MIN, _INT_MOD)
 
 def _emit(node):
     return _loom_codegen._emit(_CODEGEN_FRONTEND, node)
@@ -329,7 +329,7 @@ def run_js(program_src, call_src):
 import loom_wasm as _loom_wasm
 
 _WASM_ABI_VERSION = _loom_wasm.WASM_ABI_VERSION
-_WASM_FRONTEND = _loom_wasm.Frontend(parse, check, pname, platent, LoomError, OP, _check_call_literals)
+_WASM_FRONTEND = _loom_wasm.Frontend(parse, check, pname, LoomError, OP, _check_call_literals, platent)
 
 def compile_wasm(program_src):
     return _loom_wasm.compile_wasm(program_src, _WASM_FRONTEND)
