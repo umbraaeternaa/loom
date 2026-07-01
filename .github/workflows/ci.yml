@@ -20,9 +20,11 @@ jobs:
         with:
           node-version: "22"
       - name: Compile Python sources
-        run: python -m py_compile loom.py loom_codegen.py loom_wasm.py docs/loom.py run_tests.py fuzz_tests.py
+        run: python -m py_compile loom.py loom_parse.py loom_checker.py loom_frontend.py loom_runtime.py loom_cli.py loom_codegen.py loom_wasm.py verify_docs_parity.py docs/loom.py run_tests.py fuzz_tests.py
       - name: Run citadel
         run: python run_tests.py
+      - name: Verify published docs parity
+        run: python verify_docs_parity.py
       - name: Run extended deterministic fuzz seeds
         run: |
           python fuzz_tests.py --cases 256 --seed 0xC17ADE1

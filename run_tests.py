@@ -1060,6 +1060,27 @@ def main():
         print(f"  {'ok  ' if cli_boundary_ok else 'FAIL'} cli: stable module facade")
     except Exception as e:
         print(f"  FAIL cli module facade: {e}")
+    try:                                               # published browser bundle discipline is explicit, not tribal knowledge
+        play = Path(__file__).with_name("docs").joinpath("play.html").read_text()
+        workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
+        docs_discipline_ok = (
+            'fetch("./loom.py")' in play
+            and all(name not in play for name in (
+                "loom_parse.py",
+                "loom_checker.py",
+                "loom_runtime.py",
+                "loom_codegen.py",
+                "loom_wasm.py",
+                "loom_cli.py",
+            ))
+            and "verify_docs_parity.py" in workflow
+            and "docs/loom.py" in workflow
+            and Path(__file__).with_name("verify_docs_parity.py").exists()
+        )
+        ok += docs_discipline_ok
+        print(f"  {'ok  ' if docs_discipline_ok else 'FAIL'} docs: published bundle workflow pinned")
+    except Exception as e:
+        print(f"  FAIL docs workflow pin: {e}")
     try:                                               # deterministic property fuzz is part of the citadel, not an optional side script
         fuzz = Path(__file__).with_name("fuzz_tests.py")
         fr = subprocess.run([sys.executable, str(fuzz), "--cases", "64", "--seed", "0xC17ADE1"], capture_output=True, text=True)
@@ -1068,7 +1089,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 56   # runtime/backend smokes, including parser/checker/runtime/backend isolation, runtime/cli facades, shared backend contracts, and deterministic property fuzz
+    total = len(CASES) + 57   # runtime/backend smokes, including parser/checker/runtime/backend isolation, runtime/cli facades, docs workflow pin, shared backend contracts, and deterministic property fuzz
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

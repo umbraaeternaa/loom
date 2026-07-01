@@ -21,7 +21,7 @@ grow *greener* (every new feature must keep them all passing).
 ```console
 $ python3 run_tests.py
 ...
-PASS — 358/358 citadel checks
+PASS — 359/359 citadel checks
 ```
 
 ## The idea in one screen
@@ -125,6 +125,19 @@ python3 fuzz_tests.py --cases 256 --no-node           # parser/checker/Python pl
 
 Every failure prints its seed and the divergent generated expression. The default fuzz smoke is also
 part of `run_tests.py`; GitHub Actions runs the full citadel and three extended seeds on every push and pull request.
+
+## Published docs parity
+
+`docs/loom.py` is a published single-file browser bundle, not just another copy
+of the modular core. The live playground still loads only `./loom.py`, so
+published-bundle parity is verified separately:
+
+```console
+python3 verify_docs_parity.py
+```
+
+The workflow and invariants are documented in
+[docs/published_bundle_workflow.md](docs/published_bundle_workflow.md).
 
 ## Use it as a tool
 
