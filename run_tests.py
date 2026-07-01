@@ -1157,6 +1157,9 @@ def main():
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'fetch("./loom.py")' in play
+            and 'id="bWasm"' in play
+            and "loom.compile_wasm(" in play
+            and "WebAssembly.instantiate(" in play
             and all(name not in play for name in (
                 "loom_parse.py",
                 "loom_checker.py",

@@ -66,6 +66,7 @@
   <div class="bar">
     <button type="button" class="act primary" id="bCheck" disabled>Check</button>
     <button type="button" class="act" id="bRun" disabled>Run <small>(main)</small></button>
+    <button type="button" class="act" id="bWasm" disabled>Run → WASM</button>
     <button type="button" class="act" id="bJs" disabled>Compile → JS</button>
     <button type="button" class="act" id="bWat" disabled>Compile → WAT</button>
     <span class="status" id="status">loading…</span>
@@ -128,14 +129,14 @@ const EXAMPLES = [
 
 (defx main () (fn ()
   (match (variant Some 5) ((Some x) x) ((None) 0))))` },
-  { name: "WASM · closure", note: "→ 7 / WAT",
+  { name: "WASM · closure", note: "→ 7 / WAT / WASM",
     src: `; Closures lower on the WASM path too. This one applies a local
 ; 2-arg lambda and emits real WAT through the closure dispatcher.
 
 (defx main () (fn ()
   (let (f (fn (a b) (+ a b)))
     (f 3 4))))` },
-  { name: "WASM · trust wrappers", note: "→ 9 / WAT",
+  { name: "WASM · trust wrappers", note: "→ 9 / WAT / WASM",
     src: `; Runtime-transparent trust/provenance wrappers now lower through
 ; WASM too. The gate stays static; the runtime sequence stays real.
 
@@ -152,6 +153,15 @@ let pyodide = null;
 function setStatus(t){ $("status").textContent = t; }
 function show(html){ $("out").innerHTML = html; }
 function esc(s){ return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function fmtValue(v){
+  if (typeof v === "string") return JSON.stringify(v);
+  if (typeof v === "number" || typeof v === "boolean" || v === null) return String(v);
+  if (Array.isArray(v)) return "[" + v.map(fmtValue).join(", ") + "]";
+  if (typeof v === "object") {
+    return "{" + Object.entries(v).map(([k, val]) => JSON.stringify(k) + ": " + fmtValue(val)).join(", ") + "}";
+  }
+  return String(v);
+}
 
 // render example chips
 EXAMPLES.forEach((ex,i) => {
@@ -172,7 +182,7 @@ async function boot(){
     pyodide.FS.writeFile("loom.py", code);
     pyodide.runPython("import loom, json");
     setStatus("ready ✓");
-    ["bCheck","bRun","bJs","bWat"].forEach(id => $(id).disabled = false);
+    ["bCheck","bRun","bWasm","bJs","bWat"].forEach(id => $(id).disabled = false);
     show("Ready — press <span class='v-eff'>Check</span>, or pick an example above.");
   } catch (e) {
     setStatus("failed to load");
@@ -235,6 +245,133 @@ _r
       show("<span class='v-bad'>✗ did not run</span> — rejected at the gate, or a runtime error.\n\n  • " + esc(r.error));
     }
   } catch(e){ show("<span class='v-bad'>error</span>\n" + esc(e)); }
+};
+
+$("bWasm").onclick = async () => {
+  if(!pyodide) return;
+  try {
+    const payload = pyjson(`
+import json
+try:
+    _defs, _, _, _order = loom._wasm_collect_closures(_src)
+    _capture_slots = max([8] + [len(spec["captures"]) for spec in _order])
+    _o = {
+        "ok": True,
+        "wasm": list(loom.compile_wasm(_src)),
+        "abi": loom._WASM_ABI_VERSION,
+        "tags": {str(v): k for k, v in loom._wasm_tags(_src).items()},
+        "fields": {str(v): k for k, v in loom._wasm_fields(_src, _capture_slots).items()},
+        "resources": {str(v): k for k, v in loom._wasm_resources(_src).items()},
+        "foreigns": {str(v): k for k, v in loom._wasm_foreigns(_src).items()},
+    }
+    _r = json.dumps(_o)
+except Exception as _e:
+    _r = json.dumps({"ok": False, "error": str(_e)})
+_r
+`);
+    if (!payload.ok) {
+      show("<span class='v-bad'>✗ WASM build refused</span>\n\n  • " + esc(payload.error));
+      return;
+    }
+    const bytes = new Uint8Array(payload.wasm);
+    const out = [];
+    const hs = [[], [], [], []];
+    const caps = [];
+    const tags = payload.tags || {};
+    const fields = payload.fields || {};
+    const resources = payload.resources || {};
+    const foreigns = payload.foreigns || {};
+    let mem = null;
+    const rd = p => mem.getInt32(p, true);
+    const raw = v => v & -2;
+    const valid = (p, n) => p >= 8 && p + n <= mem.byteLength;
+    const effName = k => ({0:"IO",1:"Net",2:"Rand",3:"Alloc"}[k] ?? k);
+    let dec = v => (Number.isInteger(v) && (v & 1) === 0) ? (v >> 1) : v;
+    const pushHandler = (e, h) => { hs[e | 0].push(h | 0); return 0; };
+    const popHandler = e => { hs[e | 0].pop(); return 0; };
+    const currentHandler = e => { const s = hs[e | 0]; return s.length ? s[s.length - 1] : 0; };
+    const pushCaps = m => { caps.push(m | 0); return 0; };
+    const popCaps = () => { caps.pop(); return 0; };
+    const hasCap = e => {
+      if (!caps.length) return 1;
+      const m = caps[caps.length - 1] | 0;
+      return ((m >>> (e | 0)) & 1) ? 1 : 0;
+    };
+    const ffi = (id, args, silent) => {
+      const name = foreigns[String(id)] ?? String(id);
+      if (name === "logger") {
+        const argv = dec(args);
+        const raw0 = (args === 3) ? 0 : rd((args & -2) + 4);
+        if (hasCap(0) && !silent) out.push("foreign:" + String(argv[0]));
+        return raw0 | 0;
+      }
+      if (name === "lib" || name === "x" || name === "other") {
+        return (args === 3) ? 0 : rd((args & -2) + 4);
+      }
+      throw new Error("unknown foreign fn: " + name);
+    };
+    const imports = {
+      env: {
+        push_handler: pushHandler,
+        pop_handler: popHandler,
+        current_handler: currentHandler,
+        host_print: x => { out.push(String(dec(x))); return x | 0; },
+        push_caps: pushCaps,
+        pop_caps: popCaps,
+        has_cap: hasCap,
+        host_ffi: (id, args, silent) => ffi(id | 0, args | 0, silent | 0),
+      }
+    };
+    const mod = await WebAssembly.instantiate(bytes, imports);
+    mem = new DataView(mod.instance.exports.memory.buffer);
+    const abi = mod.instance.exports.loom_abi_version;
+    const abiValue = abi && typeof abi.value === "number" ? abi.value : abi;
+    if (abiValue !== payload.abi) throw new Error("unsupported LOOM WASM ABI");
+    dec = v => {
+      if (!Number.isInteger(v)) return v;
+      if ((v & 1) === 0) return v >> 1;
+      if (v === 3) return [];
+      const p = raw(v);
+      if (!valid(p, 12)) throw new Error("invalid tagged pointer " + v);
+      const k = rd(p);
+      if (k === 1) {
+        const xs = [];
+        let q = v, n = 0;
+        while (q !== 3) {
+          const r = raw(q);
+          if ((q & 1) !== 1 || !valid(r, 12) || rd(r) !== 1 || n++ > 2048) throw new Error("invalid list");
+          xs.push(dec(rd(r + 4)));
+          q = rd(r + 8);
+        }
+        return xs;
+      }
+      if (k === 2) {
+        const o = {};
+        let q = v, n = 0;
+        while (q !== 0) {
+          const r = raw(q);
+          if ((q & 1) !== 1 || !valid(r, 16) || rd(r) !== 2 || n++ > 2048) throw new Error("invalid record");
+          const f = rd(r + 4);
+          o[fields[String(f)] ?? String(f)] = dec(rd(r + 8));
+          q = rd(r + 12);
+        }
+        return o;
+      }
+      if (k === 3) return [tags[String(rd(p + 4))] ?? String(rd(p + 4)), dec(rd(p + 8))];
+      if (k === 4) return [effName(rd(p + 4)), dec(rd(p + 8))];
+      if (k === 5) return "<used:" + (resources[String(rd(p + 4))] ?? String(rd(p + 4))) + ">";
+      throw new Error("unknown heap kind " + k);
+    };
+    const main = mod.instance.exports.main;
+    if (typeof main !== "function") throw new Error("missing exported main");
+    const value = dec(main());
+    let s = "";
+    if (out.length) s += out.map(esc).join("\n") + "\n";
+    s += "<span class='v-ok'>=> " + esc(fmtValue(value)) + "</span>";
+    show(s);
+  } catch(e) {
+    show("<span class='v-bad'>✗ WASM did not run</span>\n\n  • " + esc(e));
+  }
 };
 
 $("bJs").onclick = () => {

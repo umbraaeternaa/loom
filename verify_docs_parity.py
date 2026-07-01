@@ -17,6 +17,14 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     if 'fetch("./loom.py")' not in text:
         raise SystemExit("docs parity: play.html no longer fetches ./loom.py")
+    required = (
+        'id="bWasm"',
+        "loom.compile_wasm(",
+        "WebAssembly.instantiate(",
+    )
+    missing = [needle for needle in required if needle not in text]
+    if missing:
+        raise SystemExit("docs parity: play.html lost published WASM runner contract: " + ", ".join(missing))
     forbidden = (
         "loom_parse.py",
         "loom_checker.py",
