@@ -812,7 +812,8 @@ def main():
                   ('(defx ln () (fn (xs) (if (empty xs) 0 (+ 1 (ln (tail xs)))))) (defx main () (fn () (ln (list 7 8 9))))', "(main)"),  # integer LIST length -> 3
                   ('(defx mk () (fn (x) (variant Ok x))) (defx un () (fn (r) (match r ((Ok v) (+ v 1)) ((Err e) 0)))) (defx main () (fn () (un (mk 7))))', "(main)"),  # SUM TYPE: variant + match -> 8
                   ('(defx main () (fn () (match (variant Some 5) ((Some x) x) ((None) 0))))', "(main)"),  # match picks the Some arm + binds the payload -> 5
-                  ('(defx rg () (fn () (get (record (a 10) (b 20)) b)))', "(rg)")]                      # record build + get -> 20
+                  ('(defx rg () (fn () (get (record (a 10) (b 20)) b)))', "(rg)"),                      # record build + get -> 20
+                  ('(defx t () (fn () (trust 1 (by reviewer ada (declassify reviewer (prov ai (recall (repro 9))))))))', "(t)")]  # transparent trust/provenance/persistence wrappers -> 9
         for prog, call in wpairs:                       # every program emits a valid wasm module (magic header)
             assert compile_wasm(prog)[:4] == b"\x00asm"
         assert _WASM_ABI_VERSION == 1 and b"loom_abi_version" in compile_wasm(wpairs[0][0])  # ABI v1 is machine-readable
@@ -829,6 +830,7 @@ def main():
         wat_closure = emit_wat('(defx ap (e) (fn ((f e) x) (f x))) (defx u () (fn (x) (ap (fn (y) (* y y)) x)))')
         wat_apply2 = emit_wat('(defx t () (fn () (let (f (fn (a b) (+ a b))) (f 3 4))))')
         wat_capture9 = emit_wat(CAPTURE9_PROGRAM)
+        wat_trust_stack = emit_wat(wpairs[10][0])
         assert 'import "env" "host_print"' in wat_io and "call $host_print" in wat_io   # WAT mirrors host-print import for IO
         assert 'import "env" "host_ffi"' in wat_ffi and "call $host_ffi" in wat_ffi   # WAT mirrors the foreign boundary import too
         assert 'call $host_ffi' in wat_lib_ffi and 'foreign lib' in wat_lib_ffi   # opaque lib component lowers through the same WASM foreign boundary
@@ -837,6 +839,7 @@ def main():
         assert "call $apply1" in wat_closure and "func $lam0" in wat_closure   # WAT mirrors closure literals + dispatcher
         assert "call $apply2" in wat_apply2 and "func $lam0" in wat_apply2   # WAT mirrors 2-arg closure application
         assert "func $lam0" in wat_capture9 and "call $apply1" in wat_capture9   # WAT mirrors closures with >8 captured values
+        assert wat_trust_stack.startswith("(module") and "i32.const 18" in wat_trust_stack   # transparent trust/prov wrappers compile through WAT too
         if _sh.which("node"):
             wok = True
             for prog, call in wpairs:
@@ -898,6 +901,15 @@ def main():
         print(f"  {'ok  ' if r31 else 'FAIL'} backend(WASM): IO print + handle => ({v31}, {o31}) / ({v32}, {o32})")
     except Exception as e:
         print(f"  FAIL backend(WASM) effects: {e}")
+    try:                                               # transparent wrappers must preserve sequencing around handled effects in wasm too
+        prog = '(defx t () (fn () (handle (IO) (trust (prov human (print 5) 7)))))'
+        wv, wo = run_wasm(prog, "(t)")
+        rv, ro = run_call(prog, "(t)")
+        r_trust_seq = ((wv, wo) == (rv, ro) == (7, []))
+        ok += r_trust_seq
+        print(f"  {'ok  ' if r_trust_seq else 'FAIL'} backend(WASM): transparent trust/prov sequencing => ({wv}, {wo}) / ({rv}, {ro})")
+    except Exception as e:
+        print(f"  FAIL backend(WASM) transparent wrappers: {e}")
     try:                                               # effect frontier: IO `with` reinterprets print through a handler closure
         prog = '(defx h () (fn (x) (* x 2))) (defx t () (fn () (with IO h (print 5))))'
         v33, o33 = run_wasm(prog, "(t)")
@@ -1169,7 +1181,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 62   # runtime/backend smokes, including parser/checker/runtime/backend isolation, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 63   # runtime/backend smokes, including parser/checker/runtime/backend isolation, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

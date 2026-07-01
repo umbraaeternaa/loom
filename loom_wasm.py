@@ -64,6 +64,34 @@ def _wasm_capmask(effs):
 def _wasm_require_cap(effid):
     return b"\x41" + _leb_s(effid) + b"\x10" + _leb_u(_WASM_I_HAS_CAP) + b"\x45\x04\x40\x00\x0b"
 
+def _wasm_transparent_body(frontend, node):
+    head = node[0]
+    if head in ("resource", "prov", "declassify"):
+        return node[2:]
+    if head == "by":
+        return node[3:]
+    if head in ("recall", "repro"):
+        return node[1:]
+    if head == "trust":
+        spec = node[1] if len(node) > 1 else None
+        if isinstance(spec, int):
+            return node[2:]
+        if isinstance(spec, list) and spec and spec[0] == "roles":
+            body = node[2:]
+            while body and isinstance(body[0], list) and len(body[0]) >= 3 and body[0][0] == "sub":
+                body = body[1:]
+            return body
+        return node[1:]
+    return None
+
+def _emit_wasm_seq(ctx, nodes, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env=None, handled_effs=None, with_handlers=None):
+    out = b""
+    for i, child in enumerate(nodes):
+        out += _emit_wasm(ctx, child, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
+        if i + 1 < len(nodes):
+            out += b"\x1a"
+    return out
+
 def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env=None, handled_effs=None, with_handlers=None):        # body bytes; lmap: name->local idx; helpers: cons/rec/get; tags/fields: ids; si: scrutinee local
     frontend = ctx.frontend
     callable_env = callable_env or set()
@@ -177,11 +205,9 @@ def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ca
         else:
             out += b"\x05" + b"\x20" + _leb_u(lmap["hd"]) + _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply1_id + _WASM_IMPORTS) + b"\x0b"
         return out
-    if h == "resource":
-        out = b""
-        for b in node[2:]:
-            out += _emit_wasm(ctx, b, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
-        return out
+    transparent_body = _wasm_transparent_body(frontend, node)
+    if transparent_body is not None:
+        return _emit_wasm_seq(ctx, transparent_body, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
     if h == "ffi":
         if not isinstance(node[1], str):
             raise frontend.error("wasm: ffi name must be a string literal")
@@ -639,6 +665,13 @@ def emit_wat(program_src, frontend):
         handled_effs = handled_effs or set()
         with_handlers = with_handlers or {}
         callable_env = callable_env or set()
+        def seq(nodes):
+            out = []
+            for i, child in enumerate(nodes):
+                out += w(child, ind, handled_effs, with_handlers, callable_env)
+                if i + 1 < len(nodes):
+                    out += [ind + "drop"]
+            return out
         if isinstance(node, int): return [ind + "i32.const " + str(node << 1) + "  ;; int " + str(node)]
         if isinstance(node, str): return [ind + "local.get $" + node]
         h = node[0]
@@ -712,11 +745,9 @@ def emit_wat(program_src, frontend):
             if len(node) == 1:
                 return [ind + "i32.const 3  ;; effect Alloc", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end", ind + "i32.const " + str(_WASM_NIL)]
             return [ind + "i32.const 3  ;; effect Alloc", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end"] + w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "i32.const 0", ind + "call $alloc"]
-        if h == "resource":
-            o = []
-            for b in node[2:]:
-                o += w(b, ind, handled_effs, with_handlers, callable_env)
-            return o
+        transparent_body = _wasm_transparent_body(frontend, node)
+        if transparent_body is not None:
+            return seq(transparent_body)
         if h == "ffi":
             if not isinstance(node[1], str):
                 raise frontend.error("wat: ffi name must be a string literal")
