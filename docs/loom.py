@@ -1175,11 +1175,14 @@ def _leb_s(n):
     return bytes(o)
 
 _WBIN = {"+": 0x6a, "-": 0x6b, "*": 0x6c}; _WCMP = {"=": 0x46, "<": 0x48, ">": 0x4a}   # i32 add/sub/mul + eq/lt_s/gt_s
-_WASM_IMPORTS = 4
+_WASM_IMPORTS = 7
 _WASM_I_PUSH = 0
 _WASM_I_POP = 1
 _WASM_I_CURRENT = 2
 _WASM_I_PRINT = 3
+_WASM_I_PUSH_CAPS = 4
+_WASM_I_POP_CAPS = 5
+_WASM_I_HAS_CAP = 6
 _WASM_ABI_VERSION = 1
 EFFECT_IDS = {"IO": 0, "Net": 1, "Rand": 2, "Alloc": 3}
 _WASM_NIL = 3
@@ -1187,6 +1190,7 @@ _WASM_K_LIST = 1
 _WASM_K_RECORD = 2
 _WASM_K_VARIANT = 3
 _WASM_K_EFFECT = 4
+_WASM_K_RESOURCE = 5
 
 def _wasm_const(n):
     return b"\x41" + _leb_s(n)
@@ -1196,6 +1200,16 @@ def _wasm_int(n):
 
 def _wasm_unptr():
     return _wasm_const(-2) + b"\x71"                    # tagged pointer -> aligned heap address
+
+def _wasm_capmask(effs):
+    mask = 0
+    for eff in set(effs) - {"Pure"}:
+        if eff in EFFECT_IDS:
+            mask |= 1 << EFFECT_IDS[eff]
+    return mask
+
+def _wasm_require_cap(effid):
+    return b"\x41" + _leb_s(effid) + b"\x10" + _leb_u(_WASM_I_HAS_CAP) + b"\x45\x04\x40\x00\x0b"
 
 def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env=None, handled_effs=None, with_handlers=None):        # body bytes; lmap: name->local idx; helpers: cons/rec/get; tags/fields: ids; si: scrutinee local
     callable_env = callable_env or set()
@@ -1242,6 +1256,14 @@ def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ca
         if _wasm_is_closure_expr(ctx, node[1][1], callable_env): ncall.add(node[1][0])
         for b in node[2:]: out += _emit_wasm(ctx, b, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ncall, handled_effs, with_handlers)
         return out
+    if h == "seamN":
+        return _emit_wasm(ctx, ["seam"] + node[2:], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
+    if h in ("seam", "seam1"):
+        body = _roleclauses(node[2:])[3]
+        out = b"\x41" + _leb_s(_wasm_capmask(node[1])) + b"\x10" + _leb_u(_WASM_I_PUSH_CAPS) + b"\x1a"
+        for b in body:
+            out += _emit_wasm(ctx, b, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
+        return out + b"\x10" + _leb_u(_WASM_I_POP_CAPS) + b"\x1a"
     if h == "handle":
         body_eff = set(node[1]) & {"IO"}
         nh = set(handled_effs) | body_eff
@@ -1261,7 +1283,7 @@ def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ca
         apply1_id = ctx.apply_ids.get(1, ctx.apply1_id)
         if "IO" in with_handlers:
             return _emit_wasm(ctx, with_handlers["IO"], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply1_id + _WASM_IMPORTS)
-        out = b"\x41" + _leb_s(EFFECT_IDS["IO"]) + b"\x10" + _leb_u(_WASM_I_CURRENT) + b"\x22" + _leb_u(lmap["hd"]) + b"\x45\x04\x7f"
+        out = _wasm_require_cap(EFFECT_IDS["IO"]) + b"\x41" + _leb_s(EFFECT_IDS["IO"]) + b"\x10" + _leb_u(_WASM_I_CURRENT) + b"\x22" + _leb_u(lmap["hd"]) + b"\x45\x04\x7f"
         out += _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
         out += b"\x10" + _leb_u(_WASM_I_PRINT) + b"\x05" + b"\x20" + _leb_u(lmap["hd"]) + _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply1_id + _WASM_IMPORTS) + b"\x0b"
         if "IO" in handled_effs:
@@ -1269,7 +1291,9 @@ def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ca
         return out
     if h == "net":
         apply1_id = ctx.apply_ids.get(1, ctx.apply1_id)
-        out = b"\x41" + _leb_s(EFFECT_IDS["Net"]) + b"\x10" + _leb_u(_WASM_I_CURRENT) + b"\x22" + _leb_u(lmap["hd"]) + b"\x45\x04\x7f"
+        if "Net" in with_handlers:
+            return _emit_wasm(ctx, with_handlers["Net"], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply1_id + _WASM_IMPORTS)
+        out = _wasm_require_cap(EFFECT_IDS["Net"]) + b"\x41" + _leb_s(EFFECT_IDS["Net"]) + b"\x10" + _leb_u(_WASM_I_CURRENT) + b"\x22" + _leb_u(lmap["hd"]) + b"\x45\x04\x7f"
         out += b"\x41" + _leb_s(EFFECT_IDS["Net"]) + _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(cons_i + 1 + _WASM_IMPORTS)
         out += b"\x05" + b"\x20" + _leb_u(lmap["hd"]) + _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply1_id + _WASM_IMPORTS) + b"\x0b"
         return out
@@ -1277,16 +1301,35 @@ def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ca
         apply0_id = ctx.apply_ids.get(0)
         if apply0_id is None:
             raise LoomError("wasm: missing arity-0 apply helper")
-        out = b"\x41" + _leb_s(EFFECT_IDS["Rand"]) + b"\x10" + _leb_u(_WASM_I_CURRENT) + b"\x22" + _leb_u(lmap["hd"]) + b"\x45\x04\x7f"
+        if "Rand" in with_handlers:
+            return _emit_wasm(ctx, with_handlers["Rand"], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply0_id + _WASM_IMPORTS)
+        out = _wasm_require_cap(EFFECT_IDS["Rand"]) + b"\x41" + _leb_s(EFFECT_IDS["Rand"]) + b"\x10" + _leb_u(_WASM_I_CURRENT) + b"\x22" + _leb_u(lmap["hd"]) + b"\x45\x04\x7f"
         out += b"\x41" + _leb_s(EFFECT_IDS["Rand"]) + b"\x41\x00" + b"\x10" + _leb_u(cons_i + 1 + _WASM_IMPORTS)
         out += b"\x05" + b"\x20" + _leb_u(lmap["hd"]) + b"\x10" + _leb_u(apply0_id + _WASM_IMPORTS) + b"\x0b"
         return out
     if h == "alloc":
+        apply1_id = ctx.apply_ids.get(1, ctx.apply1_id)
+        if "Alloc" in with_handlers:
+            return _emit_wasm(ctx, with_handlers["Alloc"], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + _emit_wasm(ctx, node[1] if len(node) > 1 else 0, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply1_id + _WASM_IMPORTS)
+        out = _wasm_require_cap(EFFECT_IDS["Alloc"]) + b"\x41" + _leb_s(EFFECT_IDS["Alloc"]) + b"\x10" + _leb_u(_WASM_I_CURRENT) + b"\x22" + _leb_u(lmap["hd"]) + b"\x45\x04\x7f"
         if len(node) == 1:
-            return _wasm_const(_WASM_NIL)
-        return (_emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
-                + _wasm_int(0)
-                + b"\x10" + _leb_u(ctx.alloc_id + _WASM_IMPORTS))
+            out += _wasm_const(_WASM_NIL)
+        else:
+            out += (_emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
+                    + _wasm_int(0)
+                    + b"\x10" + _leb_u(ctx.alloc_id + _WASM_IMPORTS))
+        if len(node) == 1:
+            out += b"\x05" + b"\x20" + _leb_u(lmap["hd"]) + b"\x41\x00" + b"\x10" + _leb_u(apply1_id + _WASM_IMPORTS) + b"\x0b"
+        else:
+            out += b"\x05" + b"\x20" + _leb_u(lmap["hd"]) + _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply1_id + _WASM_IMPORTS) + b"\x0b"
+        return out
+    if h == "resource":
+        out = b""
+        for b in node[2:]:
+            out += _emit_wasm(ctx, b, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
+        return out
+    if h == "use":
+        return _wasm_const(ctx.resources[node[1]]) + b"\x10" + _leb_u(ctx.resource_use_id + _WASM_IMPORTS)
     if h == "record":
         if len(node) == 1: return b"\x41\x00"
         items = [fld for fld in node[1:] if isinstance(fld, list) and len(fld) >= 2]
@@ -1500,11 +1543,32 @@ def _wasm_fields(program_src, capture_slots=8):            # program-wide field 
     for t in _wasm_defxs(program_src): w(t[3])
     return fields
 
+def _wasm_resources(program_src):
+    resources = {}
+    def w(n):
+        if not isinstance(n, list) or not n:
+            return
+        if n[0] == "resource":
+            spec = n[1]
+            name = spec[0] if isinstance(spec, list) else spec
+            resources.setdefault(name, len(resources))
+            for item in n[2:]:
+                w(item)
+            return
+        if n[0] == "use" and len(n) >= 2 and isinstance(n[1], str):
+            resources.setdefault(n[1], len(resources))
+            return
+        for a in n:
+            w(a)
+    for t in _wasm_defxs(program_src):
+        w(t[3])
+    return resources
+
 class _WasmContext:
     """All program-specific WASM state, isolated per compilation."""
     __slots__ = ("defs", "top", "closures", "closure_by_id", "order", "topdefs",
                  "helper_base", "apply_arities", "apply_ids", "apply1_id",
-                 "variant_id", "alloc_id", "tags", "fields")
+                 "variant_id", "alloc_id", "resource_use_id", "tags", "fields", "resources")
 
     def __init__(self, program_src):
         self.defs, self.top, self.closures, self.order = _wasm_collect_closures(program_src)
@@ -1520,15 +1584,17 @@ class _WasmContext:
             | {spec["arity"] for spec in self.order}
         )
         self.apply_ids = {
-            arity: self.helper_base + 6 + i
+            arity: self.helper_base + 7 + i
             for i, arity in enumerate(self.apply_arities)
         }
-        self.apply1_id = self.apply_ids.get(1, self.helper_base + 6)
+        self.apply1_id = self.apply_ids.get(1, self.helper_base + 7)
         self.variant_id = self.helper_base + 4
         self.alloc_id = self.helper_base + 5
+        self.resource_use_id = self.helper_base + 6
         self.tags = _wasm_tags(program_src)
         capture_slots = max([8] + [len(spec["captures"]) for spec in self.order])
         self.fields = _wasm_fields(program_src, capture_slots)
+        self.resources = _wasm_resources(program_src)
 
 def compile_wasm(program_src):
     """Compile checked LOOM to a real WebAssembly module.
@@ -1619,23 +1685,26 @@ def compile_wasm(program_src):
     ar = sorted(set(apply_arities) | {a for _, a, _, _, _ in funcs} | {a for _, a, _, _, _, _ in lambda_funcs} | {2, 3})  # add helper arities
     ti = {a: i for i, a in enumerate(ar)}   # arity-2 type covers $cons/get; arity-3 covers $rec
     tc = _leb_u(len(ar)) + b"".join(b"\x60" + _leb_u(a) + b"\x7f" * a + b"\x01\x7f" for a in ar)   # type: (i32*)->i32
-    fc = _leb_u(len(funcs) + len(lambda_funcs) + 6 + len(apply_arities)) + b"".join(_leb_u(ti[a]) for _, a, _, _, _ in funcs) + b"".join(_leb_u(ti[a]) for _, a, _, _, _, _ in lambda_funcs) + _leb_u(ti[3]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + b"".join(_leb_u(ti[arity + 1]) for arity in apply_arities)
+    fc = _leb_u(len(funcs) + len(lambda_funcs) + 7 + len(apply_arities)) + b"".join(_leb_u(ti[a]) for _, a, _, _, _ in funcs) + b"".join(_leb_u(ti[a]) for _, a, _, _, _, _ in lambda_funcs) + _leb_u(ti[3]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[1]) + b"".join(_leb_u(ti[arity + 1]) for arity in apply_arities)
     mc = _leb_u(1) + b"\x00" + _leb_u(1)                    # 1 memory, min 1 page (64 KiB heap)
     gc = (_leb_u(2)
           + b"\x7f\x01\x41\x08\x0b"                       # mutable i32 $hp = 8
           + b"\x7f\x00" + _wasm_const(_WASM_ABI_VERSION) + b"\x0b")  # immutable raw ABI version
-    ic = (_leb_u(4)
+    ic = (_leb_u(7)
           + _leb_u(len("env")) + b"env" + _leb_u(len("push_handler")) + b"push_handler" + b"\x00" + _leb_u(ti[2])
           + _leb_u(len("env")) + b"env" + _leb_u(len("pop_handler")) + b"pop_handler" + b"\x00" + _leb_u(ti[1])
           + _leb_u(len("env")) + b"env" + _leb_u(len("current_handler")) + b"current_handler" + b"\x00" + _leb_u(ti[1])
-          + _leb_u(len("env")) + b"env" + _leb_u(len("host_print")) + b"host_print" + b"\x00" + _leb_u(ti[1]))
+          + _leb_u(len("env")) + b"env" + _leb_u(len("host_print")) + b"host_print" + b"\x00" + _leb_u(ti[1])
+          + _leb_u(len("env")) + b"env" + _leb_u(len("push_caps")) + b"push_caps" + b"\x00" + _leb_u(ti[1])
+          + _leb_u(len("env")) + b"env" + _leb_u(len("pop_caps")) + b"pop_caps" + b"\x00" + _leb_u(ti[0])
+          + _leb_u(len("env")) + b"env" + _leb_u(len("has_cap")) + b"has_cap" + b"\x00" + _leb_u(ti[1]))
     ec = _leb_u(len(funcs) + 2)
     ec += _leb_u(len("memory")) + b"memory" + b"\x02" + _leb_u(0)                  # export linear memory for the heap-backed runtime
     abi_name = b"loom_abi_version"
     ec += _leb_u(len(abi_name)) + abi_name + b"\x03" + _leb_u(1)                    # export immutable global 1
     for i, t in enumerate(ds):
         nb = t[1].encode(); ec += _leb_u(len(nb)) + nb + b"\x00" + _leb_u(i + _WASM_IMPORTS)         # export func
-    cc = _leb_u(len(funcs) + len(lambda_funcs) + 6 + len(apply_arities))
+    cc = _leb_u(len(funcs) + len(lambda_funcs) + 7 + len(apply_arities))
     for _, _, nloc, code, _ in funcs:
         loc = (_leb_u(1) + _leb_u(nloc) + b"\x7f") if nloc else _leb_u(0)                           # let-locals (i32)
         e = loc + code; cc += _leb_u(len(e)) + e
@@ -1662,6 +1731,12 @@ def compile_wasm(program_src):
                   b"\x0b"
                   b"\x0b")
     e = (_leb_u(1) + _leb_u(2) + b"\x7f") + alloc_code; cc += _leb_u(len(e)) + e                # $alloc: 2 locals ($n,$i)
+    resource_use_code = (b"\x23\x00\x21\x01"
+                         b"\x23\x00\x41\x08\x6a\x24\x00"
+                         b"\x20\x01" + _wasm_const(_WASM_K_RESOURCE) + b"\x36\x02\x00"
+                         b"\x20\x01\x20\x00\x36\x02\x04"
+                         b"\x20\x01" + _wasm_const(1) + b"\x72\x0b")
+    e = (_leb_u(1) + _leb_u(1) + b"\x7f") + resource_use_code; cc += _leb_u(len(e)) + e
     for arity in apply_arities:
         apply_code = _apply_cases(
             [{"id": i, "name": t[1], "captures": [], "arity": len(t[3][1]), "kind": "top"} for i, t in enumerate(ds) if len(t[3][1]) == arity] +
@@ -1715,6 +1790,14 @@ def emit_wat(program_src):
                 ncall.add(node[1][0])
             for b in node[2:]: o += w(b, ind, handled_effs, with_handlers, ncall)
             return o
+        if h == "seamN":
+            return w(["seam"] + node[2:], ind, handled_effs, with_handlers, callable_env)
+        if h in ("seam", "seam1"):
+            body = _roleclauses(node[2:])[3]
+            o = [ind + "i32.const " + str(_wasm_capmask(node[1])), ind + "call $push_caps", ind + "drop"]
+            for b in body:
+                o += w(b, ind, handled_effs, with_handlers, callable_env)
+            return o + [ind + "call $pop_caps", ind + "drop"]
         if h == "handle":
             nh = set(handled_effs) | {"IO"}
             o = []
@@ -1731,24 +1814,35 @@ def emit_wat(program_src):
             uses_print[0] = True
             if "IO" in with_handlers:
                 return w(with_handlers["IO"], ind, handled_effs, with_handlers, callable_env) + w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "call $apply1"]
+            cap = [ind + "i32.const 0  ;; effect IO", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end"]
             if "IO" in handled_effs:
-                return w(node[1], ind, handled_effs, with_handlers, callable_env)
-            return w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "call $host_print"]
+                return cap + w(node[1], ind, handled_effs, with_handlers, callable_env)
+            return cap + w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "call $host_print"]
         if h == "net":
             uses_heap[0] = True
             if "Net" in with_handlers:
                 return w(with_handlers["Net"], ind, handled_effs, with_handlers, callable_env) + w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "call $apply1"]
-            return [ind + "i32.const 1  ;; effect Net"] + w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "call $effbox"]
+            return [ind + "i32.const 1  ;; effect Net", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end", ind + "i32.const 1  ;; effect Net"] + w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "call $effbox"]
         if h == "rand":
             uses_heap[0] = True
             if "Rand" in with_handlers:
                 return w(with_handlers["Rand"], ind, handled_effs, with_handlers, callable_env) + [ind + "call $apply0"]
-            return [ind + "i32.const 2  ;; effect Rand", ind + "i32.const 0"] + [ind + "call $effbox"]
+            return [ind + "i32.const 2  ;; effect Rand", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end", ind + "i32.const 2  ;; effect Rand", ind + "i32.const 0"] + [ind + "call $effbox"]
         if h == "alloc":
             uses_heap[0] = True
+            if "Alloc" in with_handlers:
+                return w(with_handlers["Alloc"], ind, handled_effs, with_handlers, callable_env) + w(node[1] if len(node) > 1 else 0, ind, handled_effs, with_handlers, callable_env) + [ind + "call $apply1"]
             if len(node) == 1:
-                return [ind + "i32.const " + str(_WASM_NIL)]
-            return w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "i32.const 0", ind + "call $alloc"]
+                return [ind + "i32.const 3  ;; effect Alloc", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end", ind + "i32.const " + str(_WASM_NIL)]
+            return [ind + "i32.const 3  ;; effect Alloc", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end"] + w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "i32.const 0", ind + "call $alloc"]
+        if h == "resource":
+            o = []
+            for b in node[2:]:
+                o += w(b, ind, handled_effs, with_handlers, callable_env)
+            return o
+        if h == "use":
+            uses_heap[0] = True
+            return [ind + "i32.const " + str(ctx.resources[node[1]]) + "  ;; resource " + node[1], ind + "call $resuse"]
         if h == "record":
             uses_heap[0] = True
             items = [fld for fld in node[1:] if isinstance(fld, list) and len(fld) >= 2]
@@ -1888,11 +1982,19 @@ def emit_wat(program_src):
                   "      call $alloc",
                   "      call $cons",
                   "    end)"]
-    if uses_print[0]:
-        lines += ['  (import "env" "push_handler" (func $push_handler (param i32 i32) (result i32)))',
-                  '  (import "env" "pop_handler" (func $pop_handler (param i32) (result i32)))',
-                  '  (import "env" "current_handler" (func $current_handler (param i32) (result i32)))',
-                  '  (import "env" "host_print" (func $host_print (param i32) (result i32)))']
+        lines += ["  (func $resuse (param $rid i32) (result i32) (local $t i32)",
+                  "    global.get $hp  local.set $t",
+                  "    global.get $hp  i32.const 8  i32.add  global.set $hp",
+                  "    local.get $t  i32.const 5  i32.store  ;; resource-use kind",
+                  "    local.get $t  local.get $rid  i32.store offset=4",
+                  "    local.get $t  i32.const 1  i32.or)"]
+    lines += ['  (import "env" "push_handler" (func $push_handler (param i32 i32) (result i32)))',
+              '  (import "env" "pop_handler" (func $pop_handler (param i32) (result i32)))',
+              '  (import "env" "current_handler" (func $current_handler (param i32) (result i32)))',
+              '  (import "env" "host_print" (func $host_print (param i32) (result i32)))',
+              '  (import "env" "push_caps" (func $push_caps (param i32) (result i32)))',
+              '  (import "env" "pop_caps" (func $pop_caps (result i32)))',
+              '  (import "env" "has_cap" (func $has_cap (param i32) (result i32)))']
     if order:
         def _apply_cases(cases, indent, arity):
             if not cases: return [indent + "unreachable"]
@@ -1914,7 +2016,7 @@ def emit_wat(program_src):
     return "\n".join(lines + [")"])
 
 def run_wasm(program_src, call_src):
-    """Compile to wasm bytes, run via node's built-in WebAssembly; return (value, []) — proof wasm == interpreter. Needs node."""
+    """Compile to wasm bytes, run via node's built-in WebAssembly, and decode the observable result. Needs node."""
     import subprocess, json as _json
     def _norm(v):
         if isinstance(v, dict):
@@ -1933,15 +2035,19 @@ def run_wasm(program_src, call_src):
     capture_slots = max([8] + [len(spec["captures"]) for spec in closure_order])
     tags_json = _json.dumps({str(v): k for k, v in _wasm_tags(program_src).items()})
     fields_json = _json.dumps({str(v): k for k, v in _wasm_fields(program_src, capture_slots).items()})
+    resources_json = _json.dumps({str(v): k for k, v in _wasm_resources(program_src).items()})
     arr = ",".join(str(b) for b in compile_wasm(program_src))
-    js = ("const __out=[]; const __hs=[[],[],[],[]];"
-          "const __tags=" + tags_json + "; const __fields=" + fields_json + ";"
+    js = ("const __out=[]; const __hs=[[],[],[],[]]; const __caps=[];"
+          "const __tags=" + tags_json + "; const __fields=" + fields_json + "; const __resources=" + resources_json + ";"
           "let __dec=(v)=>((Number.isInteger(v)&&(v&1)===0)?(v>>1):v);"
           "const __push=(e,h)=>{ __hs[e|0].push(h|0); return 0; };"
           "const __pop=(e)=>{ __hs[e|0].pop(); return 0; };"
           "const __cur=(e)=>{ const s=__hs[e|0]; return s.length ? s[s.length-1] : 0; };"
+          "const __push_caps=(m)=>{ __caps.push(m|0); return 0; };"
+          "const __pop_caps=()=>{ __caps.pop(); return 0; };"
+          "const __has_cap=(e)=>{ if(!__caps.length) return 1; const m=__caps[__caps.length-1]|0; return ((m >>> (e|0)) & 1) ? 1 : 0; };"
           "const __eff_name=(k)=>({0:'IO',1:'Net',2:'Rand',3:'Alloc'}[k]??k);"
-          "const __imports={env:{push_handler:__push,pop_handler:__pop,current_handler:__cur,host_print:(x)=>{__out.push(String(__dec(x)));return x|0;}}};"
+          "const __imports={env:{push_handler:__push,pop_handler:__pop,current_handler:__cur,host_print:(x)=>{__out.push(String(__dec(x)));return x|0;},push_caps:__push_caps,pop_caps:__pop_caps,has_cap:__has_cap}};"
           "WebAssembly.instantiate(new Uint8Array([" + arr + "]), __imports)"
           ".then(m=>{const __mem=m.instance.exports.memory ? new DataView(m.instance.exports.memory.buffer) : null;"
           "const __abi=m.instance.exports.loom_abi_version;if(!__abi||__abi.value!==" + str(_WASM_ABI_VERSION) + ")throw new Error('unsupported LOOM WASM ABI');"
@@ -1954,6 +2060,7 @@ def run_wasm(program_src, call_src):
           "if(k===2){const o={};let q=v,n=0;while(q!==0){const r=__raw(q);if((q&1)!==1||!__valid(r,16)||__rd(r)!==2||n++>2048)throw new Error('invalid record');const f=__rd(r+4);o[__fields[f]??String(f)]=__dec(__rd(r+8));q=__rd(r+12);}return o;}"
           "if(k===3){const t=__rd(p+4);return [__tags[t]??String(t),__dec(__rd(p+8))];}"
           "if(k===4)return [__eff_name(__rd(p+4)),__dec(__rd(p+8))];"
+          "if(k===5)return '<used:' + (__resources[__rd(p+4)]??String(__rd(p+4))) + '>';"
           "throw new Error('unknown heap kind '+k);};"
           "const __v=__dec(m.instance.exports[" + repr(name) + "](" + ",".join(str(a << 1) for a in args) + "));"
           "console.log('__VAL__'+JSON.stringify(__v));console.log('__OUT__'+JSON.stringify(__out));})"

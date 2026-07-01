@@ -704,6 +704,16 @@ def main():
         print(f"  {'ok  ' if r23 else 'FAIL'} runtime typed resource: (tr1) = {v23}")
     except (LoomError, RecursionError) as e:
         print(f"  FAIL runtime typed resource: {e}")
+    try:                                               # runtime: capability seams narrow ambient authority when they grant less than ambient
+        denied = False
+        try:
+            run_call('(defx bad () (fn (u) (seam (Pure) (handle (Net) (net u)))))', "(bad 5)")
+        except LoomError:
+            denied = True
+        ok += denied
+        print(f"  {'ok  ' if denied else 'FAIL'} runtime seam gate: Pure seam blocks Net")
+    except Exception as e:
+        print(f"  FAIL runtime seam gate: {e}")
     try:                                               # runtime: records build + field access
         v24, _ = run_call('(defx rc1 () (fn () (get (record (a 1) (b 2)) a)))', "(rc1)")
         v25, _ = run_call('(defx rcb () (fn () (get (record (a 10) (b 20)) b)))', "(rcb)")
@@ -911,6 +921,36 @@ def main():
         print(f"  {'ok  ' if r33 else 'FAIL'} backend(WASM): Net with handler => {v33}")
     except Exception as e:
         print(f"  FAIL backend(WASM) net-with: {e}")
+    try:                                               # runtime frontier: capability seams survive lowering in WASM
+        p_seam = '(defx f (Net) (fn (u) (seam (Net) (net u))))'
+        v34, o34 = run_wasm(p_seam, "(f 5)")
+        rv34, ro34 = run_call(p_seam, "(f 5)")
+        r34 = (v34 == ("Net", 5) and o34 == [] and rv34 == ("Net", 5) and ro34 == [])
+        ok += r34
+        print(f"  {'ok  ' if r34 else 'FAIL'} backend(WASM): seam-granted Net => {v34}")
+    except Exception as e:
+        print(f"  FAIL backend(WASM) seam: {e}")
+    try:                                               # runtime frontier: resource/use keeps the interpreter-visible marker in WASM
+        p_res = '(defx r1 () (fn () (resource r (use r)))) (defx tr1 (Net) (fn () (resource (r Net) (use r))))'
+        v35, o35 = run_wasm(p_res, "(r1)")
+        v36, o36 = run_wasm(p_res, "(tr1)")
+        rv35, ro35 = run_call(p_res, "(r1)")
+        rv36, ro36 = run_call(p_res, "(tr1)")
+        r35 = (v35 == "<used:r>" and o35 == [] and v36 == "<used:r>" and o36 == [] and rv35 == "<used:r>" and ro35 == [] and rv36 == "<used:r>" and ro36 == [])
+        ok += r35
+        print(f"  {'ok  ' if r35 else 'FAIL'} backend(WASM): resource/use marker => {v35} / {v36}")
+    except Exception as e:
+        print(f"  FAIL backend(WASM) resource: {e}")
+    try:                                               # runtime frontier: a Pure seam cannot wield Net on WASM either
+        denied = False
+        try:
+            run_wasm('(defx bad () (fn (u) (seam (Pure) (handle (Net) (net u)))))', "(bad 5)")
+        except LoomError:
+            denied = True
+        ok += denied
+        print(f"  {'ok  ' if denied else 'FAIL'} backend(WASM): Pure seam blocks Net")
+    except Exception as e:
+        print(f"  FAIL backend(WASM) seam gate: {e}")
     try:                                               # runtime: variant + match extracts the payload / picks the arm
         v26, _ = run_call('(defx m1 () (fn () (match (variant Some 5) ((Some x) x) ((None) 0))))', "(m1)")
         v27, _ = run_call('(defx m2 () (fn () (match (variant None 0) ((Some x) x) ((None) 7))))', "(m2)")
@@ -1089,7 +1129,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 57   # runtime/backend smokes, including parser/checker/runtime/backend isolation, runtime/cli facades, docs workflow pin, shared backend contracts, and deterministic property fuzz
+    total = len(CASES) + 61   # runtime/backend smokes, including parser/checker/runtime/backend isolation, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

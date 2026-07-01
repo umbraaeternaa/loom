@@ -28,11 +28,12 @@ class CodegenFrontend(BackendFrontend):
 
 
 class WasmFrontend(BackendFrontend):
-    __slots__ = ("platent",)
+    __slots__ = ("platent", "roleclauses")
 
-    def __init__(self, parse, check, pname, error, op, check_call_literals, platent):
+    def __init__(self, parse, check, pname, error, op, check_call_literals, platent, roleclauses):
         super().__init__(parse, check, pname, error, op, check_call_literals)
         self.platent = platent
+        self.roleclauses = roleclauses
 
 
 class RuntimeFrontend(BackendFrontend):
