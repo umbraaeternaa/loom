@@ -748,6 +748,14 @@ def main():
         print(f"  {'ok  ' if denied else 'FAIL'} runtime seam gate: Pure seam blocks Net")
     except Exception as e:
         print(f"  FAIL runtime seam gate: {e}")
+    try:                                               # runtime: an inner narrower seam must restore the outer grant for later siblings
+        p_restore = '(defx keepio (IO) (fn () (seam (IO) (let (x (seam (Pure) 1)) (print 2)))))'
+        vrs, ors = run_call(p_restore, "(keepio)")
+        r_restore = (vrs == 2 and ors == ["2"])
+        ok += r_restore
+        print(f"  {'ok  ' if r_restore else 'FAIL'} runtime seam restore: inner Pure preserves outer IO => ({vrs}, {ors})")
+    except Exception as e:
+        print(f"  FAIL runtime seam restore: {e}")
     try:                                               # runtime: records build + field access
         v24, _ = run_call('(defx rc1 () (fn () (get (record (a 1) (b 2)) a)))', "(rc1)")
         v25, _ = run_call('(defx rcb () (fn () (get (record (a 10) (b 20)) b)))', "(rcb)")
@@ -1011,6 +1019,15 @@ def main():
         print(f"  {'ok  ' if denied else 'FAIL'} backend(WASM): Pure seam blocks Net")
     except Exception as e:
         print(f"  FAIL backend(WASM) seam gate: {e}")
+    try:                                               # runtime frontier: nested seam lowering must restore the outer cap grant on WASM too
+        p_restore = '(defx keepio (IO) (fn () (seam (IO) (let (x (seam (Pure) 1)) (print 2)))))'
+        w_restore, o_restore = run_wasm(p_restore, "(keepio)")
+        r_restore, ro_restore = run_call(p_restore, "(keepio)")
+        wasm_restore_ok = ((w_restore, o_restore) == (2, ["2"]) and (w_restore, o_restore) == (r_restore, ro_restore))
+        ok += wasm_restore_ok
+        print(f"  {'ok  ' if wasm_restore_ok else 'FAIL'} backend(WASM): inner Pure preserves outer IO => ({w_restore}, {o_restore})")
+    except Exception as e:
+        print(f"  FAIL backend(WASM) seam restore: {e}")
     try:                                               # runtime frontier: ffi parity now reaches WASM too, including handled-IO silence
         p_io = '(defx fa (IO) (fn (x) (seam (IO) (ffi "logger" x))))'
         p_pure = '(defx fb () (fn (x) (seam (Pure) (ffi "logger" x))))'
@@ -1236,7 +1253,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 66   # runtime/backend smokes, including parser/checker/runtime/backend isolation, seamN diagnostics, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 68   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN diagnostics, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1
