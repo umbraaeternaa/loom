@@ -679,7 +679,11 @@ def emit_wat(program_src, frontend):
                     out += [ind + "drop"]
             return out
         if isinstance(node, int): return [ind + "i32.const " + str(node << 1) + "  ;; int " + str(node)]
-        if _is_symbol(node): return [ind + "local.get $" + node]
+        if _is_symbol(node):
+            if node in ctx.topdefs:
+                spec = ctx.topdefs[node]
+                return w(["record", ["code", spec["id"]]], ind, handled_effs, with_handlers, callable_env)
+            return [ind + "local.get $" + node]
         if type(node) is str: raise frontend.error("wat: string literals are not yet supported at the WASM value boundary")
         h = node[0]
         if h == "fn":

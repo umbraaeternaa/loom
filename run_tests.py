@@ -859,6 +859,7 @@ def main():
         wat_apply2 = emit_wat('(defx t () (fn () (let (f (fn (a b) (+ a b))) (f 3 4))))')
         wat_capture9 = emit_wat(CAPTURE9_PROGRAM)
         wat_trust_stack = emit_wat(wpairs[10][0])
+        wat_topdef_value = emit_wat('(defx inc () (fn (x) (+ x 1))) (defx ap () (fn ((f) x) (f x))) (defx t () (fn () (ap inc 4)))')
         assert 'import "env" "host_print"' in wat_io and "call $host_print" in wat_io   # WAT mirrors host-print import for IO
         assert 'import "env" "host_ffi"' in wat_ffi and "call $host_ffi" in wat_ffi   # WAT mirrors the foreign boundary import too
         assert 'call $host_ffi' in wat_lib_ffi and 'foreign lib' in wat_lib_ffi   # opaque lib component lowers through the same WASM foreign boundary
@@ -868,6 +869,7 @@ def main():
         assert "call $apply2" in wat_apply2 and "func $lam0" in wat_apply2   # WAT mirrors 2-arg closure application
         assert "func $lam0" in wat_capture9 and "call $apply1" in wat_capture9   # WAT mirrors closures with >8 captured values
         assert wat_trust_stack.startswith("(module") and "i32.const 18" in wat_trust_stack   # transparent trust/prov wrappers compile through WAT too
+        assert "local.get $inc" not in wat_topdef_value and "call $rec" in wat_topdef_value   # WAT mirrors top-level function values as closure records, not fake locals
         if _sh.which("node"):
             wok = True
             for prog, call in wpairs:
