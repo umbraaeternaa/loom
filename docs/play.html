@@ -48,7 +48,7 @@
     <h1>LOOM <span class="dot">·</span> playground</h1>
     <a class="home" href="./index.html">← loom</a>
   </header>
-  <p class="lede">Type a program. The <b>trust &amp; effect checker</b> proves — live, in your browser — exactly what the code is allowed to do, and refuses anything that lies. The same client-side bundle can also <b>run</b> `main`, emit <b>JavaScript</b>, and show the live <b>WebAssembly text</b> for the published backend surface. No server; nothing leaves your tab.</p>
+  <p class="lede">Type a program. The <b>trust &amp; effect checker</b> proves — live, in your browser — exactly what the code is allowed to do, and refuses anything that lies. The same client-side bundle can also <b>run</b> `main`, execute the published <b>WASM</b> backend in-browser, emit <b>JavaScript</b>, and show the live <b>WebAssembly text</b> for that same backend surface. No server; nothing leaves your tab.</p>
 
   <div class="examples" id="examples"></div>
 
@@ -145,6 +145,11 @@ const EXAMPLES = [
     (by reviewer ada
       (declassify reviewer
         (prov ai (recall (repro 9))))))))` },
+  { name: "WASM · string literal", note: "→ record / WASM",
+    src: `; Immutable string literals now cross the published WASM boundary
+; too. The semicolon stays data, not syntax or comment masking.
+
+(defx main () (fn () (record (msg "x;y"))))` },
 ];
 
 const $ = id => document.getElementById(id);
@@ -311,6 +316,7 @@ _r
     const resources = payload.resources || {};
     const foreigns = payload.foreigns || {};
     let mem = null;
+    const td = new TextDecoder();
     const rd = p => mem.getInt32(p, true);
     const raw = v => v & -2;
     const valid = (p, n) => p >= 8 && p + n <= mem.byteLength;
@@ -389,6 +395,7 @@ _r
       if (k === 3) return [tags[String(rd(p + 4))] ?? String(rd(p + 4)), dec(rd(p + 8))];
       if (k === 4) return [effName(rd(p + 4)), dec(rd(p + 8))];
       if (k === 5) return "<used:" + (resources[String(rd(p + 4))] ?? String(rd(p + 4))) + ">";
+      if (k === 6) return td.decode(new Uint8Array(mem.buffer, rd(p + 8), rd(p + 4)));
       throw new Error("unknown heap kind " + k);
     };
     const main = mod.instance.exports.main;

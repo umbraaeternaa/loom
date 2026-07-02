@@ -1210,6 +1210,8 @@ def main():
             and "WebAssembly.instantiate(" in play
             and '"findingsByFn"' in play
             and '"globalFindings"' in play
+            and "TextDecoder()" in play
+            and "k === 6" in play
             and all(name not in play for name in (
                 "loom_parse.py",
                 "loom_checker.py",

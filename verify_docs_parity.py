@@ -23,6 +23,8 @@ def _check_playground_loader() -> None:
         "WebAssembly.instantiate(",
         '"findingsByFn"',
         '"globalFindings"',
+        "TextDecoder()",
+        "k === 6",
     )
     missing = [needle for needle in required if needle not in text]
     if missing:
