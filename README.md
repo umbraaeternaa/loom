@@ -161,7 +161,7 @@ Binary and WAT compilation use isolated per-program contexts, so closure, helper
 If you want the fastest external read of what LOOM is for, start here:
 
 - The machine-checked 60-second story is [here](docs/demo_loom_60s.md).
-- The live playground at [umbraaeternaa.github.io/loom/play.html](https://umbraaeternaa.github.io/loom/play.html) if you want to paste code and see the checker react.
+- The live playground at [umbraaeternaa.github.io/loom/play.html](https://umbraaeternaa.github.io/loom/play.html) if you want to paste code and see the checker react — rejections come back **grouped by function** (the same structured proof surface as CLI `loom check`).
 - [`loom audit`](#use-it-as-a-tool) if you want a CLI view of declared-vs-performed capability surface on real code.
 
 That is the shortest path from "what is this" to "I can see the row, the lie, and the boundary."
