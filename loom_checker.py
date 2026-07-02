@@ -592,9 +592,10 @@ def infer(frontend, node, fns, errs, penv=None):
             for effect_name, count in _ncount(frontend, expr, fns, penv).items():
                 counts[effect_name] = _nadd(counts.get(effect_name, 0), count)
         for effect_name in sorted(decl):
-            got = _NCAP if opaque else counts.get(effect_name, 0)
+            direct_count = counts.get(effect_name, 0)
+            got = _NCAP if opaque else direct_count
             if quantum < 0 or quantum >= _NCAP or got > quantum:
-                errs.append("metered capability " + str(effect_name) + " used more than its quantum " + str(quantum) + " (got " + (str(got) if got < _NCAP else "unbounded/opaque") + "; a call/recursion/reinterpret/discharge or unknown higher-order use counts as overflow -- fail-closed)")
+                errs.append(_meter_error(frontend, effect_name, quantum, direct_count, body, fns, penv))
         return decl
     if head == "repro":
         inner = set()
@@ -791,6 +792,28 @@ def _has_head(node, head):
     if isinstance(node[0], list) and _has_head(node[0], head):
         return True
     return any(_has_head(child, head) for child in node[1:])
+
+
+def _meter_error(frontend, effect_name, quantum, direct_count, body, fns, penv):
+    if quantum < 0 or quantum >= _NCAP:
+        return f"metered capability {effect_name} has invalid quantum {quantum} (expected 0..{_NCAP - 1})"
+    opaque = []
+    if any(_has_head(expr, "with") for expr in body):
+        opaque.append("with")
+    if any(_has_head(expr, "handle") for expr in body):
+        opaque.append("handle")
+    if any(_ncount(frontend, expr, fns, penv).get(effect_name, 0) >= _NCAP for expr in body):
+        opaque.append("call/recursion/higher-order")
+    if opaque:
+        counted = f"counted {direct_count} direct use(s); " if direct_count else ""
+        return (
+            f"metered capability {effect_name} used more than its quantum {quantum} "
+            f"({counted}meter became opaque via {', '.join(opaque)}; fail-closed)"
+        )
+    return (
+        f"metered capability {effect_name} used more than its quantum {quantum} "
+        f"(counted {direct_count} direct use(s) in the seam body)"
+    )
 
 
 def _check_program(frontend, program):

@@ -482,6 +482,16 @@ def main():
         good = (got == accept); ok += good
         why = f"  [{errs[0]}]" if errs else ""
         print(f"  {'ok  ' if good else 'FAIL'} {name:22} expect={'accept' if accept else 'reject':6} got={'accept' if got else 'reject'}{why}")
+    try:                                               # seamN should explain direct overflow differently from fail-closed opaque overflow
+        _, direct_errs = check(parse('(defx f (Net) (fn (u) (seamN 1 (Net) (net u) (net u))))'))
+        _, opaque_errs = check(parse('(defx hit (Net) (fn (u) (net u))) (defx f (Net) (fn (u) (seamN 5 (Net) (hit u))))'))
+        direct_ok = bool(direct_errs) and "counted 2 direct use(s) in the seam body" in direct_errs[0]
+        opaque_ok = bool(opaque_errs) and "meter became opaque via call/recursion/higher-order" in opaque_errs[0]
+        meter_diag_ok = direct_ok and opaque_ok
+        ok += meter_diag_ok
+        print(f"  {'ok  ' if meter_diag_ok else 'FAIL'} checker: seamN diagnostics stay specific")
+    except Exception as e:
+        print(f"  FAIL seamN diagnostics: {e}")
     try:                                               # every check owns its policy/resource/taint context
         from concurrent.futures import ThreadPoolExecutor
         isolation_programs = [
@@ -1184,7 +1194,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 63   # runtime/backend smokes, including parser/checker/runtime/backend isolation, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 64   # runtime/backend smokes, including parser/checker/runtime/backend isolation, seamN diagnostics, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

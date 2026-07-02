@@ -548,9 +548,10 @@ def infer(node, fns, errs, penv=None):
         for x in body:
             for e, c in _ncount(x, fns, penv).items(): nc[e] = _nadd(nc.get(e, 0), c)
         for E in sorted(decl):
-            got = _NCAP if opaque else nc.get(E, 0)
+            direct_count = nc.get(E, 0)
+            got = _NCAP if opaque else direct_count
             if K < 0 or K >= _NCAP or got > K:
-                errs.append('metered capability ' + str(E) + ' used more than its quantum ' + str(K) + ' (got ' + (str(got) if got < _NCAP else 'unbounded/opaque') + '; a call/recursion/reinterpret/discharge or unknown higher-order use counts as overflow -- fail-closed)')
+                errs.append(_meter_error(E, K, direct_count, body, fns, penv))
         return decl
     if h == "repro":                                    # (repro body..) -- pass-10 REPRODUCIBILITY region: this path must be
         inner = set()                                   # re-DERIVABLE, not merely signed. No nondeterministic Rand may influence it;
@@ -715,6 +716,19 @@ def _has_head(node, head):
     if node[0] == head: return True
     if isinstance(node[0], list) and _has_head(node[0], head): return True
     return any(_has_head(c, head) for c in node[1:])
+
+
+def _meter_error(E, K, direct_count, body, fns, penv):
+    if K < 0 or K >= _NCAP:
+        return f"metered capability {E} has invalid quantum {K} (expected 0..{_NCAP - 1})"
+    opaque = []
+    if any(_has_head(x, "with") for x in body): opaque.append("with")
+    if any(_has_head(x, "handle") for x in body): opaque.append("handle")
+    if any(_ncount(x, fns, penv).get(E, 0) >= _NCAP for x in body): opaque.append("call/recursion/higher-order")
+    if opaque:
+        counted = f"counted {direct_count} direct use(s); " if direct_count else ""
+        return f"metered capability {E} used more than its quantum {K} ({counted}meter became opaque via {', '.join(opaque)}; fail-closed)"
+    return f"metered capability {E} used more than its quantum {K} (counted {direct_count} direct use(s) in the seam body)"
 
 
 def _check_program(program):
