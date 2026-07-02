@@ -849,10 +849,12 @@ def main():
                   ('(defx ln () (fn (xs) (if (empty xs) 0 (+ 1 (ln (tail xs)))))) (defx main () (fn () (ln (list 7 8 9))))', "(main)"),  # integer LIST length -> 3
                   ('(defx mk () (fn (x) (variant Ok x))) (defx un () (fn (r) (match r ((Ok v) (+ v 1)) ((Err e) 0)))) (defx main () (fn () (un (mk 7))))', "(main)"),  # SUM TYPE: variant + match -> 8
                   ('(defx main () (fn () (match (variant Some 5) ((Some x) x) ((None) 0))))', "(main)"),  # match picks the Some arm + binds the payload -> 5
-                 ('(defx rg () (fn () (get (record (a 10) (b 20)) b)))', "(rg)"),                      # record build + get -> 20
-                 ('(defx t () (fn () (trust 1 (by reviewer ada (declassify reviewer (prov ai (recall (repro 9))))))))', "(t)"),  # transparent trust/provenance/persistence wrappers -> 9
-                 ('(defx t (IO) (fn () (print "x;y")))', "(t)"),                                         # static string literal survives real WASM heap decode + host print
-                 ('(defx t (Net) (fn () (net "u")))', "(t)")]                                            # static string literal survives effect boxing on WASM too
+                  ('(defx rg () (fn () (get (record (a 10) (b 20)) b)))', "(rg)"),                      # record build + get -> 20
+                  ('(defx t () (fn () (trust 1 (by reviewer ada (declassify reviewer (prov ai (recall (repro 9))))))))', "(t)"),  # transparent trust/provenance/persistence wrappers -> 9
+                  ('(defx h () (fn (x) (* x 3))) (defx t () (fn () (with IO h (trust (roles code review) (sub review auditor) (by code human (by auditor alice (print 5)))))))', "(t)"),  # role-form trust + subsumption stays transparent around handled IO
+                  ('(defx t () (fn () (trust 2 (prov human (declassify reviewer (seam (Pure) (ffi "x" (recall (repro 9)))))))))', "(t)"),  # recall + ffi + declassify/count-form trust stay transparent on WASM too
+                  ('(defx t (IO) (fn () (print "x;y")))', "(t)"),                                         # static string literal survives real WASM heap decode + host print
+                  ('(defx t (Net) (fn () (net "u")))', "(t)")]                                            # static string literal survives effect boxing on WASM too
         for prog, call in wpairs:                       # every program emits a valid wasm module (magic header)
             assert compile_wasm(prog)[:4] == b"\x00asm"
         assert _WASM_ABI_VERSION == 1 and b"loom_abi_version" in compile_wasm(wpairs[0][0])  # ABI v1 is machine-readable
@@ -870,6 +872,8 @@ def main():
         wat_apply2 = emit_wat('(defx t () (fn () (let (f (fn (a b) (+ a b))) (f 3 4))))')
         wat_capture9 = emit_wat(CAPTURE9_PROGRAM)
         wat_trust_stack = emit_wat(wpairs[10][0])
+        wat_roles_trust = emit_wat(wpairs[11][0])
+        wat_ffi_trust = emit_wat(wpairs[12][0])
         wat_string = emit_wat('(defx t (IO) (fn () (print "x;y")))')
         wat_topdef_value = emit_wat('(defx inc () (fn (x) (+ x 1))) (defx ap () (fn ((f) x) (f x))) (defx t () (fn () (ap inc 4)))')
         assert 'import "env" "host_print"' in wat_io and "call $host_print" in wat_io   # WAT mirrors host-print import for IO
@@ -881,6 +885,8 @@ def main():
         assert "call $apply2" in wat_apply2 and "func $lam0" in wat_apply2   # WAT mirrors 2-arg closure application
         assert "func $lam0" in wat_capture9 and "call $apply1" in wat_capture9   # WAT mirrors closures with >8 captured values
         assert wat_trust_stack.startswith("(module") and "i32.const 18" in wat_trust_stack   # transparent trust/prov wrappers compile through WAT too
+        assert "call $apply1" in wat_roles_trust and "call $host_print" not in wat_roles_trust   # role-form trust + subsumption still lowers through the handled-IO closure path, not the raw host print
+        assert "call $host_ffi" in wat_ffi_trust and "foreign x" in wat_ffi_trust   # trust/recall/declassify wrappers do not hide the opaque foreign boundary in WAT
         assert '(data (i32.const ' in wat_string   # WAT mirrors static string-literal storage too
         assert "local.get $inc" not in wat_topdef_value and "call $rec" in wat_topdef_value   # WAT mirrors top-level function values as closure records, not fake locals
         if _sh.which("node"):
@@ -944,13 +950,22 @@ def main():
         print(f"  {'ok  ' if r31 else 'FAIL'} backend(WASM): IO print + handle => ({v31}, {o31}) / ({v32}, {o32})")
     except Exception as e:
         print(f"  FAIL backend(WASM) effects: {e}")
-    try:                                               # transparent wrappers must preserve sequencing around handled effects in wasm too
-        prog = '(defx t () (fn () (handle (IO) (trust (prov human (print 5) 7)))))'
-        wv, wo = run_wasm(prog, "(t)")
-        rv, ro = run_call(prog, "(t)")
-        r_trust_seq = ((wv, wo) == (rv, ro) == (7, []))
+    try:                                               # trust/provenance wrappers remain runtime-transparent across IO/roles/ffi paths in wasm too
+        trust_cases = [
+            ('(defx t () (fn () (handle (IO) (trust (prov human (print 5) 7)))))', "(t)", (7, [])),
+            ('(defx h () (fn (x) (* x 3))) (defx t () (fn () (with IO h (trust (roles code review) (sub review auditor) (by code human (by auditor alice (print 5)))))))', "(t)", (15, [])),
+            ('(defx t () (fn () (trust 2 (prov human (declassify reviewer (seam (Pure) (ffi "x" (recall (repro 9)))))))))', "(t)", (9, [])),
+        ]
+        trust_results = []
+        r_trust_seq = True
+        for prog, call, expected in trust_cases:
+            wv, wo = run_wasm(prog, call)
+            rv, ro = run_call(prog, call)
+            trust_results.append(((wv, wo), (rv, ro)))
+            if (wv, wo) != (rv, ro) or (wv, wo) != expected:
+                r_trust_seq = False
         ok += r_trust_seq
-        print(f"  {'ok  ' if r_trust_seq else 'FAIL'} backend(WASM): transparent trust/prov sequencing => ({wv}, {wo}) / ({rv}, {ro})")
+        print(f"  {'ok  ' if r_trust_seq else 'FAIL'} backend(WASM): transparent trust/prov sequencing => {trust_results}")
     except Exception as e:
         print(f"  FAIL backend(WASM) transparent wrappers: {e}")
     try:                                               # effect frontier: IO `with` reinterprets print through a handler closure
