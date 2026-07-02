@@ -27,6 +27,10 @@ class Closure:
         self.env = env
 
 
+def _is_symbol(node):
+    return isinstance(node, str) and type(node) is not str
+
+
 _RUNTIME_STATE = ContextVar("loom_runtime_state", default=None)
 
 
@@ -78,7 +82,7 @@ def call_fn(frontend, val, args, fns, out, handlers):
     """Apply a function VALUE (a Closure or a named-fn string) to already-evaluated args."""
     if isinstance(val, Closure):
         return _eval_seq(frontend, val.body, _bind_params(frontend, val.params, args, val.env), fns, out, handlers)
-    if isinstance(val, str) and val in fns:
+    if _is_symbol(val) and val in fns:
         fn = fns[val]["fn"]
         return _eval_seq(frontend, fn[2:], _bind_params(frontend, fn[1], args), fns, out, handlers)
     raise frontend.error(f"not a function: {val}")
@@ -88,8 +92,10 @@ def ev(frontend, node, env, fns, out, handlers=None):
     handlers = handlers or {}
     if isinstance(node, int):
         return node
-    if isinstance(node, str):
+    if _is_symbol(node):
         return env.get(node, node)
+    if type(node) is str:
+        return node
     head = node[0]
     if head == "fn":
         return Closure(node[1], node[2:], env)
@@ -205,18 +211,18 @@ def ev(frontend, node, env, fns, out, handlers=None):
             raise frontend.error("capability denied: Rand not granted by enclosing seam")
         return ("Rand", 0)
     fn_value = None
-    if isinstance(head, str):
+    if _is_symbol(head):
         if head in fns:
             fn_value = fns[head]
         else:
             target = env.get(head)
-            if isinstance(target, str) and target in fns:
+            if _is_symbol(target) and target in fns:
                 fn_value = fns[target]
             elif isinstance(target, Closure):
                 fn_value = target
     elif isinstance(head, list):
         target = ev(frontend, head, env, fns, out, handlers)
-        fn_value = target if isinstance(target, Closure) else (fns[target] if isinstance(target, str) and target in fns else None)
+        fn_value = target if isinstance(target, Closure) else (fns[target] if _is_symbol(target) and target in fns else None)
     if isinstance(fn_value, Closure):
         return _eval_seq(frontend, fn_value.body, _bind_params(frontend, fn_value.params, args, fn_value.env), fns, out, handlers)
     if isinstance(fn_value, dict):

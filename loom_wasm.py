@@ -11,6 +11,10 @@ from loom_frontend import WasmFrontend as _WasmFrontend
 class Frontend(_WasmFrontend):
     __slots__ = ()
 
+
+def _is_symbol(node):
+    return isinstance(node, str) and type(node) is not str
+
 def _leb_u(n):
     o = bytearray()
     while True:
@@ -98,12 +102,14 @@ def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ca
     handled_effs = handled_effs or set()
     with_handlers = with_handlers or {}
     if isinstance(node, int): return _wasm_int(node)                    # immediate integer: n << 1, low bit clear
-    if isinstance(node, str):
+    if _is_symbol(node):
         if node in lmap: return b"\x20" + _leb_u(lmap[node])            # local.get (param / let / match-bound)
         if node in ctx.topdefs:
             spec = ctx.topdefs[node]
             return _emit_wasm(ctx, ["record", ["code", spec["id"]]], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
         raise frontend.error("wasm: free variable " + node)
+    if type(node) is str:
+        raise frontend.error("wasm: string literals are not yet supported at the WASM value boundary")
     h = node[0]
     if isinstance(h, list):                                             # ((fn ..) args) — compute head, then apply as a closure
         arity = len(node[1:])
@@ -209,7 +215,7 @@ def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ca
     if transparent_body is not None:
         return _emit_wasm_seq(ctx, transparent_body, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
     if h == "ffi":
-        if not isinstance(node[1], str):
+        if type(node[1]) is not str:
             raise frontend.error("wasm: ffi name must be a string literal")
         return (_wasm_const(ctx.foreigns[node[1]])
                 + _emit_wasm(ctx, ["list"] + node[2:], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
@@ -273,7 +279,7 @@ def _wasm_collect_closures(program_src, frontend):
     order = []
 
     def _is_closure_expr(node, callable_env):
-        if isinstance(node, str):
+        if _is_symbol(node):
             return node in callable_env or node in top
         if not isinstance(node, list) or not node:
             return False
@@ -359,7 +365,7 @@ def _wasm_collect_closures(program_src, frontend):
     return ds, top, specs, order
 
 def _wasm_is_closure_expr(ctx, node, callable_env):
-    if isinstance(node, str):
+    if _is_symbol(node):
         return node in callable_env or node in ctx.topdefs
     if not isinstance(node, list) or not node:
         return False
@@ -442,7 +448,7 @@ def _wasm_resources(program_src, frontend):
             for item in n[2:]:
                 w(item)
             return
-        if n[0] == "use" and len(n) >= 2 and isinstance(n[1], str):
+        if n[0] == "use" and len(n) >= 2 and _is_symbol(n[1]):
             resources.setdefault(n[1], len(resources))
             return
         for a in n:
@@ -456,7 +462,7 @@ def _wasm_foreigns(program_src, frontend):
     def w(n):
         if not isinstance(n, list) or not n:
             return
-        if n[0] == "ffi" and len(n) >= 2 and isinstance(n[1], str):
+        if n[0] == "ffi" and len(n) >= 2 and type(n[1]) is str:
             foreigns.setdefault(n[1], len(foreigns))
         for a in n[1:]:
             w(a)
@@ -673,7 +679,8 @@ def emit_wat(program_src, frontend):
                     out += [ind + "drop"]
             return out
         if isinstance(node, int): return [ind + "i32.const " + str(node << 1) + "  ;; int " + str(node)]
-        if isinstance(node, str): return [ind + "local.get $" + node]
+        if _is_symbol(node): return [ind + "local.get $" + node]
+        if type(node) is str: raise frontend.error("wat: string literals are not yet supported at the WASM value boundary")
         h = node[0]
         if h == "fn":
             spec = ctx.closures.get(id(node))
@@ -749,7 +756,7 @@ def emit_wat(program_src, frontend):
         if transparent_body is not None:
             return seq(transparent_body)
         if h == "ffi":
-            if not isinstance(node[1], str):
+            if type(node[1]) is not str:
                 raise frontend.error("wat: ffi name must be a string literal")
             uses_heap[0] = True
             return ([ind + "i32.const " + str(ctx.foreigns[node[1]]) + "  ;; foreign " + node[1]]

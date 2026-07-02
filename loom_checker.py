@@ -67,9 +67,13 @@ def _checker_state():
     return state
 
 
+def _is_symbol(node):
+    return isinstance(node, str) and type(node) is not str
+
+
 def latent_of(frontend, arg, fns, penv, errs):
     """Latent effect-set of a function passed as a value: a named fn, a passed-through fn param, or an inline lambda."""
-    if isinstance(arg, str):
+    if _is_symbol(arg):
         if arg in fns:
             return fns[arg]["eff"]
         if arg in penv:
@@ -181,7 +185,7 @@ def _ucount(frontend, node, fns, penv):
             if eff in frontend.effects:
                 out[eff] = _uadd(out.get(eff, 0), count)
         for index in fns[head].get("lin", set()):
-            if index < len(node) - 1 and isinstance(node[index + 1], str):
+            if index < len(node) - 1 and _is_symbol(node[index + 1]):
                 out[node[index + 1]] = _uadd(out.get(node[index + 1], 0), 1)
     elif penv and head in penv:
         for eff in penv[head]:
@@ -300,7 +304,7 @@ def instantiate(frontend, callee, args, fns, penv, errs):
 def prov_of(frontend, node, penv=None):
     """Provenance set under a node; provenance flows through lets and computation."""
     penv = penv or {}
-    if isinstance(node, str):
+    if _is_symbol(node):
         return set(penv.get(node, ()))
     if not isinstance(node, list) or not node:
         return set()
@@ -357,7 +361,7 @@ def prov_of(frontend, node, penv=None):
 def roles_of(frontend, node, penv=None):
     """Role->author pairs under a node; flows through lets and computation."""
     penv = penv or {}
-    if isinstance(node, str):
+    if _is_symbol(node):
         return set(penv.get(node, ()))
     if not isinstance(node, list) or not node:
         return set()
@@ -414,14 +418,14 @@ def _prov_reqs(frontend, body, params, fns=None):
                 need, trust_body = None, []
             else:
                 need, trust_body = 1, node[1:]
-            if need is not None and len(trust_body) == 1 and isinstance(trust_body[0], str) and trust_body[0] in params:
+            if need is not None and len(trust_body) == 1 and _is_symbol(trust_body[0]) and trust_body[0] in params:
                 req[trust_body[0]] = max(req.get(trust_body[0], 0), need)
-        elif fns and isinstance(node[0], str) and node[0] in fns:
+        elif fns and _is_symbol(node[0]) and node[0] in fns:
             callee = fns[node[0]]
             param_names = [frontend.pname(param) for param in callee["params"]]
             for param_name, callee_need in callee.get("preq", {}).items():
                 callee_index = param_names.index(param_name)
-                if callee_index + 1 < len(node) and isinstance(node[callee_index + 1], str) and node[callee_index + 1] in params:
+                if callee_index + 1 < len(node) and _is_symbol(node[callee_index + 1]) and node[callee_index + 1] in params:
                     req[node[callee_index + 1]] = max(req.get(node[callee_index + 1], 0), callee_need)
         for child in node[1:]:
             walk(child)
@@ -433,7 +437,7 @@ def _prov_reqs(frontend, body, params, fns=None):
 
 def _value_uses(node, obligated):
     """Obligation-bearing function names used as values instead of direct-call heads."""
-    if isinstance(node, str):
+    if _is_symbol(node):
         return {node} if node in obligated else set()
     out = set()
     if not isinstance(node, list) or not node:
@@ -743,7 +747,7 @@ def infer(frontend, node, fns, errs, penv=None):
             body = node[2:] if has_count else node[1:]
             independent = {prov for expr in body for prov in prov_of(frontend, expr, _checker_state().taint_prov)} - {"ai"}
             first = body[0] if len(body) == 1 else None
-            deferred = isinstance(first, str) and first in _checker_state().policy.get("params", set()) and first not in _checker_state().taint_prov
+            deferred = _is_symbol(first) and first in _checker_state().policy.get("params", set()) and first not in _checker_state().taint_prov
             if len(independent) < need and not deferred:
                 errs.append(f"trust gate: need >= {need} independent anchor(s), got {len(independent)} {sorted(independent) or '(none)'} — value too self-referential / under-corroborated")
         eff = set()
@@ -763,7 +767,7 @@ def infer(frontend, node, fns, errs, penv=None):
         for param_name, need in fns[head].get("preq", {}).items():
             index = param_names.index(param_name)
             arg = node[index + 1] if index + 1 < len(node) else None
-            if isinstance(arg, str) and arg in _checker_state().policy.get("params", set()) and arg not in _checker_state().taint_prov:
+            if _is_symbol(arg) and arg in _checker_state().policy.get("params", set()) and arg not in _checker_state().taint_prov:
                 continue
             anchors = (prov_of(frontend, arg, _checker_state().taint_prov) - {"ai"}) if arg is not None else set()
             if len(anchors) < need:

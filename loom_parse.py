@@ -8,6 +8,10 @@ avoid imports and circular loading.
 import re
 
 
+class Symbol(str):
+    pass
+
+
 class Frontend:
     __slots__ = ("error",)
 
@@ -41,7 +45,7 @@ def _read(frontend, tokens):
     try:
         return int(head)
     except ValueError:
-        return head
+        return Symbol(head)
 
 
 def parse(frontend, src):

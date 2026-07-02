@@ -20,6 +20,10 @@ INT_MAX = (1 << (INT_BITS - 1)) - 1
 _INT_MOD = 1 << INT_BITS
 
 
+def _is_symbol(node):
+    return isinstance(node, str) and type(node) is not str
+
+
 def _i31(n):
     """Canonical signed i31 wraparound shared by every LOOM execution backend."""
     return ((n - INT_MIN) % _INT_MOD) + INT_MIN
@@ -49,9 +53,9 @@ def pname(p):                                                    # a param is `n
 def platent(p):                                                 # fn-param's latent effects; None for value / linear params
     if isinstance(p, list) and p and p[0] == "lin": return None
     return set(p[1:]) if isinstance(p, list) else None
-def is_var(e): return isinstance(e, str) and e not in EFFECTS and e[:1].islower()  # lowercase token = effect variable
+def is_var(e): return _is_symbol(e) and e not in EFFECTS and e[:1].islower()  # lowercase token = effect variable
 def is_fn_expr(e, fns, penv):                                    # does this expression denote a function?
-    return (isinstance(e, list) and len(e) > 0 and e[0] == "fn") or (isinstance(e, str) and (e in fns or e in penv))
+    return (isinstance(e, list) and len(e) > 0 and e[0] == "fn") or (_is_symbol(e) and (e in fns or e in penv))
 
 
 class LoomError(Exception): pass

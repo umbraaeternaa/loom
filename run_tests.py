@@ -615,6 +615,22 @@ def main():
         print(f"  {'ok  ' if w_alias else 'FAIL'} backend(WASM): integer/pointer anti-alias => {wa}")
     except LoomError as e:
         print(f"  FAIL backend(WASM) anti-alias: {e}")
+    try:                                               # string literals must fail closed on the WASM value boundary, explicitly rather than as fake free vars
+        pstr = '(defx t (IO) (fn () (print "x;y")))'
+        denied = False
+        try:
+            compile_wasm(pstr)
+        except LoomError as e:
+            denied = "string literals are not yet supported at the WASM value boundary" in str(e)
+        wat_denied = False
+        try:
+            emit_wat(pstr)
+        except LoomError as e:
+            wat_denied = "string literals are not yet supported at the WASM value boundary" in str(e)
+        w_string_boundary = denied and wat_denied; ok += w_string_boundary
+        print(f"  {'ok  ' if w_string_boundary else 'FAIL'} backend(WASM): string literal boundary stays explicit")
+    except Exception as e:
+        print(f"  FAIL backend(WASM) string boundary: {e}")
     try:                                               # i31 overflow semantics must match on every execution backend
         import shutil as _num_sh
         pnum = '(defx bounds () (fn () (record (add (+ 1073741823 1)) (sub (- -1073741824 1)) (mul (* 1073741823 2)) (wide (* 1073741823 1073741823)))))'
@@ -745,6 +761,8 @@ def main():
                  (MAP + ' (defx demo () (fn () (map sq (list 1 2 3 4))))', "(demo)"),
                  ('(defx g () (fn () (get (record (a 10) (b 20)) b)))', "(g)"),
                  ('(defx mk () (fn (x) (variant Ok x))) (defx main () (fn () (match (mk 7) ((Ok v) (+ v 1)) ((Err e) 0))))', "(main)"),  # SUM TYPE: variant+match compiles to BOTH Py and JS, each == interpreter (=> 8)
+                 ('(defx t (IO) (fn () (print "x;y")))', "(t)"),                                         # string literal survives codegen quoting; quoted semicolon stays data, not syntax
+                 ('(defx t (Net) (fn () (net "u")))', "(t)"),                                            # string literal payload survives effect boxing on portable backends
                  ('(defx f (Net) (fn () (seam (Net) (net 1))))', "(f)"),                       # EFFECT op net -> "<net 1>" on interp/Py/JS
                  ('(defx f (Alloc) (fn () (head (seam (Alloc) (alloc 3)))))', "(f)"),           # EFFECT op alloc -> [0,1,2], head => 0
                  ('(defx fa (IO) (fn (x) (seam (IO) (ffi "logger" x))))', "(fa 5)"),            # FFI codegen: seam GRANTS IO -> foreign emits "foreign:5"; interp==Py==Node
@@ -1209,7 +1227,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 65   # runtime/backend smokes, including parser/checker/runtime/backend isolation, seamN diagnostics, cli proof-surface, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 66   # runtime/backend smokes, including parser/checker/runtime/backend isolation, seamN diagnostics, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

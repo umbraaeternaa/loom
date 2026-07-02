@@ -101,6 +101,9 @@ def _check_call_literals(call_ast):
     if errors: raise LoomError("; ".join(errors))
 
 
+class Symbol(str): pass
+
+
 def plin(p): return p[1] if (isinstance(p, list) and len(p) >= 2 and p[0] == "lin") else None   # (lin r) = LINEAR param
 def pname(p):                                                    # a param is `name` (value) · `(name eff..)` (fn) · `(lin r)` (linear)
     if isinstance(p, list): return p[1] if p and p[0] == "lin" else p[0]
@@ -108,9 +111,10 @@ def pname(p):                                                    # a param is `n
 def platent(p):                                                 # fn-param's latent effects; None for value / linear params
     if isinstance(p, list) and p and p[0] == "lin": return None
     return set(p[1:]) if isinstance(p, list) else None
-def is_var(e): return isinstance(e, str) and e not in EFFECTS and e[:1].islower()  # lowercase token = effect variable
+def _is_symbol(node): return isinstance(node, str) and type(node) is not str
+def is_var(e): return _is_symbol(e) and e not in EFFECTS and e[:1].islower()  # lowercase token = effect variable
 def is_fn_expr(e, fns, penv):                                    # does this expression denote a function?
-    return (isinstance(e, list) and len(e) > 0 and e[0] == "fn") or (isinstance(e, str) and (e in fns or e in penv))
+    return (isinstance(e, list) and len(e) > 0 and e[0] == "fn") or (_is_symbol(e) and (e in fns or e in penv))
 
 
 def tokenize(s):
@@ -136,7 +140,7 @@ def _read(t):
             l.append(_read(t))
     if x.startswith('"'): return x[1:-1]
     try: return int(x)
-    except ValueError: return x
+    except ValueError: return Symbol(x)
 
 
 def parse(s):
@@ -155,7 +159,7 @@ class Closure:                                          # an inline lambda evalu
 
 def latent_of(arg, fns, penv, errs):
     """Latent effect-set of a function passed as a value: a named fn, a passed-through fn param, or an inline lambda."""
-    if isinstance(arg, str):
+    if _is_symbol(arg):
         if arg in fns: return fns[arg]["eff"]
         if arg in penv: return penv[arg]
         return set()                                    # not a function value -> contributes no latent effect
@@ -324,7 +328,7 @@ def prov_of(node, penv=None):
     computation, so a value DERIVED from (prov P ..) still carries P. (prov P x) injects P; (by ROLE WHO x) injects WHO;
     a bound variable carries the provenance of what it was bound to; everything else unions its children. 'ai' never anchors."""
     penv = penv or {}
-    if isinstance(node, str): return set(penv.get(node, ()))   # a variable reference carries its bound provenance (taint)
+    if _is_symbol(node): return set(penv.get(node, ()))   # a variable reference carries its bound provenance (taint)
     if not isinstance(node, list) or not node: return set()
     if node[0] == "prov":
         s = {node[1]}
@@ -365,7 +369,7 @@ def prov_of(node, penv=None):
 def roles_of(node, penv=None):
     """Role->author pairs under a node (D10). D18 TAINT: flows through `let` and computation, like prov_of."""
     penv = penv or {}
-    if isinstance(node, str): return set(penv.get(node, ()))
+    if _is_symbol(node): return set(penv.get(node, ()))
     if not isinstance(node, list) or not node: return set()
     if node[0] == "by":
         s = {(node[1], node[2])}
@@ -407,13 +411,13 @@ def _prov_reqs(body, params, fns=None):
             if isinstance(spec, int): need, tb = spec, n[2:]
             elif isinstance(spec, list): need, tb = None, []          # roles-form: not deferred (fail-closed)
             else: need, tb = 1, n[1:]
-            if need is not None and len(tb) == 1 and isinstance(tb[0], str) and tb[0] in params:
+            if need is not None and len(tb) == 1 and _is_symbol(tb[0]) and tb[0] in params:
                 req[tb[0]] = max(req.get(tb[0], 0), need)
-        elif fns and isinstance(n[0], str) and n[0] in fns:           # D25: inherit a callee's obligation when we pass our
+        elif fns and _is_symbol(n[0]) and n[0] in fns:           # D25: inherit a callee's obligation when we pass our
             callee = fns[n[0]]; pn = [pname(p) for p in callee["params"]]   #   OWN raw param into its trusted slot (multi-hop relay)
             for pp, cneed in callee.get("preq", {}).items():
                 cix = pn.index(pp)
-                if cix + 1 < len(n) and isinstance(n[cix+1], str) and n[cix+1] in params:
+                if cix + 1 < len(n) and _is_symbol(n[cix+1]) and n[cix+1] in params:
                     req[n[cix+1]] = max(req.get(n[cix+1], 0), cneed)
         for c in n[1:]: walk(c)
     for b in body: walk(b)
@@ -423,7 +427,7 @@ def _value_uses(node, obligated):
     """D22 soundness: names in `obligated` (fns carrying a provenance obligation) used as a VALUE — ANY
     position but a direct-call head. Such a use (passed as an arg / returned) would escape call-site
     discharge via an indirect call, so it is REFUSED. A direct-call head is exempt (it is discharged)."""
-    if isinstance(node, str): return {node} if node in obligated else set()
+    if _is_symbol(node): return {node} if node in obligated else set()
     bad = set()
     if not isinstance(node, list) or not node: return bad
     for c in node[1:]: bad |= _value_uses(c, obligated)
@@ -671,7 +675,7 @@ def infer(node, fns, errs, penv=None):
             body = node[2:] if has_n else node[1:]       # independence is a QUANTITY = count of distinct non-ai sources;
             independent = {p for x in body for p in prov_of(x, _checker_state().taint_prov)} - {"ai"} # SET; D19: taint env so bound vars carry prov
             p0 = body[0] if len(body) == 1 else None     # D22: (trust [N] raw-param) DEFERS to the call site, where
-            deferred = isinstance(p0, str) and p0 in _checker_state().policy.get("params", set()) and p0 not in _checker_state().taint_prov  # the arg's provenance discharges it; only a RAW param (untainted + unshadowed) defers
+            deferred = _is_symbol(p0) and p0 in _checker_state().policy.get("params", set()) and p0 not in _checker_state().taint_prov  # the arg's provenance discharges it; only a RAW param (untainted + unshadowed) defers
             if len(independent) < need and not deferred:
                 errs.append(f"trust gate: need >= {need} independent anchor(s), got {len(independent)} {sorted(independent) or '(none)'} — value too self-referential / under-corroborated")
         eff = set()
@@ -687,7 +691,7 @@ def infer(node, fns, errs, penv=None):
         for pp, need in fns[h].get("preq", {}).items():                  #   the arg bound to a trusted param must carry the anchors
             ix = pn.index(pp)
             arg = node[ix+1] if ix + 1 < len(node) else None
-            if isinstance(arg, str) and arg in _checker_state().policy.get("params", set()) and arg not in _checker_state().taint_prov:
+            if _is_symbol(arg) and arg in _checker_state().policy.get("params", set()) and arg not in _checker_state().taint_prov:
                 continue                                             # D25: arg is OUR OWN raw param -> obligation rides up via our preq (deferred to callers)
             anchors = (prov_of(arg, _checker_state().taint_prov) - {"ai"}) if arg is not None else set()
             if len(anchors) < need:
@@ -833,7 +837,7 @@ def call_fn(val, args, fns, out, handlers):
     """Apply a function VALUE (a Closure or a named-fn string) to already-evaluated args."""
     if isinstance(val, Closure):
         loc = {**val.env, **dict(zip([pname(p) for p in val.params], args))}; body = val.body
-    elif isinstance(val, str) and val in fns:
+    elif _is_symbol(val) and val in fns:
         fn = fns[val]["fn"]; loc = dict(zip([pname(p) for p in fn[1]], args)); body = fn[2:]
     else:
         raise LoomError(f"not a function: {val}")
@@ -845,7 +849,8 @@ def call_fn(val, args, fns, out, handlers):
 def ev(node, env, fns, out, handlers=None):
     handlers = handlers or {}
     if isinstance(node, int): return node
-    if isinstance(node, str): return env.get(node, node)
+    if _is_symbol(node): return env.get(node, node)
+    if type(node) is str: return node
     h = node[0]
     if h == "fn": return Closure(node[1], node[2:], env)   # a lambda literal evaluates to a closure over env
     if h == 'seamN': return ev(['seam'] + node[2:], env, fns, out, handlers)   # D27 meter runs as a seam (cap stack); the quantum is a static check
@@ -964,15 +969,15 @@ def ev(node, env, fns, out, handlers=None):
         if not _cap_ok("Rand"): raise LoomError("capability denied: Rand not granted by enclosing seam")
         return ("Rand", 0)                              # deterministic opaque value — the point is effect-tracking, not real RNG
     fv = None                                           # resolve the head to a function: name, var->name, or closure
-    if isinstance(h, str):
+    if _is_symbol(h):
         if h in fns: fv = fns[h]
         else:
             g = env.get(h)
-            if isinstance(g, str) and g in fns: fv = fns[g]
+            if _is_symbol(g) and g in fns: fv = fns[g]
             elif isinstance(g, Closure): fv = g
     elif isinstance(h, list):                           # ((fn ..) args) — apply the result of an expression
         hv = ev(h, env, fns, out, handlers)
-        fv = hv if isinstance(hv, Closure) else (fns[hv] if isinstance(hv, str) and hv in fns else None)
+        fv = hv if isinstance(hv, Closure) else (fns[hv] if _is_symbol(hv) and hv in fns else None)
     if isinstance(fv, Closure):
         loc = {**fv.env, **dict(zip([pname(p) for p in fv.params], a))}; r = None
         for b in fv.body: r = ev(b, loc, fns, out, handlers)
@@ -1001,7 +1006,8 @@ def run_call(program_src, call_src):
 # "AI proposes -> the compiler DISPOSES -> and EMITS verified code that runs anywhere." Covers the computational core.
 def _emit(node):
     if isinstance(node, int): return str(node)
-    if isinstance(node, str): return node                              # variable / symbol
+    if type(node) is str: return repr(node)                            # string literal
+    if _is_symbol(node): return node                                   # variable / symbol
     h = node[0]
     if h == "+": return "_i31(" + "+".join(_emit(a) for a in node[1:]) + ")"
     if h == "-": return f"_i31(({_emit(node[1])})-({_emit(node[2])}))"
@@ -1084,7 +1090,8 @@ def run_compiled(program_src, call_src):
 # ---- SECOND TARGET: JavaScript. Same emit pattern -> a DIFFERENT platform (browser / Node / any OS) => cross-platform. ----
 def _emit_js(node):
     if isinstance(node, int): return str(node)
-    if isinstance(node, str): return node
+    if type(node) is str: return repr(node)
+    if _is_symbol(node): return node
     h = node[0]
     if h == "+": return "_i31(" + "+".join(_emit_js(a) for a in node[1:]) + ")"
     if h == "-": return f"_i31(({_emit_js(node[1])})-({_emit_js(node[2])}))"
@@ -1266,12 +1273,14 @@ def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ca
     handled_effs = handled_effs or set()
     with_handlers = with_handlers or {}
     if isinstance(node, int): return _wasm_int(node)                    # immediate integer: n << 1, low bit clear
-    if isinstance(node, str):
+    if _is_symbol(node):
         if node in lmap: return b"\x20" + _leb_u(lmap[node])            # local.get (param / let / match-bound)
         if node in ctx.topdefs:
             spec = ctx.topdefs[node]
             return _emit_wasm(ctx, ["record", ["code", spec["id"]]], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
         raise LoomError("wasm: free variable " + node)
+    if type(node) is str:
+        raise LoomError("wasm: string literals are not yet supported at the WASM value boundary")
     h = node[0]
     if isinstance(h, list):                                             # ((fn ..) args) — compute head, then apply as a closure
         arity = len(node[1:])
@@ -1377,7 +1386,7 @@ def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ca
     if transparent_body is not None:
         return _emit_wasm_seq(ctx, transparent_body, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
     if h == "ffi":
-        if not isinstance(node[1], str):
+        if type(node[1]) is not str:
             raise LoomError("wasm: ffi name must be a string literal")
         return (_wasm_const(ctx.foreigns[node[1]])
                 + _emit_wasm(ctx, ["list"] + node[2:], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
@@ -1441,7 +1450,7 @@ def _wasm_collect_closures(program_src):
     order = []
 
     def _is_closure_expr(node, callable_env):
-        if isinstance(node, str):
+        if _is_symbol(node):
             return node in callable_env or node in top
         if not isinstance(node, list) or not node:
             return False
@@ -1527,7 +1536,7 @@ def _wasm_collect_closures(program_src):
     return ds, top, specs, order
 
 def _wasm_is_closure_expr(ctx, node, callable_env):
-    if isinstance(node, str):
+    if _is_symbol(node):
         return node in callable_env or node in ctx.topdefs
     if not isinstance(node, list) or not node:
         return False
@@ -1610,7 +1619,7 @@ def _wasm_resources(program_src):
             for item in n[2:]:
                 w(item)
             return
-        if n[0] == "use" and len(n) >= 2 and isinstance(n[1], str):
+        if n[0] == "use" and len(n) >= 2 and _is_symbol(n[1]):
             resources.setdefault(n[1], len(resources))
             return
         for a in n:
@@ -1624,7 +1633,7 @@ def _wasm_foreigns(program_src):
     def w(n):
         if not isinstance(n, list) or not n:
             return
-        if n[0] == "ffi" and len(n) >= 2 and isinstance(n[1], str):
+        if n[0] == "ffi" and len(n) >= 2 and type(n[1]) is str:
             foreigns.setdefault(n[1], len(foreigns))
         for a in n[1:]:
             w(a)
@@ -1840,7 +1849,8 @@ def emit_wat(program_src):
                     out += [ind + "drop"]
             return out
         if isinstance(node, int): return [ind + "i32.const " + str(node << 1) + "  ;; int " + str(node)]
-        if isinstance(node, str): return [ind + "local.get $" + node]
+        if _is_symbol(node): return [ind + "local.get $" + node]
+        if type(node) is str: raise LoomError("wat: string literals are not yet supported at the WASM value boundary")
         h = node[0]
         if h == "fn":
             spec = ctx.closures.get(id(node))
@@ -1916,7 +1926,7 @@ def emit_wat(program_src):
         if transparent_body is not None:
             return seq(transparent_body)
         if h == "ffi":
-            if not isinstance(node[1], str):
+            if type(node[1]) is not str:
                 raise LoomError("wat: ffi name must be a string literal")
             uses_heap[0] = True
             return ([ind + "i32.const " + str(ctx.foreigns[node[1]]) + "  ;; foreign " + node[1]]

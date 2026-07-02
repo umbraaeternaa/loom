@@ -7,9 +7,14 @@ from loom_frontend import CodegenFrontend as _CodegenFrontend
 class Frontend(_CodegenFrontend):
     __slots__ = ()
 
+
+def _is_symbol(node):
+    return isinstance(node, str) and type(node) is not str
+
 def _emit(frontend, node):
     if isinstance(node, int): return str(node)
-    if isinstance(node, str): return node                              # variable / symbol
+    if type(node) is str: return repr(node)                            # string literal
+    if _is_symbol(node): return node                                   # variable / symbol
     h = node[0]
     if h == "+": return "_i31(" + "+".join(_emit(frontend, a) for a in node[1:]) + ")"
     if h == "-": return f"_i31(({_emit(frontend, node[1])})-({_emit(frontend, node[2])}))"
@@ -92,7 +97,8 @@ def run_compiled(program_src, call_src, frontend):
 # ---- SECOND TARGET: JavaScript. Same emit pattern -> a DIFFERENT platform (browser / Node / any OS) => cross-platform. ----
 def _emit_js(frontend, node):
     if isinstance(node, int): return str(node)
-    if isinstance(node, str): return node
+    if type(node) is str: return repr(node)
+    if _is_symbol(node): return node
     h = node[0]
     if h == "+": return "_i31(" + "+".join(_emit_js(frontend, a) for a in node[1:]) + ")"
     if h == "-": return f"_i31(({_emit_js(frontend, node[1])})-({_emit_js(frontend, node[2])}))"
