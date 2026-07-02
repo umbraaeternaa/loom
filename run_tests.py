@@ -604,7 +604,8 @@ def main():
         wr, _ = run_wasm('(defx r () (fn () (record (a 1) (b 2))))', "(r)")
         wv, _ = run_wasm('(defx v () (fn () (variant Some 5)))', "(v)")
         wn, _ = run_wasm('(defx n () (fn () (record (xs (list 4 5)) (v (variant Ok 7)))))', "(n)")
-        w_struct = (wr == {"a": 1, "b": 2} and wv == ("Some", 5) and wn == {"xs": [4, 5], "v": ("Ok", 7)})
+        ws, _ = run_wasm('(defx s () (fn () (record (msg "ok"))))', "(s)")
+        w_struct = (wr == {"a": 1, "b": 2} and wv == ("Some", 5) and wn == {"xs": [4, 5], "v": ("Ok", 7)} and ws == {"msg": "ok"})
         ok += w_struct
         print(f"  {'ok  ' if w_struct else 'FAIL'} backend(WASM): tagged record/variant round-trip")
     except LoomError as e:
@@ -615,20 +616,20 @@ def main():
         print(f"  {'ok  ' if w_alias else 'FAIL'} backend(WASM): integer/pointer anti-alias => {wa}")
     except LoomError as e:
         print(f"  FAIL backend(WASM) anti-alias: {e}")
-    try:                                               # string literals must fail closed on the WASM value boundary, explicitly rather than as fake free vars
+    try:                                               # string literals now cross the WASM value boundary honestly: static heap strings, real decode, and WAT data segments
         pstr = '(defx t (IO) (fn () (print "x;y")))'
-        denied = False
-        try:
-            compile_wasm(pstr)
-        except LoomError as e:
-            denied = "string literals are not yet supported at the WASM value boundary" in str(e)
-        wat_denied = False
-        try:
-            emit_wat(pstr)
-        except LoomError as e:
-            wat_denied = "string literals are not yet supported at the WASM value boundary" in str(e)
-        w_string_boundary = denied and wat_denied; ok += w_string_boundary
-        print(f"  {'ok  ' if w_string_boundary else 'FAIL'} backend(WASM): string literal boundary stays explicit")
+        pnet = '(defx t (Net) (fn () (net "u")))'
+        wv_str, wo_str = run_wasm(pstr, "(t)")
+        rv_str, ro_str = run_call(pstr, "(t)")
+        wv_net, wo_net = run_wasm(pnet, "(t)")
+        rv_net, ro_net = run_call(pnet, "(t)")
+        wat_str = emit_wat(pstr)
+        w_string_boundary = ((wv_str, wo_str) == (rv_str, ro_str)
+                             and (wv_net, wo_net) == (rv_net, ro_net)
+                             and '(data (i32.const ' in wat_str
+                             and compile_wasm(pstr)[:4] == b"\x00asm")
+        ok += w_string_boundary
+        print(f"  {'ok  ' if w_string_boundary else 'FAIL'} backend(WASM): string literals cross the value boundary")
     except Exception as e:
         print(f"  FAIL backend(WASM) string boundary: {e}")
     try:                                               # i31 overflow semantics must match on every execution backend
@@ -840,8 +841,10 @@ def main():
                   ('(defx ln () (fn (xs) (if (empty xs) 0 (+ 1 (ln (tail xs)))))) (defx main () (fn () (ln (list 7 8 9))))', "(main)"),  # integer LIST length -> 3
                   ('(defx mk () (fn (x) (variant Ok x))) (defx un () (fn (r) (match r ((Ok v) (+ v 1)) ((Err e) 0)))) (defx main () (fn () (un (mk 7))))', "(main)"),  # SUM TYPE: variant + match -> 8
                   ('(defx main () (fn () (match (variant Some 5) ((Some x) x) ((None) 0))))', "(main)"),  # match picks the Some arm + binds the payload -> 5
-                  ('(defx rg () (fn () (get (record (a 10) (b 20)) b)))', "(rg)"),                      # record build + get -> 20
-                  ('(defx t () (fn () (trust 1 (by reviewer ada (declassify reviewer (prov ai (recall (repro 9))))))))', "(t)")]  # transparent trust/provenance/persistence wrappers -> 9
+                 ('(defx rg () (fn () (get (record (a 10) (b 20)) b)))', "(rg)"),                      # record build + get -> 20
+                 ('(defx t () (fn () (trust 1 (by reviewer ada (declassify reviewer (prov ai (recall (repro 9))))))))', "(t)"),  # transparent trust/provenance/persistence wrappers -> 9
+                 ('(defx t (IO) (fn () (print "x;y")))', "(t)"),                                         # static string literal survives real WASM heap decode + host print
+                 ('(defx t (Net) (fn () (net "u")))', "(t)")]                                            # static string literal survives effect boxing on WASM too
         for prog, call in wpairs:                       # every program emits a valid wasm module (magic header)
             assert compile_wasm(prog)[:4] == b"\x00asm"
         assert _WASM_ABI_VERSION == 1 and b"loom_abi_version" in compile_wasm(wpairs[0][0])  # ABI v1 is machine-readable
@@ -859,6 +862,7 @@ def main():
         wat_apply2 = emit_wat('(defx t () (fn () (let (f (fn (a b) (+ a b))) (f 3 4))))')
         wat_capture9 = emit_wat(CAPTURE9_PROGRAM)
         wat_trust_stack = emit_wat(wpairs[10][0])
+        wat_string = emit_wat('(defx t (IO) (fn () (print "x;y")))')
         wat_topdef_value = emit_wat('(defx inc () (fn (x) (+ x 1))) (defx ap () (fn ((f) x) (f x))) (defx t () (fn () (ap inc 4)))')
         assert 'import "env" "host_print"' in wat_io and "call $host_print" in wat_io   # WAT mirrors host-print import for IO
         assert 'import "env" "host_ffi"' in wat_ffi and "call $host_ffi" in wat_ffi   # WAT mirrors the foreign boundary import too
@@ -869,6 +873,7 @@ def main():
         assert "call $apply2" in wat_apply2 and "func $lam0" in wat_apply2   # WAT mirrors 2-arg closure application
         assert "func $lam0" in wat_capture9 and "call $apply1" in wat_capture9   # WAT mirrors closures with >8 captured values
         assert wat_trust_stack.startswith("(module") and "i32.const 18" in wat_trust_stack   # transparent trust/prov wrappers compile through WAT too
+        assert '(data (i32.const ' in wat_string   # WAT mirrors static string-literal storage too
         assert "local.get $inc" not in wat_topdef_value and "call $rec" in wat_topdef_value   # WAT mirrors top-level function values as closure records, not fake locals
         if _sh.which("node"):
             wok = True

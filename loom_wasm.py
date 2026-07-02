@@ -48,12 +48,19 @@ _WASM_K_RECORD = 2
 _WASM_K_VARIANT = 3
 _WASM_K_EFFECT = 4
 _WASM_K_RESOURCE = 5
+_WASM_K_STRING = 6
 
 def _wasm_const(n):
     return b"\x41" + _leb_s(n)
 
 def _wasm_int(n):
     return _wasm_const(n << 1)
+
+def _wasm_i32(n):
+    return int(n).to_bytes(4, "little", signed=True)
+
+def _wat_bytes(bs):
+    return '"' + "".join(f"\\{b:02x}" for b in bs) + '"'
 
 def _wasm_unptr():
     return _wasm_const(-2) + b"\x71"                    # tagged pointer -> aligned heap address
@@ -109,7 +116,7 @@ def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ca
             return _emit_wasm(ctx, ["record", ["code", spec["id"]]], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
         raise frontend.error("wasm: free variable " + node)
     if type(node) is str:
-        raise frontend.error("wasm: string literals are not yet supported at the WASM value boundary")
+        return _wasm_const(ctx.string_layout[node]["tagged"])
     h = node[0]
     if isinstance(h, list):                                             # ((fn ..) args) — compute head, then apply as a closure
         arity = len(node[1:])
@@ -470,11 +477,39 @@ def _wasm_foreigns(program_src, frontend):
         w(t[3])
     return foreigns
 
+def _wasm_strings(program_src, frontend):
+    strings = {}
+    def w(n):
+        if type(n) is str:
+            strings.setdefault(n, len(strings))
+            return
+        if not isinstance(n, list):
+            return
+        for a in n:
+            w(a)
+    for t in _wasm_defxs(program_src, frontend):
+        w(t[3])
+    return list(strings.keys())
+
+def _wasm_string_layout(strings):
+    layout = {}
+    hp = 8
+    for s in strings:
+        raw = s.encode("utf-8")
+        obj = hp
+        data = obj + 12
+        hp = data + len(raw)
+        if hp & 3:
+            hp += 4 - (hp & 3)
+        layout[s] = {"obj": obj, "data": data, "bytes": raw, "tagged": obj | 1}
+    return layout, hp
+
 class _WasmContext:
     """All program-specific WASM state, isolated per compilation."""
     __slots__ = ("frontend", "defs", "top", "closures", "closure_by_id", "order", "topdefs",
                  "helper_base", "apply_arities", "apply_ids", "apply1_id",
-                 "variant_id", "alloc_id", "resource_use_id", "tags", "fields", "resources", "foreigns")
+                 "variant_id", "alloc_id", "resource_use_id", "tags", "fields", "resources", "foreigns",
+                 "strings", "string_layout", "hp_init")
 
     def __init__(self, program_src, frontend):
         self.frontend = frontend
@@ -503,6 +538,8 @@ class _WasmContext:
         self.fields = _wasm_fields(program_src, frontend, capture_slots)
         self.resources = _wasm_resources(program_src, frontend)
         self.foreigns = _wasm_foreigns(program_src, frontend)
+        self.strings = _wasm_strings(program_src, frontend)
+        self.string_layout, self.hp_init = _wasm_string_layout(self.strings)
 
 def compile_wasm(program_src, frontend):
     """Compile checked LOOM to a real WebAssembly module.
@@ -596,7 +633,7 @@ def compile_wasm(program_src, frontend):
     fc = _leb_u(len(funcs) + len(lambda_funcs) + 7 + len(apply_arities)) + b"".join(_leb_u(ti[a]) for _, a, _, _, _ in funcs) + b"".join(_leb_u(ti[a]) for _, a, _, _, _, _ in lambda_funcs) + _leb_u(ti[3]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[1]) + b"".join(_leb_u(ti[arity + 1]) for arity in apply_arities)
     mc = _leb_u(1) + b"\x00" + _leb_u(1)                    # 1 memory, min 1 page (64 KiB heap)
     gc = (_leb_u(2)
-          + b"\x7f\x01\x41\x08\x0b"                       # mutable i32 $hp = 8
+          + b"\x7f\x01" + _wasm_const(ctx.hp_init) + b"\x0b"                       # mutable i32 $hp = static-data end
           + b"\x7f\x00" + _wasm_const(WASM_ABI_VERSION) + b"\x0b")  # immutable raw ABI version
     ic = (_leb_u(8)
           + _leb_u(len("env")) + b"env" + _leb_u(len("push_handler")) + b"push_handler" + b"\x00" + _leb_u(ti[2])
@@ -654,8 +691,18 @@ def compile_wasm(program_src, frontend):
         )
         e = _leb_u(0) + apply_code + b"\x0b"
         cc += _leb_u(len(e)) + e
+    dc = None
+    if ctx.string_layout:
+        def _seg(addr, payload):
+            return b"\x00" + _wasm_const(addr) + b"\x0b" + _leb_u(len(payload)) + payload
+        segs = []
+        for spec in ctx.string_layout.values():
+            segs.append(_seg(spec["obj"], _wasm_i32(_WASM_K_STRING) + _wasm_i32(len(spec["bytes"])) + _wasm_i32(spec["data"])))
+            if spec["bytes"]:
+                segs.append(_seg(spec["data"], spec["bytes"]))
+        dc = _leb_u(len(segs)) + b"".join(segs)
     return (b"\x00asm\x01\x00\x00\x00" + _sec(1, tc) + _sec(2, ic) + _sec(3, fc) + _sec(5, mc)
-            + _sec(6, gc) + _sec(7, ec) + _sec(10, cc))
+            + _sec(6, gc) + _sec(7, ec) + _sec(10, cc) + (_sec(11, dc) if dc is not None else b""))
 
 def emit_wat(program_src, frontend):
     """Human-readable WebAssembly Text (the 'assembler') for what compile_wasm encodes to bytes:
@@ -684,7 +731,9 @@ def emit_wat(program_src, frontend):
                 spec = ctx.topdefs[node]
                 return w(["record", ["code", spec["id"]]], ind, handled_effs, with_handlers, callable_env)
             return [ind + "local.get $" + node]
-        if type(node) is str: raise frontend.error("wat: string literals are not yet supported at the WASM value boundary")
+        if type(node) is str:
+            uses_heap[0] = True
+            return [ind + "i32.const " + str(ctx.string_layout[node]["tagged"]) + "  ;; string literal"]
         h = node[0]
         if h == "fn":
             spec = ctx.closures.get(id(node))
@@ -844,7 +893,7 @@ def emit_wat(program_src, frontend):
     lines = ["(module", "  (global $loom_abi_version i32 (i32.const " + str(WASM_ABI_VERSION) + "))",
              '  (export "loom_abi_version" (global $loom_abi_version))']
     if uses_heap[0]:
-        lines += ["  (memory 1)", '  (export "memory" (memory 0))', "  (global $hp (mut i32) (i32.const 8))",
+        lines += ["  (memory 1)", '  (export "memory" (memory 0))', "  (global $hp (mut i32) (i32.const " + str(ctx.hp_init) + "))",
                   "  (func $rec (param $next i32) (param $fid i32) (param $val i32) (result i32) (local $t i32)",
                   "    global.get $hp  local.set $t",
                   "    global.get $hp  i32.const 16  i32.add  global.set $hp",
@@ -915,6 +964,10 @@ def emit_wat(program_src, frontend):
                   "    local.get $t  i32.const 5  i32.store  ;; resource-use kind",
                   "    local.get $t  local.get $rid  i32.store offset=4",
                   "    local.get $t  i32.const 1  i32.or)"]
+        for spec in ctx.string_layout.values():
+            lines += ['  (data (i32.const ' + str(spec["obj"]) + ") " + _wat_bytes(_wasm_i32(_WASM_K_STRING) + _wasm_i32(len(spec["bytes"])) + _wasm_i32(spec["data"])) + ")"]
+            if spec["bytes"]:
+                lines += ['  (data (i32.const ' + str(spec["data"]) + ") " + _wat_bytes(spec["bytes"]) + ")"]
     lines += ['  (import "env" "push_handler" (func $push_handler (param i32 i32) (result i32)))',
               '  (import "env" "pop_handler" (func $pop_handler (param i32) (result i32)))',
               '  (import "env" "current_handler" (func $current_handler (param i32) (result i32)))',
@@ -966,7 +1019,7 @@ def run_wasm(program_src, call_src, frontend):
     resources_json = _json.dumps({str(v): k for k, v in _wasm_resources(program_src, frontend).items()})
     foreigns_json = _json.dumps({str(v): k for k, v in _wasm_foreigns(program_src, frontend).items()})
     arr = ",".join(str(b) for b in compile_wasm(program_src, frontend))
-    js = ("const __out=[]; const __hs=[[],[],[],[]]; const __caps=[]; let __mem=null; const __rd=(p)=>__mem.getInt32(p,true);"
+    js = ("const __out=[]; const __hs=[[],[],[],[]]; const __caps=[]; let __mem=null; const __rd=(p)=>__mem.getInt32(p,true); const __td=new TextDecoder();"
           "const __tags=" + tags_json + "; const __fields=" + fields_json + "; const __resources=" + resources_json + "; const __foreigns=" + foreigns_json + ";"
           "let __dec=(v)=>((Number.isInteger(v)&&(v&1)===0)?(v>>1):v);"
           "const __push=(e,h)=>{ __hs[e|0].push(h|0); return 0; };"
@@ -990,6 +1043,7 @@ def run_wasm(program_src, call_src, frontend):
           "if(k===3){const t=__rd(p+4);return [__tags[t]??String(t),__dec(__rd(p+8))];}"
           "if(k===4)return [__eff_name(__rd(p+4)),__dec(__rd(p+8))];"
           "if(k===5)return '<used:' + (__resources[__rd(p+4)]??String(__rd(p+4))) + '>';"
+          "if(k===6){const n=__rd(p+4),d=__rd(p+8);return __td.decode(new Uint8Array(__mem.buffer,d,n));}"
           "throw new Error('unknown heap kind '+k);};"
           "const __v=__dec(m.instance.exports[" + repr(name) + "](" + ",".join(str(a << 1) for a in args) + "));"
           "console.log('__VAL__'+JSON.stringify(__v));console.log('__OUT__'+JSON.stringify(__out));})"
