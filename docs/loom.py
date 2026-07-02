@@ -2162,6 +2162,31 @@ def run_wasm(program_src, call_src):
 
 # ---- CLI: turn the kernel into a usable TOOL. `python3 loom.py <check|run|build|audit> file.loom [call] [--target py|js|wat]` ----
 def _cli(argv):
+    def _partition_findings(fns, errs):
+        ftab, globals_ = {}, []
+        for e in errs:
+            k = e.split(": ", 1)[0]
+            if k in fns: ftab.setdefault(k, []).append(e)
+            else: globals_.append(e)
+        return ftab, globals_
+
+    def _check(src):
+        fns, errs = check(parse(src))
+        if not errs:
+            print(f"OK — checked, all effects honest ({len(fns)} function(s))"); return 0
+        ftab, globals_ = _partition_findings(fns, errs)
+        touched = len(ftab) + (1 if globals_ else 0)
+        print(f"REJECTED — {len(errs)} finding(s) across {touched} scope(s)")
+        for name in fns:
+            mine = ftab.get(name, [])
+            if not mine: continue
+            print(f"  [{name}] {len(mine)} finding(s)")
+            for e in mine: print("    - " + e)
+        if globals_:
+            print(f"  [global] {len(globals_)} finding(s)")
+            for e in globals_: print("    - " + e)
+        return 1
+
     flags, pos, i = {}, [], 0
     while i < len(argv):
         a = argv[i]
@@ -2174,10 +2199,7 @@ def _cli(argv):
     try: src = open(path).read()
     except OSError as e: print("cannot read file: " + str(e)); return 2
     if cmd == "check":
-        _, errs = check(parse(src))
-        if errs:
-            print("REJECTED:"); [print("  - " + e) for e in errs]; return 1
-        print(f"OK — checked, all effects honest"); return 0
+        return _check(src)
     if cmd == "run":
         try: val, out = run_call(src, call)
         except LoomError as e: print("REJECTED: " + str(e)); return 1
@@ -2190,10 +2212,7 @@ def _cli(argv):
         return 0
     if cmd == "audit":                                  # DISTRIBUTION: surface the capability surface of AI-written code
         fns, errs = check(parse(src))                   # check infers every row even when a lie makes it REJECT
-        ftab = {}                                        # name-attributed violations ONLY (check()-level errors are "name: ...")
-        for e in errs:                                   # infer()-level errors (seam/trust/unresolved) are NOT prefixed
-            k = e.split(": ", 1)[0]
-            if k in fns: ftab.setdefault(k, []).append(e)
+        ftab, globals_ = _partition_findings(fns, errs)  # infer()-level errors can stay global
         SENS = {"Net", "IO", "FFI", "Alloc"}             # capabilities a human auditor must scrutinise (Pure is safe)
         print("LOOM AUDIT - capability surface of AI-written code (DECLARED vs actually PERFORMED)")
         for name, info in fns.items():
@@ -2209,6 +2228,9 @@ def _cli(argv):
         if errs:
             print(f"-- FINDINGS ({len(errs)}), every violation verbatim:")
             for e in errs: print("   ! " + e)
+            if globals_:
+                print("-- global findings:")
+                for e in globals_: print("   ! " + e)
         else:
             print("-- no violations; review every non-Pure capability above")
         return 1 if errs else 0

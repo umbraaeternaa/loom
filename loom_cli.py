@@ -26,13 +26,20 @@ def _parse_flags(argv):
     return flags, pos
 
 
-def _audit(frontend, src):
-    fns, errs = frontend.check(frontend.parse(src))
-    findings = {}
+def _partition_findings(fns, errs):
+    findings, global_findings = {}, []
     for err in errs:
         key = err.split(": ", 1)[0]
         if key in fns:
             findings.setdefault(key, []).append(err)
+        else:
+            global_findings.append(err)
+    return findings, global_findings
+
+
+def _audit(frontend, src):
+    fns, errs = frontend.check(frontend.parse(src))
+    findings, global_findings = _partition_findings(fns, errs)
     sensitive = {"Net", "IO", "FFI", "Alloc"}
     print("LOOM AUDIT - capability surface of AI-written code (DECLARED vs actually PERFORMED)")
     for name, info in fns.items():
@@ -52,9 +59,35 @@ def _audit(frontend, src):
         print(f"-- FINDINGS ({len(errs)}), every violation verbatim:")
         for err in errs:
             print("   ! " + err)
+        if global_findings:
+            print("-- global findings:")
+            for err in global_findings:
+                print("   ! " + err)
     else:
         print("-- no violations; review every non-Pure capability above")
     return 1 if errs else 0
+
+
+def _check(frontend, src):
+    fns, errs = frontend.check(frontend.parse(src))
+    if not errs:
+        print(f"OK — checked, all effects honest ({len(fns)} function(s))")
+        return 0
+    findings, global_findings = _partition_findings(fns, errs)
+    touched = len(findings) + (1 if global_findings else 0)
+    print(f"REJECTED — {len(errs)} finding(s) across {touched} scope(s)")
+    for name in fns:
+        own_findings = findings.get(name, [])
+        if not own_findings:
+            continue
+        print(f"  [{name}] {len(own_findings)} finding(s)")
+        for err in own_findings:
+            print("    - " + err)
+    if global_findings:
+        print(f"  [global] {len(global_findings)} finding(s)")
+        for err in global_findings:
+            print("    - " + err)
+    return 1
 
 
 def cli(argv, frontend):
@@ -70,14 +103,7 @@ def cli(argv, frontend):
         print("cannot read file: " + str(err))
         return 2
     if cmd == "check":
-        _, errs = frontend.check(frontend.parse(src))
-        if errs:
-            print("REJECTED:")
-            for err in errs:
-                print("  - " + err)
-            return 1
-        print("OK — checked, all effects honest")
-        return 0
+        return _check(frontend, src)
     if cmd == "run":
         try:
             value, out = frontend.run_call(src, call)

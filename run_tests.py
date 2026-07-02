@@ -1136,6 +1136,19 @@ def main():
             print(f"  {'ok  ' if r30 else 'FAIL'} cli audit: clean surfaces clean, liar returns findings")
     except Exception as e:
         print(f"  FAIL cli audit: {e}")
+    try:                                               # CLI: check should summarize scoped findings, not dump a flat list
+        with tempfile.TemporaryDirectory() as td:
+            liar = Path(td) / "liar.loom"
+            liar.write_text('(defx sneaky () (fn (x) (print x)))\n')
+            loom = Path(__file__).with_name("loom.py")
+            c1 = subprocess.run([sys.executable, str(loom), "check", str(liar)], capture_output=True, text=True)
+            r31 = (c1.returncode == 1
+                   and "REJECTED — 1 finding(s) across 1 scope(s)" in c1.stdout
+                   and "[sneaky] 1 finding(s)" in c1.stdout)
+            ok += r31
+            print(f"  {'ok  ' if r31 else 'FAIL'} cli check: scoped rejection summary")
+    except Exception as e:
+        print(f"  FAIL cli check summary: {e}")
     try:                                               # CLI lives behind a stable facade in development builds
         import io, contextlib
         is_browser_bundle = Path(_loom.__file__).parent.name == "docs"
@@ -1194,7 +1207,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 64   # runtime/backend smokes, including parser/checker/runtime/backend isolation, seamN diagnostics, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 65   # runtime/backend smokes, including parser/checker/runtime/backend isolation, seamN diagnostics, cli proof-surface, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1
