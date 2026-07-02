@@ -204,7 +204,20 @@ import json
 try:
     fns, errs = loom.check(loom.parse(_src))
     if errs:
-        _o = {"ok": False, "errors": list(errs)}
+        by_fn, global_findings = {}, []
+        for _e in errs:
+            _k = _e.split(": ", 1)[0]
+            if _k in fns:
+                by_fn.setdefault(_k, []).append(_e)
+            else:
+                global_findings.append(_e)
+        _o = {
+            "ok": False,
+            "errorCount": len(errs),
+            "scopeCount": len(by_fn) + (1 if global_findings else 0),
+            "findingsByFn": by_fn,
+            "globalFindings": global_findings,
+        }
     else:
         _o = {"ok": True, "fns": {n: (sorted(i["decl"]) or ["Pure"]) for n,i in fns.items()}}
     _r = json.dumps(_o)
@@ -218,8 +231,24 @@ _r
         s += "  <span class='v-key'>" + esc(n) + "</span> : <span class='v-eff'>" + esc(row.join(" · ")) + "</span>\n";
       show(s);
     } else {
-      show("<span class='v-bad'>✗ REJECTED</span> — the compiler refuses to run a lie.\n\n" +
-           r.errors.map(e => "  • " + esc(e)).join("\n"));
+      if (r.findingsByFn || r.globalFindings) {
+        let s = "<span class='v-bad'>✗ REJECTED</span> — " + esc(String(r.errorCount ?? 0)) +
+                " finding(s) across " + esc(String(r.scopeCount ?? 0)) + " scope(s).\n\n";
+        const byFn = r.findingsByFn || {};
+        for (const [name, findings] of Object.entries(byFn)) {
+          s += "  <span class='v-key'>[" + esc(name) + "]</span> " + esc(String(findings.length)) + " finding(s)\n";
+          for (const finding of findings) s += "    • " + esc(finding) + "\n";
+        }
+        const globalFindings = r.globalFindings || [];
+        if (globalFindings.length) {
+          s += "  <span class='v-key'>[global]</span> " + esc(String(globalFindings.length)) + " finding(s)\n";
+          for (const finding of globalFindings) s += "    • " + esc(finding) + "\n";
+        }
+        show(s);
+      } else {
+        show("<span class='v-bad'>✗ REJECTED</span> — the compiler refuses to run a lie.\n\n" +
+             r.errors.map(e => "  • " + esc(e)).join("\n"));
+      }
     }
   } catch(e){ show("<span class='v-bad'>error</span>\n" + esc(e)); }
 };

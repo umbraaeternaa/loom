@@ -21,6 +21,8 @@ def _check_playground_loader() -> None:
         'id="bWasm"',
         "loom.compile_wasm(",
         "WebAssembly.instantiate(",
+        '"findingsByFn"',
+        '"globalFindings"',
     )
     missing = [needle for needle in required if needle not in text]
     if missing:
