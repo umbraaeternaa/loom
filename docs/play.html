@@ -185,6 +185,13 @@ const EXAMPLES = [
 
 (defx main () (fn ()
   (asm wasm i31.lt_s -1 0)))` },
+  { name: "WASM · checked i31.gt_s", note: "→ 1 / WAT / WASM",
+    src: `; The matching signed greater-than intrinsic closes the comparison pair.
+; Tagged operands keep their order; the raw WASM boolean is retagged for LOOM.
+; Run it (→ 1), then inspect i32.gt_s followed by i32.shl in WAT.
+
+(defx main () (fn ()
+  (asm wasm i31.gt_s 0 -1)))` },
 ];
 
 const $ = id => document.getElementById(id);

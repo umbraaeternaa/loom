@@ -37,6 +37,7 @@ Each registry entry is the implementation's single contract record:
 | `wasm` | `i31.mul` | 2 | tagged i31 | `Pure` | Yes |
 | `wasm` | `i31.eq` | 2 | tagged boolean i31 | `Pure` | Yes |
 | `wasm` | `i31.lt_s` | 2 | tagged boolean i31 | `Pure` | Yes |
+| `wasm` | `i31.gt_s` | 2 | tagged boolean i31 | `Pure` | Yes |
 
 `i31.add` evaluates both arguments, adds them with LOOM's signed i31
 modulo-`2^31` wraparound, and returns one tagged i31. The interpreter and
@@ -58,6 +59,9 @@ boolean integer `0` or `2` at the binary boundary.
 `i31.lt_s` compares tagged operands with signed `i32.lt_s`. Multiplying both i31
 values by the positive tag factor preserves their signed order; the raw boolean
 result is then encoded through the same registered result strategy as `i31.eq`.
+
+`i31.gt_s` closes the signed comparison pair with `i32.gt_s`. It uses the same
+order-preserving tagged operands and registered boolean result encoding.
 
 ## Rejection rules
 

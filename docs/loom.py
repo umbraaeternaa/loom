@@ -128,6 +128,16 @@ ASM_INTRINSICS = {
         "wasm_opcode": 0x48,
         "wat_opcode": "i32.lt_s",
     },
+    ("wasm", "i31.gt_s"): {
+        "inputs": ("i31", "i31"),
+        "result": "bool-i31",
+        "effects": frozenset(),
+        "portable_op": "gt_s",
+        "wasm_rhs": "tagged",
+        "wasm_result": "tag_i31",
+        "wasm_opcode": 0x4A,
+        "wat_opcode": "i32.gt_s",
+    },
 }
 ASM_TARGETS = frozenset(target for target, _ in ASM_INTRINSICS)
 
@@ -1037,6 +1047,7 @@ def ev(node, env, fns, out, handlers=None):
         if spec["portable_op"] == "mul": return _i31(args[0] * args[1])
         if spec["portable_op"] == "eq": return 1 if args[0] == args[1] else 0
         if spec["portable_op"] == "lt_s": return 1 if args[0] < args[1] else 0
+        if spec["portable_op"] == "gt_s": return 1 if args[0] > args[1] else 0
         raise LoomError("asm: registered intrinsic has no runtime lowering")
     a = [ev(x, env, fns, out, handlers) for x in node[1:]]
     if h == "+": return _i31(sum(a))
@@ -1117,6 +1128,7 @@ def _emit(node):
         if spec["portable_op"] == "mul": return f"_i31({_emit(node[3])}*{_emit(node[4])})"
         if spec["portable_op"] == "eq": return f"(1 if ({_emit(node[3])}=={_emit(node[4])}) else 0)"
         if spec["portable_op"] == "lt_s": return f"(1 if ({_emit(node[3])}<{_emit(node[4])}) else 0)"
+        if spec["portable_op"] == "gt_s": return f"(1 if ({_emit(node[3])}>{_emit(node[4])}) else 0)"
         raise LoomError("asm: registered intrinsic has no Python lowering")
     if h == "+": return "_i31(" + "+".join(_emit(a) for a in node[1:]) + ")"
     if h == "-": return f"_i31(({_emit(node[1])})-({_emit(node[2])}))"
@@ -1211,6 +1223,7 @@ def _emit_js(node):
         if spec["portable_op"] == "mul": return f"_imul({_emit_js(node[3])},{_emit_js(node[4])})"
         if spec["portable_op"] == "eq": return f"(({_emit_js(node[3])}==={_emit_js(node[4])})?1:0)"
         if spec["portable_op"] == "lt_s": return f"(({_emit_js(node[3])}<{_emit_js(node[4])})?1:0)"
+        if spec["portable_op"] == "gt_s": return f"(({_emit_js(node[3])}>{_emit_js(node[4])})?1:0)"
         raise LoomError("asm: registered intrinsic has no JavaScript lowering")
     if h == "+": return "_i31(" + "+".join(_emit_js(a) for a in node[1:]) + ")"
     if h == "-": return f"_i31(({_emit_js(node[1])})-({_emit_js(node[2])}))"

@@ -35,6 +35,8 @@ def _check_playground_loader() -> None:
         "(asm wasm i31.eq 7 7)",
         'name: "WASM · checked i31.lt_s"',
         "(asm wasm i31.lt_s -1 0)",
+        'name: "WASM · checked i31.gt_s"',
+        "(asm wasm i31.gt_s 0 -1)",
     )
     missing = [needle for needle in required if needle not in text]
     if missing:

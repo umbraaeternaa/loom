@@ -56,6 +56,16 @@ ASM_INTRINSICS = {
         "wasm_opcode": 0x48,
         "wat_opcode": "i32.lt_s",
     },
+    ("wasm", "i31.gt_s"): {
+        "inputs": ("i31", "i31"),
+        "result": "bool-i31",
+        "effects": frozenset(),
+        "portable_op": "gt_s",
+        "wasm_rhs": "tagged",
+        "wasm_result": "tag_i31",
+        "wasm_opcode": 0x4A,
+        "wat_opcode": "i32.gt_s",
+    },
 }
 ASM_TARGETS = frozenset(target for target, _ in ASM_INTRINSICS)
 

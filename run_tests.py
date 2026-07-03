@@ -529,6 +529,10 @@ def main():
                 "inputs": ("i31", "i31"), "result": "bool-i31", "effects": frozenset(),
                 "portable_op": "lt_s", "wasm_rhs": "tagged", "wasm_result": "tag_i31", "wasm_opcode": 0x48, "wat_opcode": "i32.lt_s",
             },
+            ("wasm", "i31.gt_s"): {
+                "inputs": ("i31", "i31"), "result": "bool-i31", "effects": frozenset(),
+                "portable_op": "gt_s", "wasm_rhs": "tagged", "wasm_result": "tag_i31", "wasm_opcode": 0x4A, "wat_opcode": "i32.gt_s",
+            },
         }
         print(f"  {'ok  ' if asm_contract_ok else 'FAIL'} checker: asm v0 envelope is closed and typed")
     except Exception as e:
@@ -636,6 +640,27 @@ def main():
         print(f"  {'ok  ' if lt_exec_ok else 'FAIL'} asm wasm i31.lt_s: signed retagged parity => {lt_values}")
     except Exception as e:
         print(f"  FAIL asm wasm i31.lt_s parity: {e}")
+    try:                                               # greater-than closes the signed comparison pair on the same tagged boundary
+        gt_program = '(defx low () (fn (a b) (asm wasm i31.gt_s a b)))'
+        gt_calls = ['(low 0 -1)', '(low 7 7)', '(low 7 8)']
+        gt_values = []
+        gt_exec_ok = True
+        for call in gt_calls:
+            values = [
+                run_call(gt_program, call)[0],
+                run_compiled(gt_program, call)[0],
+                run_js(gt_program, call)[0],
+                run_wasm(gt_program, call)[0],
+            ]
+            gt_values.append(values)
+            gt_exec_ok &= len(set(values)) == 1
+        wat_gt = emit_wat(gt_program)
+        gt_exec_ok &= gt_values == [[1, 1, 1, 1], [0, 0, 0, 0], [0, 0, 0, 0]]
+        gt_exec_ok &= "i32.gt_s  ;; checked asm wasm i31.gt_s" in wat_gt and "i32.shl" in wat_gt
+        ok += gt_exec_ok
+        print(f"  {'ok  ' if gt_exec_ok else 'FAIL'} asm wasm i31.gt_s: signed retagged parity => {gt_values}")
+    except Exception as e:
+        print(f"  FAIL asm wasm i31.gt_s parity: {e}")
     try:                                               # every check owns its policy/resource/taint context
         from concurrent.futures import ThreadPoolExecutor
         isolation_programs = [
@@ -1398,6 +1423,8 @@ def main():
             and "(asm wasm i31.eq 7 7)" in play
             and 'name: "WASM · checked i31.lt_s"' in play
             and "(asm wasm i31.lt_s -1 0)" in play
+            and 'name: "WASM · checked i31.gt_s"' in play
+            and "(asm wasm i31.gt_s 0 -1)" in play
             and all(name not in play for name in (
                 "loom_parse.py",
                 "loom_checker.py",
@@ -1423,7 +1450,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 74   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 75   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1
