@@ -65,6 +65,7 @@ import loom_parse as _loom_parse
 import loom_checker as _loom_checker
 import loom_runtime as _loom_runtime
 import loom_cli as _loom_cli
+import loom_gate as _loom_gate
 
 _PARSE_FRONTEND = _loom_parse.Frontend(LoomError)
 
@@ -169,6 +170,11 @@ _CLI_FRONTEND = _loom_cli.Frontend(parse, check, run_call, compile_py, compile_j
 def build_verdict(program_src):
     """Return the stable JSON-safe checker verdict used by LOOM Gate clients."""
     return _loom_cli.build_verdict(_CLI_FRONTEND, program_src)
+
+
+def validate_manifest(manifest):
+    """Validate and hash a read-only LOOM Gate manifest v1."""
+    return _loom_gate.validate_manifest(manifest)
 
 
 def _cli(argv):

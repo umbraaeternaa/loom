@@ -1416,6 +1416,49 @@ def main():
             print(f"  {'ok  ' if verdict_contract_ok else 'FAIL'} cli/api: deterministic LOOM Gate JSON verdict v1")
     except Exception as e:
         print(f"  FAIL cli/api JSON verdict contract: {e}")
+    try:                                               # Gate manifest v1: closed schema, canonical hash, fail-closed paths/actions
+        manifest = {
+            "schema": "loom-gate-manifest/v1",
+            "agent": {"id": "codex", "role": "code"},
+            "task": {"summary": "Add manifest validation", "intent": "Build advisory Gate phase 1"},
+            "repositories": [{"root": "/Users/macbook/Projects/loom", "expected_head": "cecfaf8", "require_clean": True}],
+            "read_paths": ["/Users/macbook/Projects/loom"],
+            "write_paths": ["/Users/macbook/Projects/loom/loom_gate.py", "/Users/macbook/Projects/loom/run_tests.py"],
+            "actions": ["read", "write", "test", "git-commit"],
+            "evidence_required": ["syntax", "citadel", "docs-parity", "git-sync"],
+        }
+        reordered = json.loads(json.dumps(manifest))
+        reordered["actions"].reverse()
+        reordered["write_paths"].reverse()
+        reordered["read_paths"] = ["/Users//macbook/Projects/loom/"]
+        valid = _loom.validate_manifest(manifest)
+        same = _loom.validate_manifest(reordered)
+        invalid_cases = []
+        for mutate in ("unknown-action", "extra-field", "unsafe-path", "bad-head"):
+            candidate = json.loads(json.dumps(manifest))
+            if mutate == "unknown-action": candidate["actions"].append("destroy")
+            elif mutate == "extra-field": candidate["approval"] = "+"
+            elif mutate == "unsafe-path": candidate["write_paths"] = ["/Users/macbook/Projects/loom/../argus"]
+            else: candidate["repositories"][0]["expected_head"] = "not-a-commit"
+            invalid_cases.append(_loom.validate_manifest(candidate))
+        codes = [{finding["code"] for finding in result["findings"]} for result in invalid_cases]
+        manifest_contract_ok = (
+            valid["valid"] is True
+            and valid["advisory"] is True
+            and valid["schema"] == "loom-gate-manifest-validation/v1"
+            and len(valid["manifest_sha256"]) == 64
+            and valid["manifest_sha256"] == same["manifest_sha256"]
+            and valid["normalized_manifest"] == same["normalized_manifest"]
+            and all(result["valid"] is False and result["manifest_sha256"] is None and result["normalized_manifest"] is None for result in invalid_cases)
+            and "unknown-value" in codes[0]
+            and "unknown-field" in codes[1]
+            and "unsafe-path" in codes[2]
+            and "invalid-git-head" in codes[3]
+        )
+        ok += manifest_contract_ok
+        print(f"  {'ok  ' if manifest_contract_ok else 'FAIL'} gate: deterministic fail-closed task manifest v1")
+    except Exception as e:
+        print(f"  FAIL Gate manifest v1 contract: {e}")
     try:                                               # CLI lives behind a stable facade in development builds
         import io, contextlib
         is_browser_bundle = Path(_loom.__file__).parent.name == "docs"
@@ -1478,6 +1521,7 @@ def main():
             and "docs/loom.py" in workflow
             and Path(__file__).with_name("verify_docs_parity.py").exists()
             and Path(__file__).with_name("docs").joinpath("asm_v0.md").exists()
+            and Path(__file__).with_name("docs").joinpath("gate_manifest_v1.md").exists()
         )
         ok += docs_discipline_ok
         print(f"  {'ok  ' if docs_discipline_ok else 'FAIL'} docs: published bundle workflow pinned")
@@ -1491,7 +1535,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 76   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, cli proof-surface + Gate JSON verdict, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 77   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest contracts, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

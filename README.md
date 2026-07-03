@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 379 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 380 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 379/379 citadel checks
+PASS — 380/380 citadel checks
 ```
 
 ## The idea in one screen
@@ -162,6 +162,13 @@ python3 loom.py check examples/demo.loom --format json  # stable machine verdict
 that JSON-safe structure directly, including the source SHA-256, scoped findings,
 and declared/performed capability surface. Version 1 is explicitly advisory: it
 proves the LOOM model, not yet that an external agent's host tools were confined.
+
+The first read-only LOOM Gate contract is also available as
+`loom.validate_manifest(value)`. It validates a closed task declaration,
+normalizes set-like fields and absolute paths, and returns a deterministic
+`manifest_sha256` plus stable finding codes. It remains explicitly advisory:
+v1 does not inspect Git or intercept agent tools. See
+[`docs/gate_manifest_v1.md`](docs/gate_manifest_v1.md).
 
 The same verified program runs in the interpreter, compiles to **Python** and **JavaScript**,
 and lowers tagged values, closures, structured data, and effects to **WebAssembly** — one checked source, many platforms. LOOM integers have one portable contract on every backend: signed i31 values (`-2^30..2^30-1`) with deterministic modulo-`2^31` wraparound; out-of-range literals are rejected before execution.

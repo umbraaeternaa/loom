@@ -10,6 +10,7 @@
 import hashlib
 import json
 import re
+import unicodedata
 from contextvars import ContextVar
 
 EFFECTS = {"Pure", "IO", "Net", "Alloc", "FFI", "Rand"}   # Rand = nondeterminism (randomness / wall-clock)
@@ -2380,6 +2381,114 @@ def run_wasm(program_src, call_src):
         elif ln.startswith("__OUT__"): out = _json.loads(ln[7:])
     if val is None: raise LoomError("node-wasm: missing result")
     return val, out
+
+
+# ---- LOOM Gate phase 1: deterministic advisory manifests (standalone bundle mirror). ----
+GATE_MANIFEST_SCHEMA = "loom-gate-manifest/v1"
+GATE_VALIDATION_SCHEMA = "loom-gate-manifest-validation/v1"
+GATE_AGENTS = {"codex", "cloud-code", "auditor", "argus", "nostromo", "ci", "operator"}
+GATE_ROLES = {"code", "organism", "audit", "night", "trace", "operator"}
+GATE_ACTIONS = {"read", "write", "test", "process", "network", "git-commit", "git-push", "delete", "backup", "memory-write", "dashboard", "report"}
+GATE_EVIDENCE = {"syntax", "citadel", "docs-parity", "fuzz", "git-clean", "git-sync", "live-site", "backup", "operator-approval", "audit"}
+_GATE_KEYS = {"schema", "agent", "task", "repositories", "read_paths", "write_paths", "actions", "evidence_required"}
+
+
+def _gate_finding(path, code, message): return {"path": path, "code": code, "message": message}
+
+
+def _gate_text(value, path, findings):
+    if not isinstance(value, str):
+        findings.append(_gate_finding(path, "expected-string", "expected a string")); return None
+    value = unicodedata.normalize("NFC", value)
+    if not value.strip():
+        findings.append(_gate_finding(path, "empty-string", "value must not be empty")); return None
+    return value
+
+
+def _gate_object(value, path, required, findings):
+    if not isinstance(value, dict):
+        findings.append(_gate_finding(path, "expected-object", "expected an object")); return False
+    for key in sorted(set(value) - set(required)): findings.append(_gate_finding(f"{path}.{key}", "unknown-field", f"unknown field '{key}'"))
+    for key in sorted(set(required) - set(value)): findings.append(_gate_finding(f"{path}.{key}", "missing-field", f"missing required field '{key}'"))
+    return set(value) == set(required)
+
+
+def _gate_enum_list(value, path, allowed, findings):
+    if not isinstance(value, list):
+        findings.append(_gate_finding(path, "expected-array", "expected an array")); return None
+    normalized = []
+    for index, item in enumerate(value):
+        item = _gate_text(item, f"{path}[{index}]", findings)
+        if item is None: continue
+        if item not in allowed: findings.append(_gate_finding(f"{path}[{index}]", "unknown-value", f"unknown value '{item}'"))
+        normalized.append(item)
+    for item in sorted({item for item in normalized if normalized.count(item) > 1}):
+        findings.append(_gate_finding(path, "duplicate-value", f"duplicate value '{item}'"))
+    return sorted(set(normalized))
+
+
+def _gate_path_list(value, path, findings):
+    if not isinstance(value, list):
+        findings.append(_gate_finding(path, "expected-array", "expected an array")); return None
+    normalized = []
+    for index, item in enumerate(value):
+        item = _gate_text(item, f"{path}[{index}]", findings)
+        if item is None: continue
+        parts = item.split("/")
+        if not item.startswith("/"): findings.append(_gate_finding(f"{path}[{index}]", "path-not-absolute", "path must be absolute"))
+        elif ".." in parts or "~" in parts: findings.append(_gate_finding(f"{path}[{index}]", "unsafe-path", "path must not contain '..' or '~'"))
+        else:
+            canonical = "/" + "/".join(part for part in parts if part)
+            normalized.append(canonical or "/")
+    for item in sorted({item for item in normalized if normalized.count(item) > 1}):
+        findings.append(_gate_finding(path, "duplicate-path", f"duplicate path '{item}'"))
+    return sorted(set(normalized))
+
+
+def _gate_result(normalized, findings, digest=None):
+    return {"schema": GATE_VALIDATION_SCHEMA, "valid": not findings, "advisory": True, "manifest_sha256": digest, "normalized_manifest": normalized, "findings": findings}
+
+
+def validate_manifest(manifest):
+    findings = []
+    if not isinstance(manifest, dict):
+        findings.append(_gate_finding("$", "expected-object", "manifest must be an object")); return _gate_result(None, findings)
+    for key in sorted(set(manifest) - _GATE_KEYS): findings.append(_gate_finding(key, "unknown-field", f"unknown field '{key}'"))
+    for key in sorted(_GATE_KEYS - set(manifest)): findings.append(_gate_finding(key, "missing-field", f"missing required field '{key}'"))
+    normalized = {}
+    schema = _gate_text(manifest.get("schema"), "schema", findings)
+    if schema is not None and schema != GATE_MANIFEST_SCHEMA: findings.append(_gate_finding("schema", "unsupported-schema", f"expected '{GATE_MANIFEST_SCHEMA}'"))
+    normalized["schema"] = schema
+    agent = manifest.get("agent")
+    if _gate_object(agent, "agent", {"id", "role"}, findings):
+        agent_id = _gate_text(agent["id"], "agent.id", findings); role = _gate_text(agent["role"], "agent.role", findings)
+        if agent_id is not None and agent_id not in GATE_AGENTS: findings.append(_gate_finding("agent.id", "unknown-agent", f"unknown agent '{agent_id}'"))
+        if role is not None and role not in GATE_ROLES: findings.append(_gate_finding("agent.role", "unknown-role", f"unknown role '{role}'"))
+        normalized["agent"] = {"id": agent_id, "role": role}
+    task = manifest.get("task")
+    if _gate_object(task, "task", {"summary", "intent"}, findings):
+        normalized["task"] = {"summary": _gate_text(task["summary"], "task.summary", findings), "intent": _gate_text(task["intent"], "task.intent", findings)}
+    repositories = manifest.get("repositories"); normalized_repositories = []
+    if not isinstance(repositories, list): findings.append(_gate_finding("repositories", "expected-array", "expected an array"))
+    else:
+        for index, repository in enumerate(repositories):
+            base = f"repositories[{index}]"
+            if not _gate_object(repository, base, {"root", "expected_head", "require_clean"}, findings): continue
+            roots = _gate_path_list([repository["root"]], base + ".root", findings)
+            head = _gate_text(repository["expected_head"], base + ".expected_head", findings); clean = repository["require_clean"]
+            if head is not None and re.fullmatch(r"[0-9a-f]{7,40}", head) is None: findings.append(_gate_finding(base + ".expected_head", "invalid-git-head", "expected 7-40 lowercase hexadecimal characters"))
+            if not isinstance(clean, bool): findings.append(_gate_finding(base + ".require_clean", "expected-boolean", "expected true or false"))
+            normalized_repositories.append({"root": roots[0] if roots else None, "expected_head": head, "require_clean": clean if isinstance(clean, bool) else None})
+        roots = [item["root"] for item in normalized_repositories if item["root"] is not None]
+        for root in sorted({root for root in roots if roots.count(root) > 1}): findings.append(_gate_finding("repositories", "duplicate-repository", f"duplicate repository root '{root}'"))
+    normalized["repositories"] = sorted(normalized_repositories, key=lambda item: item["root"] or "")
+    normalized["read_paths"] = _gate_path_list(manifest.get("read_paths"), "read_paths", findings)
+    normalized["write_paths"] = _gate_path_list(manifest.get("write_paths"), "write_paths", findings)
+    normalized["actions"] = _gate_enum_list(manifest.get("actions"), "actions", GATE_ACTIONS, findings)
+    normalized["evidence_required"] = _gate_enum_list(manifest.get("evidence_required"), "evidence_required", GATE_EVIDENCE, findings)
+    if findings: return _gate_result(None, findings)
+    canonical = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return _gate_result(normalized, [], hashlib.sha256(canonical.encode("utf-8")).hexdigest())
 
 
 # ---- CLI + structured verdict: one checker truth for humans, Gate clients, and receipts. ----
