@@ -178,6 +178,13 @@ const EXAMPLES = [
 
 (defx main () (fn ()
   (asm wasm i31.eq 7 7)))` },
+  { name: "WASM · checked i31.lt_s", note: "→ 1 / WAT / WASM",
+    src: `; Signed comparison keeps tagged operands ordered, then retags WASM's
+; raw boolean result before it crosses LOOM's value boundary.
+; Run it (→ 1), then inspect i32.lt_s followed by i32.shl in WAT.
+
+(defx main () (fn ()
+  (asm wasm i31.lt_s -1 0)))` },
 ];
 
 const $ = id => document.getElementById(id);

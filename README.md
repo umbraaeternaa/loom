@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 376 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 377 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 376/376 citadel checks
+PASS — 377/377 citadel checks
 ```
 
 ## The idea in one screen
@@ -98,7 +98,7 @@ foreign code's IO/Net **physically impossible**, not merely undeclared. Soundnes
 on trusting an annotation — *no capability granted ⇒ no effect possible*.
 
 `asm` is a closed backend-owned intrinsic surface, not raw embedded text. Its
-first pure operations, `i31.add`, `i31.sub`, `i31.mul`, and `i31.eq`, preserve LOOM's tagged i31
+first pure operations, `i31.add`, `i31.sub`, `i31.mul`, `i31.eq`, and `i31.lt_s`, preserve LOOM's tagged i31
 wraparound across interpreter, Python, JavaScript, WASM, and WAT; every target,
 opcode, and arity outside the registry fails closed. The contract is specified
 in [`docs/asm_v0.md`](docs/asm_v0.md).
