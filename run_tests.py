@@ -512,7 +512,11 @@ def main():
             ("wasm", "i31.add"): {
                 "inputs": ("i31", "i31"), "result": "i31", "effects": frozenset(),
                 "portable_op": "add", "wasm_opcode": 0x6A, "wat_opcode": "i32.add",
-            }
+            },
+            ("wasm", "i31.sub"): {
+                "inputs": ("i31", "i31"), "result": "i31", "effects": frozenset(),
+                "portable_op": "sub", "wasm_opcode": 0x6B, "wat_opcode": "i32.sub",
+            },
         }
         print(f"  {'ok  ' if asm_contract_ok else 'FAIL'} checker: asm v0 envelope is closed and typed")
     except Exception as e:
@@ -537,6 +541,26 @@ def main():
         print(f"  {'ok  ' if asm_exec_ok else 'FAIL'} asm wasm i31.add: cross-backend parity => {asm_values}")
     except Exception as e:
         print(f"  FAIL asm wasm i31.add parity: {e}")
+    try:                                               # second intrinsic proves registry expansion and signed wraparound
+        sub_program = '(defx low () (fn (a b) (asm wasm i31.sub a b)))'
+        sub_calls = ['(low 50 8)', '(low -1073741824 1)']
+        sub_values = []
+        sub_exec_ok = True
+        for call in sub_calls:
+            values = [
+                run_call(sub_program, call)[0],
+                run_compiled(sub_program, call)[0],
+                run_js(sub_program, call)[0],
+                run_wasm(sub_program, call)[0],
+            ]
+            sub_values.append(values)
+            sub_exec_ok &= len(set(values)) == 1
+        sub_exec_ok &= sub_values == [[42, 42, 42, 42], [1073741823] * 4]
+        sub_exec_ok &= "i32.sub  ;; checked asm wasm i31.sub" in emit_wat(sub_program)
+        ok += sub_exec_ok
+        print(f"  {'ok  ' if sub_exec_ok else 'FAIL'} asm wasm i31.sub: cross-backend parity => {sub_values}")
+    except Exception as e:
+        print(f"  FAIL asm wasm i31.sub parity: {e}")
     try:                                               # every check owns its policy/resource/taint context
         from concurrent.futures import ThreadPoolExecutor
         isolation_programs = [
@@ -1291,6 +1315,8 @@ def main():
             and "k === 6" in play
             and 'name: "WASM · checked i31.add"' in play
             and "(asm wasm i31.add 20 22)" in play
+            and 'name: "WASM · checked i31.sub"' in play
+            and "(asm wasm i31.sub 50 8)" in play
             and all(name not in play for name in (
                 "loom_parse.py",
                 "loom_checker.py",
@@ -1316,7 +1342,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 70   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 71   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

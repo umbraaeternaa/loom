@@ -86,6 +86,14 @@ ASM_INTRINSICS = {
         "wasm_opcode": 0x6A,
         "wat_opcode": "i32.add",
     },
+    ("wasm", "i31.sub"): {
+        "inputs": ("i31", "i31"),
+        "result": "i31",
+        "effects": frozenset(),
+        "portable_op": "sub",
+        "wasm_opcode": 0x6B,
+        "wat_opcode": "i32.sub",
+    },
 }
 ASM_TARGETS = frozenset(target for target, _ in ASM_INTRINSICS)
 
@@ -991,6 +999,7 @@ def ev(node, env, fns, out, handlers=None):
         spec = asm_metadata(node)
         args = [ev(x, env, fns, out, handlers) for x in node[3:]]
         if spec["portable_op"] == "add": return _i31(args[0] + args[1])
+        if spec["portable_op"] == "sub": return _i31(args[0] - args[1])
         raise LoomError("asm: registered intrinsic has no runtime lowering")
     a = [ev(x, env, fns, out, handlers) for x in node[1:]]
     if h == "+": return _i31(sum(a))
@@ -1067,6 +1076,7 @@ def _emit(node):
         if error: raise LoomError(error)
         spec = asm_metadata(node)
         if spec["portable_op"] == "add": return f"_i31({_emit(node[3])}+{_emit(node[4])})"
+        if spec["portable_op"] == "sub": return f"_i31({_emit(node[3])}-{_emit(node[4])})"
         raise LoomError("asm: registered intrinsic has no Python lowering")
     if h == "+": return "_i31(" + "+".join(_emit(a) for a in node[1:]) + ")"
     if h == "-": return f"_i31(({_emit(node[1])})-({_emit(node[2])}))"
@@ -1157,6 +1167,7 @@ def _emit_js(node):
         if error: raise LoomError(error)
         spec = asm_metadata(node)
         if spec["portable_op"] == "add": return f"_i31({_emit_js(node[3])}+{_emit_js(node[4])})"
+        if spec["portable_op"] == "sub": return f"_i31({_emit_js(node[3])}-{_emit_js(node[4])})"
         raise LoomError("asm: registered intrinsic has no JavaScript lowering")
     if h == "+": return "_i31(" + "+".join(_emit_js(a) for a in node[1:]) + ")"
     if h == "-": return f"_i31(({_emit_js(node[1])})-({_emit_js(node[2])}))"

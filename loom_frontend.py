@@ -14,6 +14,14 @@ ASM_INTRINSICS = {
         "wasm_opcode": 0x6A,
         "wat_opcode": "i32.add",
     },
+    ("wasm", "i31.sub"): {
+        "inputs": ("i31", "i31"),
+        "result": "i31",
+        "effects": frozenset(),
+        "portable_op": "sub",
+        "wasm_opcode": 0x6B,
+        "wat_opcode": "i32.sub",
+    },
 }
 ASM_TARGETS = frozenset(target for target, _ in ASM_INTRINSICS)
 

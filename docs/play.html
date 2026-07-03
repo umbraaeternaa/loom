@@ -157,6 +157,13 @@ const EXAMPLES = [
 
 (defx main () (fn ()
   (asm wasm i31.add 20 22)))` },
+  { name: "WASM · checked i31.sub", note: "→ 42 / WAT / WASM",
+    src: `; A second registered low-level operation proves that the metadata
+; contract scales without opening raw assembly. Unknown instructions stay shut.
+; Run normally or through WASM (→ 42), then inspect i32.sub in WAT.
+
+(defx main () (fn ()
+  (asm wasm i31.sub 50 8)))` },
 ];
 
 const $ = id => document.getElementById(id);

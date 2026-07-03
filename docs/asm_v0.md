@@ -29,11 +29,16 @@ Each registry entry is the implementation's single contract record:
 | Target | Opcode | Arguments | Result | Effects | Executable |
 | --- | --- | ---: | --- | --- | --- |
 | `wasm` | `i31.add` | 2 | tagged i31 | `Pure` | Yes |
+| `wasm` | `i31.sub` | 2 | tagged i31 | `Pure` | Yes |
 
 `i31.add` evaluates both arguments, adds them with LOOM's signed i31
 modulo-`2^31` wraparound, and returns one tagged i31. The interpreter and
 portable Python/JavaScript backends emulate that exact contract; WASM lowers
 the already-tagged operands to one `i32.add`, and WAT mirrors it visibly.
+
+`i31.sub` follows the same value and effect contract, subtracting the second
+argument from the first with identical modulo-`2^31` wraparound. WASM lowers
+the tagged operands directly to `i32.sub`.
 
 ## Rejection rules
 
