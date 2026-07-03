@@ -125,8 +125,11 @@ def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ca
         rhs = _emit_wasm(ctx, node[4], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
         if spec["wasm_rhs"] == "unbox_i31":
             rhs += _wasm_const(1) + b"\x75"
-        return (_emit_wasm(ctx, node[3], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
-                + rhs + bytes([spec["wasm_opcode"]]))
+        out = (_emit_wasm(ctx, node[3], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
+               + rhs + bytes([spec["wasm_opcode"]]))
+        if spec["wasm_result"] == "tag_i31":
+            out += _wasm_const(1) + b"\x74"
+        return out
     if isinstance(h, list):                                             # ((fn ..) args) — compute head, then apply as a closure
         arity = len(node[1:])
         apply_id = ctx.apply_ids.get(arity)
@@ -751,8 +754,11 @@ def emit_wat(program_src, frontend):
             rhs = w(node[4], ind, handled_effs, with_handlers, callable_env)
             if spec["wasm_rhs"] == "unbox_i31":
                 rhs += [ind + "i32.const 1", ind + "i32.shr_s"]
-            return (w(node[3], ind, handled_effs, with_handlers, callable_env)
-                    + rhs + [ind + spec["wat_opcode"] + "  ;; checked asm " + str(node[1]) + " " + str(node[2])])
+            out = (w(node[3], ind, handled_effs, with_handlers, callable_env)
+                   + rhs + [ind + spec["wat_opcode"] + "  ;; checked asm " + str(node[1]) + " " + str(node[2])])
+            if spec["wasm_result"] == "tag_i31":
+                out += [ind + "i32.const 1", ind + "i32.shl"]
+            return out
         if h == "fn":
             spec = ctx.closures.get(id(node))
             if spec is None: raise frontend.error("wat: missing closure spec")

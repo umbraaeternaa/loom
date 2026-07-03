@@ -511,15 +511,19 @@ def main():
         asm_contract_ok &= ASM_INTRINSICS == {
             ("wasm", "i31.add"): {
                 "inputs": ("i31", "i31"), "result": "i31", "effects": frozenset(),
-                "portable_op": "add", "wasm_rhs": "tagged", "wasm_opcode": 0x6A, "wat_opcode": "i32.add",
+                "portable_op": "add", "wasm_rhs": "tagged", "wasm_result": "tagged", "wasm_opcode": 0x6A, "wat_opcode": "i32.add",
             },
             ("wasm", "i31.sub"): {
                 "inputs": ("i31", "i31"), "result": "i31", "effects": frozenset(),
-                "portable_op": "sub", "wasm_rhs": "tagged", "wasm_opcode": 0x6B, "wat_opcode": "i32.sub",
+                "portable_op": "sub", "wasm_rhs": "tagged", "wasm_result": "tagged", "wasm_opcode": 0x6B, "wat_opcode": "i32.sub",
             },
             ("wasm", "i31.mul"): {
                 "inputs": ("i31", "i31"), "result": "i31", "effects": frozenset(),
-                "portable_op": "mul", "wasm_rhs": "unbox_i31", "wasm_opcode": 0x6C, "wat_opcode": "i32.mul",
+                "portable_op": "mul", "wasm_rhs": "unbox_i31", "wasm_result": "tagged", "wasm_opcode": 0x6C, "wat_opcode": "i32.mul",
+            },
+            ("wasm", "i31.eq"): {
+                "inputs": ("i31", "i31"), "result": "bool-i31", "effects": frozenset(),
+                "portable_op": "eq", "wasm_rhs": "tagged", "wasm_result": "tag_i31", "wasm_opcode": 0x46, "wat_opcode": "i32.eq",
             },
         }
         print(f"  {'ok  ' if asm_contract_ok else 'FAIL'} checker: asm v0 envelope is closed and typed")
@@ -586,6 +590,27 @@ def main():
         print(f"  {'ok  ' if mul_exec_ok else 'FAIL'} asm wasm i31.mul: tagged parity => {mul_values}")
     except Exception as e:
         print(f"  FAIL asm wasm i31.mul parity: {e}")
+    try:                                               # comparison returns raw 0/1 in WASM and must retag it as LOOM 0/1
+        eq_program = '(defx low () (fn (a b) (asm wasm i31.eq a b)))'
+        eq_calls = ['(low 7 7)', '(low 7 8)']
+        eq_values = []
+        eq_exec_ok = True
+        for call in eq_calls:
+            values = [
+                run_call(eq_program, call)[0],
+                run_compiled(eq_program, call)[0],
+                run_js(eq_program, call)[0],
+                run_wasm(eq_program, call)[0],
+            ]
+            eq_values.append(values)
+            eq_exec_ok &= len(set(values)) == 1
+        wat_eq = emit_wat(eq_program)
+        eq_exec_ok &= eq_values == [[1, 1, 1, 1], [0, 0, 0, 0]]
+        eq_exec_ok &= "i32.eq  ;; checked asm wasm i31.eq" in wat_eq and "i32.shl" in wat_eq
+        ok += eq_exec_ok
+        print(f"  {'ok  ' if eq_exec_ok else 'FAIL'} asm wasm i31.eq: retagged bool parity => {eq_values}")
+    except Exception as e:
+        print(f"  FAIL asm wasm i31.eq parity: {e}")
     try:                                               # every check owns its policy/resource/taint context
         from concurrent.futures import ThreadPoolExecutor
         isolation_programs = [
@@ -1344,6 +1369,8 @@ def main():
             and "(asm wasm i31.sub 50 8)" in play
             and 'name: "WASM · checked i31.mul"' in play
             and "(asm wasm i31.mul 6 7)" in play
+            and 'name: "WASM · checked i31.eq"' in play
+            and "(asm wasm i31.eq 7 7)" in play
             and all(name not in play for name in (
                 "loom_parse.py",
                 "loom_checker.py",
@@ -1369,7 +1396,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 72   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 73   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

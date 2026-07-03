@@ -177,6 +177,8 @@ def ev(frontend, node, env, fns, out, handlers=None):
             return frontend.i31(args[0] - args[1])
         if spec["portable_op"] == "mul":
             return frontend.i31(args[0] * args[1])
+        if spec["portable_op"] == "eq":
+            return 1 if args[0] == args[1] else 0
         raise frontend.error("asm: registered intrinsic has no runtime lowering")
     args = [ev(frontend, arg, env, fns, out, handlers) for arg in node[1:]]
     if head == "+":
