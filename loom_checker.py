@@ -7,7 +7,7 @@ provided explicitly through Frontend, avoiding imports and circular loading.
 
 from contextvars import ContextVar
 
-from loom_frontend import asm_validation_error
+from loom_frontend import asm_metadata, asm_validation_error
 
 
 class Frontend:
@@ -760,9 +760,12 @@ def infer(frontend, node, fns, errs, penv=None):
         error = asm_validation_error(node)
         if error:
             errs.append(error)
+            return set()
+        spec = asm_metadata(node)
         eff = set()
         for arg in node[3:]:
             eff |= infer(frontend, arg, fns, errs, penv)
+        eff |= set(spec["effects"])
         return eff
     eff = set()
     for arg in node[1:]:

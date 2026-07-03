@@ -77,8 +77,22 @@ INT_BITS = 31
 INT_MIN = -(1 << (INT_BITS - 1))
 INT_MAX = (1 << (INT_BITS - 1)) - 1
 _INT_MOD = 1 << INT_BITS
-ASM_TARGETS = frozenset({"wasm"})
-ASM_INTRINSICS = {"i31.add": 2}
+ASM_INTRINSICS = {
+    ("wasm", "i31.add"): {
+        "inputs": ("i31", "i31"),
+        "result": "i31",
+        "effects": frozenset(),
+        "portable_op": "add",
+        "wasm_opcode": 0x6A,
+        "wat_opcode": "i32.add",
+    },
+}
+ASM_TARGETS = frozenset(target for target, _ in ASM_INTRINSICS)
+
+
+def asm_metadata(node):
+    """Return registry-owned metadata for a structurally valid asm form."""
+    return ASM_INTRINSICS[(str(node[1]), str(node[2]))]
 
 
 def asm_validation_error(node):
@@ -91,10 +105,11 @@ def asm_validation_error(node):
     if len(node) < 3 or not isinstance(node[2], str) or type(node[2]) is str:
         return "asm: expected opcode symbol after target"
     opcode = str(node[2])
-    arity = ASM_INTRINSICS.get(opcode)
-    if arity is None:
+    spec = ASM_INTRINSICS.get((target, opcode))
+    if spec is None:
         return f"asm: unsupported wasm opcode '{opcode}' in v0"
     got = len(node) - 3
+    arity = len(spec["inputs"])
     if got != arity:
         return f"asm: wasm opcode '{opcode}' expects {arity} argument(s), got {got}"
     return None
@@ -706,8 +721,11 @@ def infer(node, fns, errs, penv=None):
         error = asm_validation_error(node)
         if error:
             errs.append(error)
+            return set()
+        spec = asm_metadata(node)
         eff = set()
         for x in node[3:]: eff |= infer(x, fns, errs, penv)
+        eff |= set(spec["effects"])
         return eff
     eff = set()
     for a in node[1:]: eff |= infer(a, fns, errs, penv)
@@ -970,8 +988,10 @@ def ev(node, env, fns, out, handlers=None):
     if h == "asm":
         error = asm_validation_error(node)
         if error: raise LoomError(error)
+        spec = asm_metadata(node)
         args = [ev(x, env, fns, out, handlers) for x in node[3:]]
-        return _i31(args[0] + args[1])
+        if spec["portable_op"] == "add": return _i31(args[0] + args[1])
+        raise LoomError("asm: registered intrinsic has no runtime lowering")
     a = [ev(x, env, fns, out, handlers) for x in node[1:]]
     if h == "+": return _i31(sum(a))
     if h == "-": return _i31(a[0] - a[1])
@@ -1045,7 +1065,9 @@ def _emit(node):
     if h == "asm":
         error = asm_validation_error(node)
         if error: raise LoomError(error)
-        return f"_i31({_emit(node[3])}+{_emit(node[4])})"
+        spec = asm_metadata(node)
+        if spec["portable_op"] == "add": return f"_i31({_emit(node[3])}+{_emit(node[4])})"
+        raise LoomError("asm: registered intrinsic has no Python lowering")
     if h == "+": return "_i31(" + "+".join(_emit(a) for a in node[1:]) + ")"
     if h == "-": return f"_i31(({_emit(node[1])})-({_emit(node[2])}))"
     if h == "*": return "_i31(" + "*".join(_emit(a) for a in node[1:]) + ")"
@@ -1133,7 +1155,9 @@ def _emit_js(node):
     if h == "asm":
         error = asm_validation_error(node)
         if error: raise LoomError(error)
-        return f"_i31({_emit_js(node[3])}+{_emit_js(node[4])})"
+        spec = asm_metadata(node)
+        if spec["portable_op"] == "add": return f"_i31({_emit_js(node[3])}+{_emit_js(node[4])})"
+        raise LoomError("asm: registered intrinsic has no JavaScript lowering")
     if h == "+": return "_i31(" + "+".join(_emit_js(a) for a in node[1:]) + ")"
     if h == "-": return f"_i31(({_emit_js(node[1])})-({_emit_js(node[2])}))"
     if h == "*":
@@ -1333,9 +1357,10 @@ def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ca
     if h == "asm":
         error = asm_validation_error(node)
         if error: raise LoomError(error)
+        spec = asm_metadata(node)
         return (_emit_wasm(ctx, node[3], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
                 + _emit_wasm(ctx, node[4], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
-                + b"\x6a")
+                + bytes([spec["wasm_opcode"]]))
     if isinstance(h, list):                                             # ((fn ..) args) — compute head, then apply as a closure
         arity = len(node[1:])
         apply_id = ctx.apply_ids.get(arity)
@@ -1955,9 +1980,10 @@ def emit_wat(program_src):
         if h == "asm":
             error = asm_validation_error(node)
             if error: raise LoomError(error)
+            spec = asm_metadata(node)
             return (w(node[3], ind, handled_effs, with_handlers, callable_env)
                     + w(node[4], ind, handled_effs, with_handlers, callable_env)
-                    + [ind + "i32.add  ;; checked asm wasm i31.add"])
+                    + [ind + spec["wat_opcode"] + "  ;; checked asm " + str(node[1]) + " " + str(node[2])])
         if h == "fn":
             spec = ctx.closures.get(id(node))
             if spec is None: raise LoomError("wat: missing closure spec")

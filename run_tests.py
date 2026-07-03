@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import loom as _loom
+from loom_frontend import ASM_INTRINSICS
 from loom import parse, check, run_call, compile_py, run_compiled, run_js, compile_js, compile_wasm, run_wasm, emit_wat, LoomError, _WASM_ABI_VERSION
 
 # (name, source, should_be_accepted)
@@ -507,6 +508,12 @@ def main():
         ok += asm_contract_ok
         _, valid_asm_errs = check(parse('(defx low () (fn () (asm wasm i31.add 1 2)))'))
         asm_contract_ok &= not valid_asm_errs
+        asm_contract_ok &= ASM_INTRINSICS == {
+            ("wasm", "i31.add"): {
+                "inputs": ("i31", "i31"), "result": "i31", "effects": frozenset(),
+                "portable_op": "add", "wasm_opcode": 0x6A, "wat_opcode": "i32.add",
+            }
+        }
         print(f"  {'ok  ' if asm_contract_ok else 'FAIL'} checker: asm v0 envelope is closed and typed")
     except Exception as e:
         print(f"  FAIL asm v0 contract: {e}")

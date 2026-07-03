@@ -5,7 +5,7 @@ The backend is independent of the LOOM frontend. Parser/checker services are
 provided explicitly through Frontend, avoiding imports and circular loading.
 """
 
-from loom_frontend import WasmFrontend as _WasmFrontend, asm_validation_error
+from loom_frontend import WasmFrontend as _WasmFrontend, asm_metadata, asm_validation_error
 
 
 class Frontend(_WasmFrontend):
@@ -121,9 +121,10 @@ def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ca
     if h == "asm":
         error = asm_validation_error(node)
         if error: raise frontend.error(error)
+        spec = asm_metadata(node)
         return (_emit_wasm(ctx, node[3], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
                 + _emit_wasm(ctx, node[4], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
-                + b"\x6a")
+                + bytes([spec["wasm_opcode"]]))
     if isinstance(h, list):                                             # ((fn ..) args) — compute head, then apply as a closure
         arity = len(node[1:])
         apply_id = ctx.apply_ids.get(arity)
@@ -744,9 +745,10 @@ def emit_wat(program_src, frontend):
         if h == "asm":
             error = asm_validation_error(node)
             if error: raise frontend.error(error)
+            spec = asm_metadata(node)
             return (w(node[3], ind, handled_effs, with_handlers, callable_env)
                     + w(node[4], ind, handled_effs, with_handlers, callable_env)
-                    + [ind + "i32.add  ;; checked asm wasm i31.add"])
+                    + [ind + spec["wat_opcode"] + "  ;; checked asm " + str(node[1]) + " " + str(node[2])])
         if h == "fn":
             spec = ctx.closures.get(id(node))
             if spec is None: raise frontend.error("wat: missing closure spec")

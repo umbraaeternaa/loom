@@ -16,6 +16,14 @@ The target and opcode are symbols, never quoted text. The opcode registry owns
 arity, value types, effects, and lowering. Source code cannot self-declare those
 properties.
 
+Each registry entry is the implementation's single contract record:
+
+- `inputs` and `result` describe the LOOM value boundary;
+- `effects` is the checker-owned effect row;
+- `portable_op` selects interpreter/Python/JavaScript semantics;
+- `wasm_opcode` selects the binary instruction byte;
+- `wat_opcode` selects the human-readable instruction.
+
 ## v0 registry
 
 | Target | Opcode | Arguments | Result | Effects | Executable |

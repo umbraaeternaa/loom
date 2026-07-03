@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Portable Python and JavaScript code generators for checked LOOM programs."""
 
-from loom_frontend import CodegenFrontend as _CodegenFrontend, asm_validation_error
+from loom_frontend import CodegenFrontend as _CodegenFrontend, asm_metadata, asm_validation_error
 
 
 class Frontend(_CodegenFrontend):
@@ -19,7 +19,10 @@ def _emit(frontend, node):
     if h == "asm":
         error = asm_validation_error(node)
         if error: raise frontend.error(error)
-        return f"_i31({_emit(frontend, node[3])}+{_emit(frontend, node[4])})"
+        spec = asm_metadata(node)
+        if spec["portable_op"] == "add":
+            return f"_i31({_emit(frontend, node[3])}+{_emit(frontend, node[4])})"
+        raise frontend.error("asm: registered intrinsic has no Python lowering")
     if h == "+": return "_i31(" + "+".join(_emit(frontend, a) for a in node[1:]) + ")"
     if h == "-": return f"_i31(({_emit(frontend, node[1])})-({_emit(frontend, node[2])}))"
     if h == "*": return "_i31(" + "*".join(_emit(frontend, a) for a in node[1:]) + ")"
@@ -107,7 +110,10 @@ def _emit_js(frontend, node):
     if h == "asm":
         error = asm_validation_error(node)
         if error: raise frontend.error(error)
-        return f"_i31({_emit_js(frontend, node[3])}+{_emit_js(frontend, node[4])})"
+        spec = asm_metadata(node)
+        if spec["portable_op"] == "add":
+            return f"_i31({_emit_js(frontend, node[3])}+{_emit_js(frontend, node[4])})"
+        raise frontend.error("asm: registered intrinsic has no JavaScript lowering")
     if h == "+": return "_i31(" + "+".join(_emit_js(frontend, a) for a in node[1:]) + ")"
     if h == "-": return f"_i31(({_emit_js(frontend, node[1])})-({_emit_js(frontend, node[2])}))"
     if h == "*":

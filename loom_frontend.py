@@ -5,8 +5,22 @@ These contracts capture the services backends need from the main LOOM frontend
 without coupling them back to loom.py directly.
 """
 
-ASM_TARGETS = frozenset({"wasm"})
-ASM_INTRINSICS = {"i31.add": 2}
+ASM_INTRINSICS = {
+    ("wasm", "i31.add"): {
+        "inputs": ("i31", "i31"),
+        "result": "i31",
+        "effects": frozenset(),
+        "portable_op": "add",
+        "wasm_opcode": 0x6A,
+        "wat_opcode": "i32.add",
+    },
+}
+ASM_TARGETS = frozenset(target for target, _ in ASM_INTRINSICS)
+
+
+def asm_metadata(node):
+    """Return registry-owned metadata for a structurally valid asm form."""
+    return ASM_INTRINSICS[(str(node[1]), str(node[2]))]
 
 
 def asm_validation_error(node):
@@ -19,10 +33,11 @@ def asm_validation_error(node):
     if len(node) < 3 or not isinstance(node[2], str) or type(node[2]) is str:
         return "asm: expected opcode symbol after target"
     opcode = str(node[2])
-    arity = ASM_INTRINSICS.get(opcode)
-    if arity is None:
+    spec = ASM_INTRINSICS.get((target, opcode))
+    if spec is None:
         return f"asm: unsupported wasm opcode '{opcode}' in v0"
     got = len(node) - 3
+    arity = len(spec["inputs"])
     if got != arity:
         return f"asm: wasm opcode '{opcode}' expects {arity} argument(s), got {got}"
     return None

@@ -3,7 +3,7 @@
 
 from contextvars import ContextVar
 
-from loom_frontend import RuntimeFrontend as _RuntimeFrontend, asm_validation_error
+from loom_frontend import RuntimeFrontend as _RuntimeFrontend, asm_metadata, asm_validation_error
 
 
 class Frontend(_RuntimeFrontend):
@@ -169,8 +169,11 @@ def ev(frontend, node, env, fns, out, handlers=None):
         error = asm_validation_error(node)
         if error:
             raise frontend.error(error)
+        spec = asm_metadata(node)
         args = [ev(frontend, arg, env, fns, out, handlers) for arg in node[3:]]
-        return frontend.i31(args[0] + args[1])
+        if spec["portable_op"] == "add":
+            return frontend.i31(args[0] + args[1])
+        raise frontend.error("asm: registered intrinsic has no runtime lowering")
     args = [ev(frontend, arg, env, fns, out, handlers) for arg in node[1:]]
     if head == "+":
         return frontend.i31(sum(args))
