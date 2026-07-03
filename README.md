@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 371 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 372 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 371/371 citadel checks
+PASS — 372/372 citadel checks
 ```
 
 ## The idea in one screen
@@ -99,7 +99,8 @@ on trusting an annotation — *no capability granted ⇒ no effect possible*.
 
 `asm` is intentionally fail-closed today. Embedded assembly is reserved as a
 backend-owned low-level surface, not core LOOM semantics; portability and trust
-stay anchored in checked LOOM forms until that boundary has an explicit contract.
+stay anchored in checked LOOM forms. The closed, non-executable v0 envelope is
+specified in [`docs/asm_v0.md`](docs/asm_v0.md).
 
 - [`loom.py`](loom.py) — parser, effect checker, interpreter, and stable backend facade.
 - [`loom_codegen.py`](loom_codegen.py) — isolated portable Python/JavaScript generators.

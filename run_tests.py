@@ -493,6 +493,22 @@ def main():
         print(f"  {'ok  ' if meter_diag_ok else 'FAIL'} checker: seamN diagnostics stay specific")
     except Exception as e:
         print(f"  FAIL seamN diagnostics: {e}")
+    try:                                               # asm v0 validates a closed typed envelope but remains non-executable
+        asm_expect = [
+            ('(asm "wasm" i31.add 1 2)', "expected target symbol"),
+            ('(asm native i31.add 1 2)', "unsupported target 'native'"),
+            ('(asm wasm raw.bytes 1)', "unsupported wasm opcode 'raw.bytes'"),
+            ('(asm wasm i31.add 1)', "expects 2 argument(s), got 1"),
+            ('(asm wasm i31.add 1 2)', "embedded assembly is reserved"),
+        ]
+        asm_contract_ok = True
+        for form, fragment in asm_expect:
+            _, asm_errs = check(parse(f'(defx low () (fn () {form}))'))
+            asm_contract_ok &= bool(asm_errs) and fragment in asm_errs[0]
+        ok += asm_contract_ok
+        print(f"  {'ok  ' if asm_contract_ok else 'FAIL'} checker: asm v0 envelope is closed and reserved")
+    except Exception as e:
+        print(f"  FAIL asm v0 contract: {e}")
     try:                                               # every check owns its policy/resource/taint context
         from concurrent.futures import ThreadPoolExecutor
         isolation_programs = [
@@ -1256,6 +1272,7 @@ def main():
             and "verify_docs_parity.py" in workflow
             and "docs/loom.py" in workflow
             and Path(__file__).with_name("verify_docs_parity.py").exists()
+            and Path(__file__).with_name("docs").joinpath("asm_v0.md").exists()
         )
         ok += docs_discipline_ok
         print(f"  {'ok  ' if docs_discipline_ok else 'FAIL'} docs: published bundle workflow pinned")
@@ -1269,7 +1286,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 68   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN diagnostics, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 69   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

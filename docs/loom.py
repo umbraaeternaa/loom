@@ -82,6 +82,27 @@ ASM_RESERVED_MESSAGE = (
     "not core LOOM semantics; keep semantics in LOOM and route low-level code "
     "through a checked backend boundary"
 )
+ASM_TARGETS = frozenset({"wasm"})
+ASM_INTRINSICS = {"i31.add": 2}
+
+
+def asm_validation_error(node):
+    """Validate the closed asm-v0 envelope; execution remains reserved."""
+    if len(node) < 2 or not isinstance(node[1], str) or type(node[1]) is str:
+        return "asm: expected target symbol; v0 syntax is (asm wasm OPCODE ARG...)"
+    target = str(node[1])
+    if target not in ASM_TARGETS:
+        return f"asm: unsupported target '{target}'; v0 permits only wasm"
+    if len(node) < 3 or not isinstance(node[2], str) or type(node[2]) is str:
+        return "asm: expected opcode symbol after target"
+    opcode = str(node[2])
+    arity = ASM_INTRINSICS.get(opcode)
+    if arity is None:
+        return f"asm: unsupported wasm opcode '{opcode}' in v0"
+    got = len(node) - 3
+    if got != arity:
+        return f"asm: wasm opcode '{opcode}' expects {arity} argument(s), got {got}"
+    return ASM_RESERVED_MESSAGE
 
 
 def _i31(n):
@@ -687,7 +708,7 @@ def infer(node, fns, errs, penv=None):
         for x in body: eff |= infer(x, fns, errs, penv)
         return eff
     if h == "asm":
-        errs.append(ASM_RESERVED_MESSAGE)
+        errs.append(asm_validation_error(node))
         eff = set()
         for x in node[1:]: eff |= infer(x, fns, errs, penv)
         return eff
@@ -949,7 +970,7 @@ def ev(node, env, fns, out, handlers=None):
         r = None
         for x in node[2:]: r = ev(x, loc, fns, out, handlers)
         return r
-    if h == "asm": raise LoomError(ASM_RESERVED_MESSAGE)
+    if h == "asm": raise LoomError(asm_validation_error(node))
     a = [ev(x, env, fns, out, handlers) for x in node[1:]]
     if h == "+": return _i31(sum(a))
     if h == "-": return _i31(a[0] - a[1])
@@ -1020,7 +1041,7 @@ def _emit(node):
     if type(node) is str: return repr(node)                            # string literal
     if _is_symbol(node): return node                                   # variable / symbol
     h = node[0]
-    if h == "asm": raise LoomError(ASM_RESERVED_MESSAGE)
+    if h == "asm": raise LoomError(asm_validation_error(node))
     if h == "+": return "_i31(" + "+".join(_emit(a) for a in node[1:]) + ")"
     if h == "-": return f"_i31(({_emit(node[1])})-({_emit(node[2])}))"
     if h == "*": return "_i31(" + "*".join(_emit(a) for a in node[1:]) + ")"
@@ -1105,7 +1126,7 @@ def _emit_js(node):
     if type(node) is str: return repr(node)
     if _is_symbol(node): return node
     h = node[0]
-    if h == "asm": raise LoomError(ASM_RESERVED_MESSAGE)
+    if h == "asm": raise LoomError(asm_validation_error(node))
     if h == "+": return "_i31(" + "+".join(_emit_js(a) for a in node[1:]) + ")"
     if h == "-": return f"_i31(({_emit_js(node[1])})-({_emit_js(node[2])}))"
     if h == "*":
@@ -1303,7 +1324,7 @@ def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ca
         return _wasm_const(ctx.string_layout[node]["tagged"])
     h = node[0]
     if h == "asm":
-        raise LoomError(ASM_RESERVED_MESSAGE)
+        raise LoomError(asm_validation_error(node))
     if isinstance(h, list):                                             # ((fn ..) args) — compute head, then apply as a closure
         arity = len(node[1:])
         apply_id = ctx.apply_ids.get(arity)
@@ -2055,7 +2076,7 @@ def emit_wat(program_src):
             for a in node[1:]: o += w(a, ind, handled_effs, with_handlers, callable_env)
             return o + [ind + "call $" + h]
         if h == "asm":
-            raise LoomError(ASM_RESERVED_MESSAGE)
+            raise LoomError(asm_validation_error(node))
         raise LoomError("wat: form not yet in the WASM backend: " + str(h))
     bodies = []
     for t in ds:

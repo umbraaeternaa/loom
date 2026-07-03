@@ -10,6 +10,27 @@ ASM_RESERVED_MESSAGE = (
     "not core LOOM semantics; keep semantics in LOOM and route low-level code "
     "through a checked backend boundary"
 )
+ASM_TARGETS = frozenset({"wasm"})
+ASM_INTRINSICS = {"i31.add": 2}
+
+
+def asm_validation_error(node):
+    """Validate the closed asm-v0 envelope; execution remains reserved."""
+    if len(node) < 2 or not isinstance(node[1], str) or type(node[1]) is str:
+        return "asm: expected target symbol; v0 syntax is (asm wasm OPCODE ARG...)"
+    target = str(node[1])
+    if target not in ASM_TARGETS:
+        return f"asm: unsupported target '{target}'; v0 permits only wasm"
+    if len(node) < 3 or not isinstance(node[2], str) or type(node[2]) is str:
+        return "asm: expected opcode symbol after target"
+    opcode = str(node[2])
+    arity = ASM_INTRINSICS.get(opcode)
+    if arity is None:
+        return f"asm: unsupported wasm opcode '{opcode}' in v0"
+    got = len(node) - 3
+    if got != arity:
+        return f"asm: wasm opcode '{opcode}' expects {arity} argument(s), got {got}"
+    return ASM_RESERVED_MESSAGE
 
 
 class BackendFrontend:

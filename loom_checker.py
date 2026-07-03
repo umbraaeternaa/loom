@@ -7,7 +7,7 @@ provided explicitly through Frontend, avoiding imports and circular loading.
 
 from contextvars import ContextVar
 
-from loom_frontend import ASM_RESERVED_MESSAGE
+from loom_frontend import asm_validation_error
 
 
 class Frontend:
@@ -757,7 +757,7 @@ def infer(frontend, node, fns, errs, penv=None):
             eff |= infer(frontend, expr, fns, errs, penv)
         return eff
     if head == "asm":
-        errs.append(ASM_RESERVED_MESSAGE)
+        errs.append(asm_validation_error(node))
         eff = set()
         for arg in node[1:]:
             eff |= infer(frontend, arg, fns, errs, penv)
