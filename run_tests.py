@@ -33,7 +33,7 @@ CASES = [
     ("FFI boundary honest",  "(defx ccall (FFI) (fn (x) (seam (FFI) x)))", True),
     # --- hardened 2026-06-22: the gate must REFUSE an unverifiable call, not assume it pure ---
     ("unresolved call",      "(defx evil () (fn (x) (ghost x)))", False),
-    ("asm surface reserved", '(defx low () (fn () (asm "nop")))', False),
+    ("raw asm text refused", '(defx low () (fn () (asm "nop")))', False),
     # --- grown 2026-06-22: effect HANDLERS — discharge an effect so it does not escape (dual of seam) ---
     ("handle discharges IO", "(defx quiet () (fn (x) (handle (IO) (print x))))", True),
     ("handle only what named","(defx leak () (fn (x) (handle (Net) (print x))))", False),
@@ -493,22 +493,43 @@ def main():
         print(f"  {'ok  ' if meter_diag_ok else 'FAIL'} checker: seamN diagnostics stay specific")
     except Exception as e:
         print(f"  FAIL seamN diagnostics: {e}")
-    try:                                               # asm v0 validates a closed typed envelope but remains non-executable
+    try:                                               # asm v0 validates a closed typed envelope and rejects everything outside it
         asm_expect = [
             ('(asm "wasm" i31.add 1 2)', "expected target symbol"),
             ('(asm native i31.add 1 2)', "unsupported target 'native'"),
             ('(asm wasm raw.bytes 1)', "unsupported wasm opcode 'raw.bytes'"),
             ('(asm wasm i31.add 1)', "expects 2 argument(s), got 1"),
-            ('(asm wasm i31.add 1 2)', "embedded assembly is reserved"),
         ]
         asm_contract_ok = True
         for form, fragment in asm_expect:
             _, asm_errs = check(parse(f'(defx low () (fn () {form}))'))
             asm_contract_ok &= bool(asm_errs) and fragment in asm_errs[0]
         ok += asm_contract_ok
-        print(f"  {'ok  ' if asm_contract_ok else 'FAIL'} checker: asm v0 envelope is closed and reserved")
+        _, valid_asm_errs = check(parse('(defx low () (fn () (asm wasm i31.add 1 2)))'))
+        asm_contract_ok &= not valid_asm_errs
+        print(f"  {'ok  ' if asm_contract_ok else 'FAIL'} checker: asm v0 envelope is closed and typed")
     except Exception as e:
         print(f"  FAIL asm v0 contract: {e}")
+    try:                                               # first checked intrinsic must preserve i31 semantics on every backend
+        asm_program = '(defx low () (fn (a b) (asm wasm i31.add a b)))'
+        asm_calls = ['(low 20 22)', '(low 1073741823 1)']
+        asm_values = []
+        asm_exec_ok = True
+        for call in asm_calls:
+            values = [
+                run_call(asm_program, call)[0],
+                run_compiled(asm_program, call)[0],
+                run_js(asm_program, call)[0],
+                run_wasm(asm_program, call)[0],
+            ]
+            asm_values.append(values)
+            asm_exec_ok &= len(set(values)) == 1
+        asm_exec_ok &= asm_values == [[42, 42, 42, 42], [-1073741824] * 4]
+        asm_exec_ok &= "i32.add  ;; checked asm wasm i31.add" in emit_wat(asm_program)
+        ok += asm_exec_ok
+        print(f"  {'ok  ' if asm_exec_ok else 'FAIL'} asm wasm i31.add: cross-backend parity => {asm_values}")
+    except Exception as e:
+        print(f"  FAIL asm wasm i31.add parity: {e}")
     try:                                               # every check owns its policy/resource/taint context
         from concurrent.futures import ThreadPoolExecutor
         isolation_programs = [
@@ -1286,7 +1307,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 69   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 70   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

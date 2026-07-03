@@ -5,17 +5,12 @@ These contracts capture the services backends need from the main LOOM frontend
 without coupling them back to loom.py directly.
 """
 
-ASM_RESERVED_MESSAGE = (
-    "asm: embedded assembly is reserved as a backend-owned low-level surface, "
-    "not core LOOM semantics; keep semantics in LOOM and route low-level code "
-    "through a checked backend boundary"
-)
 ASM_TARGETS = frozenset({"wasm"})
 ASM_INTRINSICS = {"i31.add": 2}
 
 
 def asm_validation_error(node):
-    """Validate the closed asm-v0 envelope; execution remains reserved."""
+    """Return a diagnostic for an invalid asm-v0 envelope, otherwise None."""
     if len(node) < 2 or not isinstance(node[1], str) or type(node[1]) is str:
         return "asm: expected target symbol; v0 syntax is (asm wasm OPCODE ARG...)"
     target = str(node[1])
@@ -30,7 +25,7 @@ def asm_validation_error(node):
     got = len(node) - 3
     if got != arity:
         return f"asm: wasm opcode '{opcode}' expects {arity} argument(s), got {got}"
-    return ASM_RESERVED_MESSAGE
+    return None
 
 
 class BackendFrontend:

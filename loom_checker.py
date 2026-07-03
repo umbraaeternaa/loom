@@ -757,9 +757,11 @@ def infer(frontend, node, fns, errs, penv=None):
             eff |= infer(frontend, expr, fns, errs, penv)
         return eff
     if head == "asm":
-        errs.append(asm_validation_error(node))
+        error = asm_validation_error(node)
+        if error:
+            errs.append(error)
         eff = set()
-        for arg in node[1:]:
+        for arg in node[3:]:
             eff |= infer(frontend, arg, fns, errs, penv)
         return eff
     eff = set()

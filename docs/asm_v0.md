@@ -1,6 +1,6 @@
 # LOOM checked assembly envelope v0
 
-Status: reserved, validated, and deliberately non-executable.
+Status: closed and executable for explicitly registered pure intrinsics only.
 
 ## Purpose
 
@@ -20,10 +20,12 @@ properties.
 
 | Target | Opcode | Arguments | Result | Effects | Executable |
 | --- | --- | ---: | --- | --- | --- |
-| `wasm` | `i31.add` | 2 | tagged i31 | `Pure` | No |
+| `wasm` | `i31.add` | 2 | tagged i31 | `Pure` | Yes |
 
-`i31.add` is present only to pin validation and the shape of the future
-registry. A correctly formed expression is still rejected as reserved.
+`i31.add` evaluates both arguments, adds them with LOOM's signed i31
+modulo-`2^31` wraparound, and returns one tagged i31. The interpreter and
+portable Python/JavaScript backends emulate that exact contract; WASM lowers
+the already-tagged operands to one `i32.add`, and WAT mirrors it visibly.
 
 ## Rejection rules
 
@@ -33,13 +35,12 @@ The checker rejects:
 - targets other than `wasm`;
 - missing, quoted, or unregistered opcodes;
 - an argument count that differs from the registry;
-- every otherwise valid v0 expression, because execution is not enabled yet.
 
-Runtime and backend entry points fail closed as defense in depth. No v0 form
-may inject raw WAT, WebAssembly bytes, imports, memory access, control flow, or
-host calls.
+Runtime and backend entry points independently validate the envelope as defense
+in depth. No v0 form may inject raw WAT, WebAssembly bytes, imports, memory
+access, control flow, or host calls.
 
-## Gate for v1 execution
+## Gate for registry expansion
 
 An opcode may become executable only after its tagged input/output semantics,
 effect row, interpreter behavior, portable-backend behavior, WASM lowering,

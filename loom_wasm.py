@@ -119,7 +119,11 @@ def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ca
         return _wasm_const(ctx.string_layout[node]["tagged"])
     h = node[0]
     if h == "asm":
-        raise frontend.error(asm_validation_error(node))
+        error = asm_validation_error(node)
+        if error: raise frontend.error(error)
+        return (_emit_wasm(ctx, node[3], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
+                + _emit_wasm(ctx, node[4], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
+                + b"\x6a")
     if isinstance(h, list):                                             # ((fn ..) args) — compute head, then apply as a closure
         arity = len(node[1:])
         apply_id = ctx.apply_ids.get(arity)
@@ -737,6 +741,12 @@ def emit_wat(program_src, frontend):
             uses_heap[0] = True
             return [ind + "i32.const " + str(ctx.string_layout[node]["tagged"]) + "  ;; string literal"]
         h = node[0]
+        if h == "asm":
+            error = asm_validation_error(node)
+            if error: raise frontend.error(error)
+            return (w(node[3], ind, handled_effs, with_handlers, callable_env)
+                    + w(node[4], ind, handled_effs, with_handlers, callable_env)
+                    + [ind + "i32.add  ;; checked asm wasm i31.add"])
         if h == "fn":
             spec = ctx.closures.get(id(node))
             if spec is None: raise frontend.error("wat: missing closure spec")
@@ -871,8 +881,6 @@ def emit_wat(program_src, frontend):
             o = []
             for a in node[1:]: o += w(a, ind, handled_effs, with_handlers, callable_env)
             return o + [ind + "call $" + h]
-        if h == "asm":
-            raise frontend.error(asm_validation_error(node))
         raise frontend.error("wat: form not yet in the WASM backend: " + str(h))
     bodies = []
     for t in ds:
