@@ -1289,6 +1289,8 @@ def main():
             and '"globalFindings"' in play
             and "TextDecoder()" in play
             and "k === 6" in play
+            and 'name: "WASM · checked i31.add"' in play
+            and "(asm wasm i31.add 20 22)" in play
             and all(name not in play for name in (
                 "loom_parse.py",
                 "loom_checker.py",

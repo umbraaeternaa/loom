@@ -150,6 +150,13 @@ const EXAMPLES = [
 ; too. The semicolon stays data, not syntax or comment masking.
 
 (defx main () (fn () (record (msg "x;y"))))` },
+  { name: "WASM · checked i31.add", note: "→ 42 / WAT / WASM",
+    src: `; Low-level operations are not raw text. LOOM accepts only registered
+; instructions with fixed inputs, result, effects, and backend lowering.
+; Run normally or through WASM (→ 42), then inspect the checked i32.add in WAT.
+
+(defx main () (fn ()
+  (asm wasm i31.add 20 22)))` },
 ];
 
 const $ = id => document.getElementById(id);

@@ -25,6 +25,8 @@ def _check_playground_loader() -> None:
         '"globalFindings"',
         "TextDecoder()",
         "k === 6",
+        'name: "WASM · checked i31.add"',
+        "(asm wasm i31.add 20 22)",
     )
     missing = [needle for needle in required if needle not in text]
     if missing:
