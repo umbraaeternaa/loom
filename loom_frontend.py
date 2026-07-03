@@ -11,6 +11,7 @@ ASM_INTRINSICS = {
         "result": "i31",
         "effects": frozenset(),
         "portable_op": "add",
+        "wasm_rhs": "tagged",
         "wasm_opcode": 0x6A,
         "wat_opcode": "i32.add",
     },
@@ -19,8 +20,18 @@ ASM_INTRINSICS = {
         "result": "i31",
         "effects": frozenset(),
         "portable_op": "sub",
+        "wasm_rhs": "tagged",
         "wasm_opcode": 0x6B,
         "wat_opcode": "i32.sub",
+    },
+    ("wasm", "i31.mul"): {
+        "inputs": ("i31", "i31"),
+        "result": "i31",
+        "effects": frozenset(),
+        "portable_op": "mul",
+        "wasm_rhs": "unbox_i31",
+        "wasm_opcode": 0x6C,
+        "wat_opcode": "i32.mul",
     },
 }
 ASM_TARGETS = frozenset(target for target, _ in ASM_INTRINSICS)

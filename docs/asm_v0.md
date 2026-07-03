@@ -21,6 +21,8 @@ Each registry entry is the implementation's single contract record:
 - `inputs` and `result` describe the LOOM value boundary;
 - `effects` is the checker-owned effect row;
 - `portable_op` selects interpreter/Python/JavaScript semantics;
+- `wasm_rhs` declares whether the second tagged operand stays boxed or must be
+  decoded before the binary instruction;
 - `wasm_opcode` selects the binary instruction byte;
 - `wat_opcode` selects the human-readable instruction.
 
@@ -30,6 +32,7 @@ Each registry entry is the implementation's single contract record:
 | --- | --- | ---: | --- | --- | --- |
 | `wasm` | `i31.add` | 2 | tagged i31 | `Pure` | Yes |
 | `wasm` | `i31.sub` | 2 | tagged i31 | `Pure` | Yes |
+| `wasm` | `i31.mul` | 2 | tagged i31 | `Pure` | Yes |
 
 `i31.add` evaluates both arguments, adds them with LOOM's signed i31
 modulo-`2^31` wraparound, and returns one tagged i31. The interpreter and
@@ -39,6 +42,10 @@ the already-tagged operands to one `i32.add`, and WAT mirrors it visibly.
 `i31.sub` follows the same value and effect contract, subtracting the second
 argument from the first with identical modulo-`2^31` wraparound. WASM lowers
 the tagged operands directly to `i32.sub`.
+
+`i31.mul` first decodes the second tagged operand with an arithmetic right
+shift, then multiplies it by the still-tagged first operand. This keeps exactly
+one tag factor in the result: `(2a) * b = 2ab`.
 
 ## Rejection rules
 

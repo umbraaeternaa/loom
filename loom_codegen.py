@@ -24,6 +24,8 @@ def _emit(frontend, node):
             return f"_i31({_emit(frontend, node[3])}+{_emit(frontend, node[4])})"
         if spec["portable_op"] == "sub":
             return f"_i31({_emit(frontend, node[3])}-{_emit(frontend, node[4])})"
+        if spec["portable_op"] == "mul":
+            return f"_i31({_emit(frontend, node[3])}*{_emit(frontend, node[4])})"
         raise frontend.error("asm: registered intrinsic has no Python lowering")
     if h == "+": return "_i31(" + "+".join(_emit(frontend, a) for a in node[1:]) + ")"
     if h == "-": return f"_i31(({_emit(frontend, node[1])})-({_emit(frontend, node[2])}))"
@@ -117,6 +119,8 @@ def _emit_js(frontend, node):
             return f"_i31({_emit_js(frontend, node[3])}+{_emit_js(frontend, node[4])})"
         if spec["portable_op"] == "sub":
             return f"_i31({_emit_js(frontend, node[3])}-{_emit_js(frontend, node[4])})"
+        if spec["portable_op"] == "mul":
+            return f"_imul({_emit_js(frontend, node[3])},{_emit_js(frontend, node[4])})"
         raise frontend.error("asm: registered intrinsic has no JavaScript lowering")
     if h == "+": return "_i31(" + "+".join(_emit_js(frontend, a) for a in node[1:]) + ")"
     if h == "-": return f"_i31(({_emit_js(frontend, node[1])})-({_emit_js(frontend, node[2])}))"

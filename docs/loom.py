@@ -83,6 +83,7 @@ ASM_INTRINSICS = {
         "result": "i31",
         "effects": frozenset(),
         "portable_op": "add",
+        "wasm_rhs": "tagged",
         "wasm_opcode": 0x6A,
         "wat_opcode": "i32.add",
     },
@@ -91,8 +92,18 @@ ASM_INTRINSICS = {
         "result": "i31",
         "effects": frozenset(),
         "portable_op": "sub",
+        "wasm_rhs": "tagged",
         "wasm_opcode": 0x6B,
         "wat_opcode": "i32.sub",
+    },
+    ("wasm", "i31.mul"): {
+        "inputs": ("i31", "i31"),
+        "result": "i31",
+        "effects": frozenset(),
+        "portable_op": "mul",
+        "wasm_rhs": "unbox_i31",
+        "wasm_opcode": 0x6C,
+        "wat_opcode": "i32.mul",
     },
 }
 ASM_TARGETS = frozenset(target for target, _ in ASM_INTRINSICS)
@@ -1000,6 +1011,7 @@ def ev(node, env, fns, out, handlers=None):
         args = [ev(x, env, fns, out, handlers) for x in node[3:]]
         if spec["portable_op"] == "add": return _i31(args[0] + args[1])
         if spec["portable_op"] == "sub": return _i31(args[0] - args[1])
+        if spec["portable_op"] == "mul": return _i31(args[0] * args[1])
         raise LoomError("asm: registered intrinsic has no runtime lowering")
     a = [ev(x, env, fns, out, handlers) for x in node[1:]]
     if h == "+": return _i31(sum(a))
@@ -1077,6 +1089,7 @@ def _emit(node):
         spec = asm_metadata(node)
         if spec["portable_op"] == "add": return f"_i31({_emit(node[3])}+{_emit(node[4])})"
         if spec["portable_op"] == "sub": return f"_i31({_emit(node[3])}-{_emit(node[4])})"
+        if spec["portable_op"] == "mul": return f"_i31({_emit(node[3])}*{_emit(node[4])})"
         raise LoomError("asm: registered intrinsic has no Python lowering")
     if h == "+": return "_i31(" + "+".join(_emit(a) for a in node[1:]) + ")"
     if h == "-": return f"_i31(({_emit(node[1])})-({_emit(node[2])}))"
@@ -1168,6 +1181,7 @@ def _emit_js(node):
         spec = asm_metadata(node)
         if spec["portable_op"] == "add": return f"_i31({_emit_js(node[3])}+{_emit_js(node[4])})"
         if spec["portable_op"] == "sub": return f"_i31({_emit_js(node[3])}-{_emit_js(node[4])})"
+        if spec["portable_op"] == "mul": return f"_imul({_emit_js(node[3])},{_emit_js(node[4])})"
         raise LoomError("asm: registered intrinsic has no JavaScript lowering")
     if h == "+": return "_i31(" + "+".join(_emit_js(a) for a in node[1:]) + ")"
     if h == "-": return f"_i31(({_emit_js(node[1])})-({_emit_js(node[2])}))"
@@ -1369,9 +1383,10 @@ def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ca
         error = asm_validation_error(node)
         if error: raise LoomError(error)
         spec = asm_metadata(node)
+        rhs = _emit_wasm(ctx, node[4], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
+        if spec["wasm_rhs"] == "unbox_i31": rhs += _wasm_const(1) + b"\x75"
         return (_emit_wasm(ctx, node[3], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
-                + _emit_wasm(ctx, node[4], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
-                + bytes([spec["wasm_opcode"]]))
+                + rhs + bytes([spec["wasm_opcode"]]))
     if isinstance(h, list):                                             # ((fn ..) args) — compute head, then apply as a closure
         arity = len(node[1:])
         apply_id = ctx.apply_ids.get(arity)
@@ -1992,9 +2007,10 @@ def emit_wat(program_src):
             error = asm_validation_error(node)
             if error: raise LoomError(error)
             spec = asm_metadata(node)
+            rhs = w(node[4], ind, handled_effs, with_handlers, callable_env)
+            if spec["wasm_rhs"] == "unbox_i31": rhs += [ind + "i32.const 1", ind + "i32.shr_s"]
             return (w(node[3], ind, handled_effs, with_handlers, callable_env)
-                    + w(node[4], ind, handled_effs, with_handlers, callable_env)
-                    + [ind + spec["wat_opcode"] + "  ;; checked asm " + str(node[1]) + " " + str(node[2])])
+                    + rhs + [ind + spec["wat_opcode"] + "  ;; checked asm " + str(node[1]) + " " + str(node[2])])
         if h == "fn":
             spec = ctx.closures.get(id(node))
             if spec is None: raise LoomError("wat: missing closure spec")

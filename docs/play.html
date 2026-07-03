@@ -164,6 +164,13 @@ const EXAMPLES = [
 
 (defx main () (fn ()
   (asm wasm i31.sub 50 8)))` },
+  { name: "WASM · checked i31.mul", note: "→ 42 / WAT / WASM",
+    src: `; Tagged multiplication needs more than a raw opcode: LOOM decodes
+; one operand first, preserving exactly one tag factor in the result.
+; Run it (→ 42), then inspect i32.shr_s followed by i32.mul in WAT.
+
+(defx main () (fn ()
+  (asm wasm i31.mul 6 7)))` },
 ];
 
 const $ = id => document.getElementById(id);
