@@ -33,6 +33,7 @@ CASES = [
     ("FFI boundary honest",  "(defx ccall (FFI) (fn (x) (seam (FFI) x)))", True),
     # --- hardened 2026-06-22: the gate must REFUSE an unverifiable call, not assume it pure ---
     ("unresolved call",      "(defx evil () (fn (x) (ghost x)))", False),
+    ("asm surface reserved", '(defx low () (fn () (asm "nop")))', False),
     # --- grown 2026-06-22: effect HANDLERS — discharge an effect so it does not escape (dual of seam) ---
     ("handle discharges IO", "(defx quiet () (fn (x) (handle (IO) (print x))))", True),
     ("handle only what named","(defx leak () (fn (x) (handle (Net) (print x))))", False),

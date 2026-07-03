@@ -5,7 +5,7 @@ The backend is independent of the LOOM frontend. Parser/checker services are
 provided explicitly through Frontend, avoiding imports and circular loading.
 """
 
-from loom_frontend import WasmFrontend as _WasmFrontend
+from loom_frontend import ASM_RESERVED_MESSAGE, WasmFrontend as _WasmFrontend
 
 
 class Frontend(_WasmFrontend):
@@ -118,6 +118,8 @@ def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ca
     if type(node) is str:
         return _wasm_const(ctx.string_layout[node]["tagged"])
     h = node[0]
+    if h == "asm":
+        raise frontend.error(ASM_RESERVED_MESSAGE)
     if isinstance(h, list):                                             # ((fn ..) args) — compute head, then apply as a closure
         arity = len(node[1:])
         apply_id = ctx.apply_ids.get(arity)
@@ -869,6 +871,8 @@ def emit_wat(program_src, frontend):
             o = []
             for a in node[1:]: o += w(a, ind, handled_effs, with_handlers, callable_env)
             return o + [ind + "call $" + h]
+        if h == "asm":
+            raise frontend.error(ASM_RESERVED_MESSAGE)
         raise frontend.error("wat: form not yet in the WASM backend: " + str(h))
     bodies = []
     for t in ds:

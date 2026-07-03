@@ -3,7 +3,7 @@
 
 from contextvars import ContextVar
 
-from loom_frontend import RuntimeFrontend as _RuntimeFrontend
+from loom_frontend import ASM_RESERVED_MESSAGE, RuntimeFrontend as _RuntimeFrontend
 
 
 class Frontend(_RuntimeFrontend):
@@ -165,6 +165,8 @@ def ev(frontend, node, env, fns, out, handlers=None):
     if head == "let":
         local_env = {**env, node[1][0]: ev(frontend, node[1][1], env, fns, out, handlers)}
         return _eval_seq(frontend, node[2:], local_env, fns, out, handlers)
+    if head == "asm":
+        raise frontend.error(ASM_RESERVED_MESSAGE)
     args = [ev(frontend, arg, env, fns, out, handlers) for arg in node[1:]]
     if head == "+":
         return frontend.i31(sum(args))

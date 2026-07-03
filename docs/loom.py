@@ -77,6 +77,11 @@ INT_BITS = 31
 INT_MIN = -(1 << (INT_BITS - 1))
 INT_MAX = (1 << (INT_BITS - 1)) - 1
 _INT_MOD = 1 << INT_BITS
+ASM_RESERVED_MESSAGE = (
+    "asm: embedded assembly is reserved as a backend-owned low-level surface, "
+    "not core LOOM semantics; keep semantics in LOOM and route low-level code "
+    "through a checked backend boundary"
+)
 
 
 def _i31(n):
@@ -681,6 +686,11 @@ def infer(node, fns, errs, penv=None):
         eff = set()
         for x in body: eff |= infer(x, fns, errs, penv)
         return eff
+    if h == "asm":
+        errs.append(ASM_RESERVED_MESSAGE)
+        eff = set()
+        for x in node[1:]: eff |= infer(x, fns, errs, penv)
+        return eff
     eff = set()
     for a in node[1:]: eff |= infer(a, fns, errs, penv)
     if h in BUILTIN_EFF: eff |= BUILTIN_EFF[h]
@@ -939,6 +949,7 @@ def ev(node, env, fns, out, handlers=None):
         r = None
         for x in node[2:]: r = ev(x, loc, fns, out, handlers)
         return r
+    if h == "asm": raise LoomError(ASM_RESERVED_MESSAGE)
     a = [ev(x, env, fns, out, handlers) for x in node[1:]]
     if h == "+": return _i31(sum(a))
     if h == "-": return _i31(a[0] - a[1])
@@ -1009,6 +1020,7 @@ def _emit(node):
     if type(node) is str: return repr(node)                            # string literal
     if _is_symbol(node): return node                                   # variable / symbol
     h = node[0]
+    if h == "asm": raise LoomError(ASM_RESERVED_MESSAGE)
     if h == "+": return "_i31(" + "+".join(_emit(a) for a in node[1:]) + ")"
     if h == "-": return f"_i31(({_emit(node[1])})-({_emit(node[2])}))"
     if h == "*": return "_i31(" + "*".join(_emit(a) for a in node[1:]) + ")"
@@ -1093,6 +1105,7 @@ def _emit_js(node):
     if type(node) is str: return repr(node)
     if _is_symbol(node): return node
     h = node[0]
+    if h == "asm": raise LoomError(ASM_RESERVED_MESSAGE)
     if h == "+": return "_i31(" + "+".join(_emit_js(a) for a in node[1:]) + ")"
     if h == "-": return f"_i31(({_emit_js(node[1])})-({_emit_js(node[2])}))"
     if h == "*":
@@ -1289,6 +1302,8 @@ def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ca
     if type(node) is str:
         return _wasm_const(ctx.string_layout[node]["tagged"])
     h = node[0]
+    if h == "asm":
+        raise LoomError(ASM_RESERVED_MESSAGE)
     if isinstance(h, list):                                             # ((fn ..) args) — compute head, then apply as a closure
         arity = len(node[1:])
         apply_id = ctx.apply_ids.get(arity)
@@ -2039,6 +2054,8 @@ def emit_wat(program_src):
             o = []
             for a in node[1:]: o += w(a, ind, handled_effs, with_handlers, callable_env)
             return o + [ind + "call $" + h]
+        if h == "asm":
+            raise LoomError(ASM_RESERVED_MESSAGE)
         raise LoomError("wat: form not yet in the WASM backend: " + str(h))
     bodies = []
     for t in ds:

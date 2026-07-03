@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Portable Python and JavaScript code generators for checked LOOM programs."""
 
-from loom_frontend import CodegenFrontend as _CodegenFrontend
+from loom_frontend import ASM_RESERVED_MESSAGE, CodegenFrontend as _CodegenFrontend
 
 
 class Frontend(_CodegenFrontend):
@@ -16,6 +16,7 @@ def _emit(frontend, node):
     if type(node) is str: return repr(node)                            # string literal
     if _is_symbol(node): return node                                   # variable / symbol
     h = node[0]
+    if h == "asm": raise frontend.error(ASM_RESERVED_MESSAGE)
     if h == "+": return "_i31(" + "+".join(_emit(frontend, a) for a in node[1:]) + ")"
     if h == "-": return f"_i31(({_emit(frontend, node[1])})-({_emit(frontend, node[2])}))"
     if h == "*": return "_i31(" + "*".join(_emit(frontend, a) for a in node[1:]) + ")"
@@ -100,6 +101,7 @@ def _emit_js(frontend, node):
     if type(node) is str: return repr(node)
     if _is_symbol(node): return node
     h = node[0]
+    if h == "asm": raise frontend.error(ASM_RESERVED_MESSAGE)
     if h == "+": return "_i31(" + "+".join(_emit_js(frontend, a) for a in node[1:]) + ")"
     if h == "-": return f"_i31(({_emit_js(frontend, node[1])})-({_emit_js(frontend, node[2])}))"
     if h == "*":

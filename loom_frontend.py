@@ -5,6 +5,12 @@ These contracts capture the services backends need from the main LOOM frontend
 without coupling them back to loom.py directly.
 """
 
+ASM_RESERVED_MESSAGE = (
+    "asm: embedded assembly is reserved as a backend-owned low-level surface, "
+    "not core LOOM semantics; keep semantics in LOOM and route low-level code "
+    "through a checked backend boundary"
+)
+
 
 class BackendFrontend:
     __slots__ = ("parse", "check", "pname", "error", "op", "check_call_literals")
