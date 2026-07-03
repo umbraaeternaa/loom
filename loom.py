@@ -161,8 +161,14 @@ def emit_wat(program_src):
 def run_wasm(program_src, call_src):
     return _loom_wasm.run_wasm(program_src, call_src, _WASM_FRONTEND)
 
+
 # ---- CLI: turn the kernel into a usable TOOL. `python3 loom.py <check|run|build|audit> file.loom [call] [--target py|js|wat]` ----
 _CLI_FRONTEND = _loom_cli.Frontend(parse, check, run_call, compile_py, compile_js, emit_wat, LoomError)
+
+
+def build_verdict(program_src):
+    """Return the stable JSON-safe checker verdict used by LOOM Gate clients."""
+    return _loom_cli.build_verdict(_CLI_FRONTEND, program_src)
 
 
 def _cli(argv):

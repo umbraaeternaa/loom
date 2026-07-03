@@ -7,6 +7,8 @@
 # a pure fn => networked code becomes provably pure). Plus control flow (if/let), recursion, and first-class
 # functions with ROW-POLYMORPHISM + anonymous LAMBDAS/CLOSURES. A tiny s-expr language + static effect checker
 # + interpreter. Grown nightly by the organism, verified by run_tests.py — the language only ever grows GREEN.
+import hashlib
+import json
 import re
 from contextvars import ContextVar
 
@@ -2380,46 +2382,88 @@ def run_wasm(program_src, call_src):
     return val, out
 
 
-# ---- CLI: turn the kernel into a usable TOOL. `python3 loom.py <check|run|build|audit> file.loom [call] [--target py|js|wat]` ----
-def _cli(argv):
-    def _partition_findings(fns, errs):
-        ftab, globals_ = {}, []
-        for e in errs:
-            k = e.split(": ", 1)[0]
-            if k in fns: ftab.setdefault(k, []).append(e)
-            else: globals_.append(e)
-        return ftab, globals_
+# ---- CLI + structured verdict: one checker truth for humans, Gate clients, and receipts. ----
+def _partition_findings(fns, errs):
+    ftab, globals_ = {}, []
+    for error in errs:
+        key = error.split(": ", 1)[0]
+        if key in fns: ftab.setdefault(key, []).append(error)
+        else: globals_.append(error)
+    return ftab, globals_
 
-    def _check(src):
+
+def build_verdict(src):
+    try:
         fns, errs = check(parse(src))
-        if not errs:
-            print(f"OK — checked, all effects honest ({len(fns)} function(s))"); return 0
-        ftab, globals_ = _partition_findings(fns, errs)
-        touched = len(ftab) + (1 if globals_ else 0)
-        print(f"REJECTED — {len(errs)} finding(s) across {touched} scope(s)")
-        for name in fns:
-            mine = ftab.get(name, [])
-            if not mine: continue
-            print(f"  [{name}] {len(mine)} finding(s)")
-            for e in mine: print("    - " + e)
-        if globals_:
-            print(f"  [global] {len(globals_)} finding(s)")
-            for e in globals_: print("    - " + e)
-        return 1
+    except LoomError as error:
+        fns, errs = {}, ["parse: " + str(error)]
+    ftab, globals_ = _partition_findings(fns, errs)
+    sensitive = {"Net", "IO", "FFI", "Alloc", "Rand"}
+    functions = []
+    for name, info in fns.items():
+        declared = set(info["decl"]); performed = set(info["eff"]) - {"?"}
+        mine = ftab.get(name, [])
+        lies = bool(mine) or bool(performed - declared) or ("?" in info["eff"]) or bool(set(info.get("req", set())) - performed)
+        caps = sorted(performed & sensitive)
+        functions.append({
+            "name": name,
+            "declared_effects": sorted(declared),
+            "performed_effects": sorted(performed),
+            "required_effects": sorted(info.get("req", set())),
+            "capabilities": caps,
+            "status": "lie" if lies else ("review" if caps else "clean"),
+            "findings": list(mine),
+        })
+    return {
+        "schema": "loom-verdict/v1",
+        "verdict": "reject" if errs else "accept",
+        "advisory": True,
+        "source_sha256": hashlib.sha256(src.encode("utf-8")).hexdigest(),
+        "function_count": len(functions),
+        "functions": functions,
+        "global_findings": list(globals_),
+        "finding_count": len(errs),
+    }
+
+
+def _emit_verdict_json(verdict):
+    print(json.dumps(verdict, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+
+
+def _cli(argv):
 
     flags, pos, i = {}, [], 0
     while i < len(argv):
         a = argv[i]
         if a == "--target" and i + 1 < len(argv): flags["target"] = argv[i+1]; i += 2
         elif a.startswith("--target="): flags["target"] = a.split("=", 1)[1]; i += 1
+        elif a == "--format" and i + 1 < len(argv): flags["format"] = argv[i+1]; i += 2
+        elif a.startswith("--format="): flags["format"] = a.split("=", 1)[1]; i += 1
         else: pos.append(a); i += 1
     if len(pos) < 2:
-        print("usage: python3 loom.py <check|run|build|audit> FILE [call] [--target py|js]"); return 2
+        print("usage: python3 loom.py <check|run|build|audit> FILE [call] [--target py|js|wat] [--format text|json]"); return 2
     cmd, path = pos[0], pos[1]; call = pos[2] if len(pos) > 2 else "(main)"
     try: src = open(path).read()
     except OSError as e: print("cannot read file: " + str(e)); return 2
+    output_format = flags.get("format", "text")
+    if output_format not in ("text", "json"):
+        print("unsupported format: " + output_format); return 2
     if cmd == "check":
-        return _check(src)
+        verdict = build_verdict(src)
+        if output_format == "json":
+            _emit_verdict_json(verdict); return 1 if verdict["verdict"] == "reject" else 0
+        if verdict["verdict"] == "accept":
+            print(f"OK — checked, all effects honest ({verdict['function_count']} function(s))"); return 0
+        touched = sum(bool(item["findings"]) for item in verdict["functions"]) + (1 if verdict["global_findings"] else 0)
+        print(f"REJECTED — {verdict['finding_count']} finding(s) across {touched} scope(s)")
+        for item in verdict["functions"]:
+            if not item["findings"]: continue
+            print(f"  [{item['name']}] {len(item['findings'])} finding(s)")
+            for error in item["findings"]: print("    - " + error)
+        if verdict["global_findings"]:
+            print(f"  [global] {len(verdict['global_findings'])} finding(s)")
+            for error in verdict["global_findings"]: print("    - " + error)
+        return 1
     if cmd == "run":
         try: val, out = run_call(src, call)
         except LoomError as e: print("REJECTED: " + str(e)); return 1
@@ -2431,29 +2475,27 @@ def _cli(argv):
         except LoomError as e: print("REJECTED: " + str(e)); return 1
         return 0
     if cmd == "audit":                                  # DISTRIBUTION: surface the capability surface of AI-written code
-        fns, errs = check(parse(src))                   # check infers every row even when a lie makes it REJECT
-        ftab, globals_ = _partition_findings(fns, errs)  # infer()-level errors can stay global
-        SENS = {"Net", "IO", "FFI", "Alloc"}             # capabilities a human auditor must scrutinise (Pure is safe)
+        verdict = build_verdict(src)
+        if output_format == "json":
+            _emit_verdict_json(verdict); return 1 if verdict["verdict"] == "reject" else 0
         print("LOOM AUDIT - capability surface of AI-written code (DECLARED vs actually PERFORMED)")
-        for name, info in fns.items():
-            decl = set(info["decl"]); perf = set(info["eff"]) - {"?"}   # '?' = un-seamed foreign marker, not a capability
-            mine = ftab.get(name, [])
-            lies = bool(mine) or bool(perf - decl) or ("?" in info["eff"]) or bool(set(info.get("req", set())) - perf)
-            caps = sorted(perf & SENS)
-            tag = "LIE   " if lies else ("REVIEW" if caps else "clean ")
-            d = " ".join(sorted(decl)) or "Pure"; a = " ".join(sorted(perf)) or "Pure"
-            extra = ("  <- holds: " + ", ".join(caps)) if (caps and not lies) else ""
-            print(f"  [{tag}] {name}: declared ({d}) | performs ({a}){extra}")
-            for e in mine: print("           ! " + e)
-        if errs:
-            print(f"-- FINDINGS ({len(errs)}), every violation verbatim:")
-            for e in errs: print("   ! " + e)
-            if globals_:
+        for item in verdict["functions"]:
+            tag = {"lie": "LIE   ", "review": "REVIEW", "clean": "clean "}[item["status"]]
+            d = " ".join(item["declared_effects"]) or "Pure"; a = " ".join(item["performed_effects"]) or "Pure"
+            extra = ("  <- holds: " + ", ".join(item["capabilities"])) if (item["capabilities"] and item["status"] != "lie") else ""
+            print(f"  [{tag}] {item['name']}: declared ({d}) | performs ({a}){extra}")
+            for error in item["findings"]: print("           ! " + error)
+        if verdict["finding_count"]:
+            print(f"-- FINDINGS ({verdict['finding_count']}), every violation verbatim:")
+            for item in verdict["functions"]:
+                for error in item["findings"]: print("   ! " + error)
+            for error in verdict["global_findings"]: print("   ! " + error)
+            if verdict["global_findings"]:
                 print("-- global findings:")
-                for e in globals_: print("   ! " + e)
+                for error in verdict["global_findings"]: print("   ! " + error)
         else:
             print("-- no violations; review every non-Pure capability above")
-        return 1 if errs else 0
+        return 1 if verdict["verdict"] == "reject" else 0
     print("unknown command: " + cmd); return 2
 
 if __name__ == "__main__":

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""CLI orchestration for the LOOM kernel."""
+"""CLI orchestration and structured verdicts for the LOOM kernel."""
 
+import hashlib
+import json
 from pathlib import Path
 
 from loom_frontend import CliFrontend as _CliFrontend
@@ -20,6 +22,12 @@ def _parse_flags(argv):
         elif arg.startswith("--target="):
             flags["target"] = arg.split("=", 1)[1]
             index += 1
+        elif arg == "--format" and index + 1 < len(argv):
+            flags["format"] = argv[index + 1]
+            index += 2
+        elif arg.startswith("--format="):
+            flags["format"] = arg.split("=", 1)[1]
+            index += 1
         else:
             pos.append(arg)
             index += 1
@@ -37,55 +45,95 @@ def _partition_findings(fns, errs):
     return findings, global_findings
 
 
-def _audit(frontend, src):
-    fns, errs = frontend.check(frontend.parse(src))
+def build_verdict(frontend, src):
+    """Return the deterministic, JSON-safe checker verdict used by Gate clients."""
+    try:
+        fns, errs = frontend.check(frontend.parse(src))
+    except frontend.error as err:
+        fns, errs = {}, ["parse: " + str(err)]
     findings, global_findings = _partition_findings(fns, errs)
-    sensitive = {"Net", "IO", "FFI", "Alloc"}
-    print("LOOM AUDIT - capability surface of AI-written code (DECLARED vs actually PERFORMED)")
+    sensitive = {"Net", "IO", "FFI", "Alloc", "Rand"}
+    functions = []
     for name, info in fns.items():
         declared = set(info["decl"])
         performed = set(info["eff"]) - {"?"}
         own_findings = findings.get(name, [])
         lies = bool(own_findings) or bool(performed - declared) or ("?" in info["eff"]) or bool(set(info.get("req", set())) - performed)
-        caps = sorted(performed & sensitive)
-        tag = "LIE   " if lies else ("REVIEW" if caps else "clean ")
-        declared_text = " ".join(sorted(declared)) or "Pure"
-        performed_text = " ".join(sorted(performed)) or "Pure"
-        extra = ("  <- holds: " + ", ".join(caps)) if (caps and not lies) else ""
-        print(f"  [{tag}] {name}: declared ({declared_text}) | performs ({performed_text}){extra}")
-        for err in own_findings:
+        capabilities = sorted(performed & sensitive)
+        functions.append({
+            "name": name,
+            "declared_effects": sorted(declared),
+            "performed_effects": sorted(performed),
+            "required_effects": sorted(info.get("req", set())),
+            "capabilities": capabilities,
+            "status": "lie" if lies else ("review" if capabilities else "clean"),
+            "findings": list(own_findings),
+        })
+    return {
+        "schema": "loom-verdict/v1",
+        "verdict": "reject" if errs else "accept",
+        "advisory": True,
+        "source_sha256": hashlib.sha256(src.encode("utf-8")).hexdigest(),
+        "function_count": len(functions),
+        "functions": functions,
+        "global_findings": list(global_findings),
+        "finding_count": len(errs),
+    }
+
+
+def _emit_json(verdict):
+    print(json.dumps(verdict, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+
+
+def _audit(frontend, src, output_format="text"):
+    verdict = build_verdict(frontend, src)
+    if output_format == "json":
+        _emit_json(verdict)
+        return 1 if verdict["verdict"] == "reject" else 0
+    print("LOOM AUDIT - capability surface of AI-written code (DECLARED vs actually PERFORMED)")
+    for item in verdict["functions"]:
+        tag = {"lie": "LIE   ", "review": "REVIEW", "clean": "clean "}[item["status"]]
+        declared_text = " ".join(item["declared_effects"]) or "Pure"
+        performed_text = " ".join(item["performed_effects"]) or "Pure"
+        extra = ("  <- holds: " + ", ".join(item["capabilities"])) if (item["capabilities"] and item["status"] != "lie") else ""
+        print(f"  [{tag}] {item['name']}: declared ({declared_text}) | performs ({performed_text}){extra}")
+        for err in item["findings"]:
             print("           ! " + err)
-    if errs:
-        print(f"-- FINDINGS ({len(errs)}), every violation verbatim:")
-        for err in errs:
+    if verdict["finding_count"]:
+        print(f"-- FINDINGS ({verdict['finding_count']}), every violation verbatim:")
+        for item in verdict["functions"]:
+            for err in item["findings"]:
+                print("   ! " + err)
+        for err in verdict["global_findings"]:
             print("   ! " + err)
-        if global_findings:
+        if verdict["global_findings"]:
             print("-- global findings:")
-            for err in global_findings:
+            for err in verdict["global_findings"]:
                 print("   ! " + err)
     else:
         print("-- no violations; review every non-Pure capability above")
-    return 1 if errs else 0
+    return 1 if verdict["verdict"] == "reject" else 0
 
 
-def _check(frontend, src):
-    fns, errs = frontend.check(frontend.parse(src))
-    if not errs:
-        print(f"OK — checked, all effects honest ({len(fns)} function(s))")
+def _check(frontend, src, output_format="text"):
+    verdict = build_verdict(frontend, src)
+    if output_format == "json":
+        _emit_json(verdict)
+        return 1 if verdict["verdict"] == "reject" else 0
+    if verdict["verdict"] == "accept":
+        print(f"OK — checked, all effects honest ({verdict['function_count']} function(s))")
         return 0
-    findings, global_findings = _partition_findings(fns, errs)
-    touched = len(findings) + (1 if global_findings else 0)
-    print(f"REJECTED — {len(errs)} finding(s) across {touched} scope(s)")
-    for name in fns:
-        own_findings = findings.get(name, [])
-        if not own_findings:
+    touched = sum(bool(item["findings"]) for item in verdict["functions"]) + (1 if verdict["global_findings"] else 0)
+    print(f"REJECTED — {verdict['finding_count']} finding(s) across {touched} scope(s)")
+    for item in verdict["functions"]:
+        if not item["findings"]:
             continue
-        print(f"  [{name}] {len(own_findings)} finding(s)")
-        for err in own_findings:
+        print(f"  [{item['name']}] {len(item['findings'])} finding(s)")
+        for err in item["findings"]:
             print("    - " + err)
-    if global_findings:
-        print(f"  [global] {len(global_findings)} finding(s)")
-        for err in global_findings:
+    if verdict["global_findings"]:
+        print(f"  [global] {len(verdict['global_findings'])} finding(s)")
+        for err in verdict["global_findings"]:
             print("    - " + err)
     return 1
 
@@ -93,7 +141,7 @@ def _check(frontend, src):
 def cli(argv, frontend):
     flags, pos = _parse_flags(argv)
     if len(pos) < 2:
-        print("usage: python3 loom.py <check|run|build|audit> FILE [call] [--target py|js]")
+        print("usage: python3 loom.py <check|run|build|audit> FILE [call] [--target py|js|wat] [--format text|json]")
         return 2
     cmd, path = pos[0], pos[1]
     call = pos[2] if len(pos) > 2 else "(main)"
@@ -102,8 +150,12 @@ def cli(argv, frontend):
     except OSError as err:
         print("cannot read file: " + str(err))
         return 2
+    output_format = flags.get("format", "text")
+    if output_format not in ("text", "json"):
+        print("unsupported format: " + output_format)
+        return 2
     if cmd == "check":
-        return _check(frontend, src)
+        return _check(frontend, src, output_format)
     if cmd == "run":
         try:
             value, out = frontend.run_call(src, call)
@@ -123,6 +175,6 @@ def cli(argv, frontend):
             return 1
         return 0
     if cmd == "audit":
-        return _audit(frontend, src)
+        return _audit(frontend, src, output_format)
     print("unknown command: " + cmd)
     return 2

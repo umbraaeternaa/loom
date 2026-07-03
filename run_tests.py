@@ -2,6 +2,7 @@
 # ARGUS/plt CITADEL test suite — the growing, self-verifying proof that LOOM's design holds.
 # The organism appends new CASES here every cycle; the language only grows if ALL stay green.
 import sys
+import json
 import subprocess
 import tempfile
 from pathlib import Path
@@ -1375,6 +1376,46 @@ def main():
             print(f"  {'ok  ' if r31 else 'FAIL'} cli check: scoped rejection summary")
     except Exception as e:
         print(f"  FAIL cli check summary: {e}")
+    try:                                               # Gate v1: one deterministic JSON verdict across API, check, and audit
+        with tempfile.TemporaryDirectory() as td:
+            clean_src = '(defx fetch (Net) (fn (u) (net u)))\n'
+            liar_src = '(defx sneaky () (fn (x) (print x)))\n'
+            clean = Path(td) / "clean.loom"
+            liar = Path(td) / "liar.loom"
+            malformed = Path(td) / "malformed.loom"
+            clean.write_text(clean_src)
+            liar.write_text(liar_src)
+            malformed.write_text("(defx broken")
+            loom = Path(__file__).with_name("loom.py")
+            j1 = subprocess.run([sys.executable, str(loom), "check", str(clean), "--format", "json"], capture_output=True, text=True)
+            j2 = subprocess.run([sys.executable, str(loom), "check", str(clean), "--format=json"], capture_output=True, text=True)
+            jr = subprocess.run([sys.executable, str(loom), "audit", str(liar), "--format=json"], capture_output=True, text=True)
+            jm = subprocess.run([sys.executable, str(loom), "check", str(malformed), "--format=json"], capture_output=True, text=True)
+            accepted = json.loads(j1.stdout)
+            rejected = json.loads(jr.stdout)
+            malformed_verdict = json.loads(jm.stdout)
+            verdict_contract_ok = (
+                j1.returncode == j2.returncode == 0
+                and jr.returncode == 1
+                and jm.returncode == 1
+                and j1.stdout == j2.stdout
+                and accepted == _loom.build_verdict(clean_src)
+                and accepted["schema"] == rejected["schema"] == "loom-verdict/v1"
+                and accepted["verdict"] == "accept"
+                and accepted["advisory"] is True
+                and accepted["functions"][0]["capabilities"] == ["Net"]
+                and rejected["verdict"] == "reject"
+                and rejected["finding_count"] == 1
+                and rejected["functions"][0]["status"] == "lie"
+                and malformed_verdict["verdict"] == "reject"
+                and malformed_verdict["function_count"] == 0
+                and malformed_verdict["global_findings"][0].startswith("parse: ")
+                and len(accepted["source_sha256"]) == 64
+            )
+            ok += verdict_contract_ok
+            print(f"  {'ok  ' if verdict_contract_ok else 'FAIL'} cli/api: deterministic LOOM Gate JSON verdict v1")
+    except Exception as e:
+        print(f"  FAIL cli/api JSON verdict contract: {e}")
     try:                                               # CLI lives behind a stable facade in development builds
         import io, contextlib
         is_browser_bundle = Path(_loom.__file__).parent.name == "docs"
@@ -1450,7 +1491,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 75   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 76   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, cli proof-surface + Gate JSON verdict, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1
