@@ -24,7 +24,9 @@ with sorted keys, and identified by the SHA-256 of those UTF-8 bytes.
 ```
 
 Objects are closed: unknown and missing fields are findings. Agents, roles,
-actions, and evidence names come from closed v1 registries. Git heads are 7-40
+actions (`read`, `write`, `test`, `process`, `network`, `git-commit`,
+`git-push`, `delete`, `backup`, `memory-write`, `dashboard`, `report`, `audit`),
+and evidence names come from closed v1 registries. Git heads are 7-40
 lowercase hexadecimal characters. Paths must be absolute and may not contain
 `..` or `~`. Duplicate set-like entries are rejected rather than silently
 changing the declaration.

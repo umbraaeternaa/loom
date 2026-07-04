@@ -2386,11 +2386,16 @@ def run_wasm(program_src, call_src):
 # ---- LOOM Gate phase 1: deterministic advisory manifests (standalone bundle mirror). ----
 GATE_MANIFEST_SCHEMA = "loom-gate-manifest/v1"
 GATE_VALIDATION_SCHEMA = "loom-gate-manifest-validation/v1"
+GATE_DECISION_SCHEMA = "loom-gate-decision/v1"
+GATE_POLICY_ID = "operator-codex-cloud/v1"
 GATE_AGENTS = {"codex", "cloud-code", "auditor", "argus", "nostromo", "ci", "operator"}
 GATE_ROLES = {"code", "organism", "audit", "night", "trace", "operator"}
-GATE_ACTIONS = {"read", "write", "test", "process", "network", "git-commit", "git-push", "delete", "backup", "memory-write", "dashboard", "report"}
+GATE_ACTIONS = {"read", "write", "test", "process", "network", "git-commit", "git-push", "delete", "backup", "memory-write", "dashboard", "report", "audit"}
 GATE_EVIDENCE = {"syntax", "citadel", "docs-parity", "fuzz", "git-clean", "git-sync", "live-site", "backup", "operator-approval", "audit"}
 _GATE_KEYS = {"schema", "agent", "task", "repositories", "read_paths", "write_paths", "actions", "evidence_required"}
+_GATE_ROLES_BY_AGENT = {"codex": "code", "cloud-code": "organism", "auditor": "audit", "argus": "organism", "nostromo": "night", "ci": "trace", "operator": "operator"}
+_GATE_LOOM = "/Users/macbook/Projects/loom"; _GATE_ARGUS = "/Users/macbook/Projects/argus"; _GATE_NOSTROMO = "/Users/macbook/Projects/nostromo"
+_GATE_MEMORY = "/Users/macbook/codex/Кодекс"; _GATE_FROZEN = "/Users/macbook/Projects/argus/citadel"; _GATE_AUDIT = "/Users/macbook/Projects/audit-targets"
 
 
 def _gate_finding(path, code, message): return {"path": path, "code": code, "message": message}
@@ -2489,6 +2494,96 @@ def validate_manifest(manifest):
     if findings: return _gate_result(None, findings)
     canonical = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return _gate_result(normalized, [], hashlib.sha256(canonical.encode("utf-8")).hexdigest())
+
+
+def _gate_under(path, root): return path == root or path.startswith(root + "/")
+
+
+def _gate_zone(path):
+    if _gate_under(path, _GATE_FROZEN): return "frozen"
+    if _gate_under(path, _GATE_LOOM): return "loom"
+    if _gate_under(path, _GATE_ARGUS): return "argus"
+    if _gate_under(path, _GATE_NOSTROMO): return "nostromo"
+    if _gate_under(path, _GATE_MEMORY): return "memory"
+    if _gate_under(path, _GATE_AUDIT): return "audit-target"
+    return "external"
+
+
+def _gate_issue(code, message, path="$"): return {"path": path, "code": code, "message": message}
+
+
+def _gate_autonomous_write(agent, path, actions):
+    if agent == "cloud-code":
+        if _gate_under(path, _GATE_MEMORY) and "memory-write" in actions: return True
+        if _gate_under(path, _GATE_ARGUS + "/reports") and "report" in actions: return True
+        if _gate_under(path, _GATE_ARGUS + "/state") and actions & {"report", "dashboard", "backup"}: return True
+        if _gate_under(path, _GATE_NOSTROMO + "/reports") and "report" in actions: return True
+    if agent == "auditor": return _gate_under(path, _GATE_ARGUS + "/reports/auditor") and "report" in actions
+    if agent == "argus":
+        roots = (_GATE_ARGUS + "/reports", _GATE_ARGUS + "/state", _GATE_ARGUS + "/design", _GATE_ARGUS + "/experiments")
+        return any(_gate_under(path, root) for root in roots) and bool(actions & {"report", "audit", "dashboard", "test"})
+    if agent == "nostromo": return _gate_under(path, _GATE_NOSTROMO + "/reports") and "report" in actions
+    return False
+
+
+def _gate_unique(items):
+    keyed = {(item["path"], item["code"], item["message"]): item for item in items}
+    return [keyed[key] for key in sorted(keyed)]
+
+
+def _gate_decision(decision, digest, reasons, violations):
+    return {"schema": GATE_DECISION_SCHEMA, "decision": decision, "advisory": True, "manifest_sha256": digest, "policy": GATE_POLICY_ID, "reasons": _gate_unique(reasons), "violations": _gate_unique(violations)}
+
+
+def evaluate_manifest(manifest):
+    validation = validate_manifest(manifest)
+    if not validation["valid"]: return _gate_decision("reject", None, [], validation["findings"])
+    normalized = validation["normalized_manifest"]; digest = validation["manifest_sha256"]
+    agent = normalized["agent"]["id"]; role = normalized["agent"]["role"]; actions = set(normalized["actions"]); evidence = set(normalized["evidence_required"])
+    reasons, violations = [], []
+    expected = _GATE_ROLES_BY_AGENT[agent]
+    if role != expected: violations.append(_gate_issue("role-mismatch", f"agent '{agent}' must use role '{expected}', not '{role}'", "agent.role"))
+    allowed = {
+        "codex": {"read", "write", "test", "process", "network", "git-commit", "git-push", "delete", "memory-write", "report", "audit"},
+        "cloud-code": {"read", "write", "test", "process", "network", "git-commit", "git-push", "delete", "backup", "memory-write", "dashboard", "report", "audit"},
+        "auditor": {"read", "network", "report", "audit"},
+        "argus": {"read", "write", "test", "process", "network", "dashboard", "report", "audit"},
+        "nostromo": {"read", "write", "process", "network", "backup", "report"},
+        "ci": {"read", "test", "report"}, "operator": set(GATE_ACTIONS),
+    }[agent]
+    for action in sorted(actions - allowed): violations.append(_gate_issue("action-forbidden", f"agent '{agent}' may not request action '{action}'", "actions"))
+    if actions & {"write", "delete", "memory-write"} and not normalized["write_paths"]: violations.append(_gate_issue("missing-write-scope", "mutating action requires at least one write path", "write_paths"))
+    for index, path in enumerate(normalized["write_paths"]):
+        zone = _gate_zone(path); where = f"write_paths[{index}]"
+        if zone == "frozen": violations.append(_gate_issue("frozen-zone", "the frozen ARGUS citadel is read-only for every agent", where)); continue
+        if agent == "operator": continue
+        if agent == "codex":
+            if zone not in {"loom", "memory"}: violations.append(_gate_issue("write-zone-forbidden", f"Codex may not write zone '{zone}'", where))
+            else: reasons.append(_gate_issue("operator-gate", f"Codex write to {zone} requires operator approval", where))
+        elif agent in {"cloud-code", "argus", "nostromo", "auditor"}:
+            owned = zone in ({"argus", "nostromo", "memory"} if agent == "cloud-code" else ({"argus"} if agent in {"argus", "auditor"} else {"nostromo"}))
+            if not owned or zone == "audit-target": violations.append(_gate_issue("write-zone-forbidden", f"agent '{agent}' may not write zone '{zone}'", where))
+            elif not _gate_autonomous_write(agent, path, actions): reasons.append(_gate_issue("operator-gate", f"agent '{agent}' write outside its autonomous report/state lane requires operator approval", where))
+        else: violations.append(_gate_issue("write-zone-forbidden", f"agent '{agent}' may not write host files", where))
+    if agent == "ci":
+        for index, path in enumerate(normalized["read_paths"]):
+            if _gate_zone(path) != "loom": violations.append(_gate_issue("read-zone-forbidden", "CI may read only the canonical LOOM zone", f"read_paths[{index}]"))
+    git_actions = actions & {"git-commit", "git-push"}
+    if git_actions and not normalized["repositories"]: violations.append(_gate_issue("missing-repository", "Git action requires a declared repository", "repositories"))
+    for index, repository in enumerate(normalized["repositories"]):
+        if not git_actions: break
+        zone = _gate_zone(repository["root"]); owner = "codex" if zone == "loom" else ("cloud-code" if zone in {"argus", "nostromo"} else None)
+        if agent != "operator" and owner != agent: violations.append(_gate_issue("git-zone-forbidden", f"agent '{agent}' may not perform Git actions in zone '{zone}'", f"repositories[{index}].root"))
+    gated = {"codex": {"write", "memory-write", "process", "network", "git-commit", "git-push", "delete"}, "cloud-code": {"process", "git-commit", "git-push", "delete"}, "auditor": {"network"}, "argus": {"process"}, "nostromo": {"process"}, "ci": set(), "operator": set()}[agent]
+    for action in sorted(actions & gated): reasons.append(_gate_issue("operator-gate", f"action '{action}' requires operator approval", "actions"))
+    required = set(); loom_writes = [path for path in normalized["write_paths"] if _gate_zone(path) == "loom"]
+    if loom_writes: required |= {"syntax", "citadel", "docs-parity", "git-clean"}
+    if any(_gate_under(path, _GATE_LOOM + "/docs") for path in loom_writes): required.add("live-site")
+    if "git-push" in actions: required |= {"git-sync", "operator-approval"}
+    if "backup" in actions: required.add("backup")
+    for item in sorted(required - evidence): violations.append(_gate_issue("missing-evidence", f"action set requires evidence '{item}'", "evidence_required"))
+    reasons = _gate_unique(reasons); violations = _gate_unique(violations)
+    return _gate_decision("reject" if violations else ("operator-required" if reasons else "accept"), digest, reasons, violations)
 
 
 # ---- CLI + structured verdict: one checker truth for humans, Gate clients, and receipts. ----

@@ -177,6 +177,11 @@ def validate_manifest(manifest):
     return _loom_gate.validate_manifest(manifest)
 
 
+def evaluate_manifest(manifest):
+    """Apply advisory operator/Codex/Cloud policy v1 to a task manifest."""
+    return _loom_gate.evaluate_manifest(manifest)
+
+
 def _cli(argv):
     return _loom_cli.cli(argv, _CLI_FRONTEND)
 

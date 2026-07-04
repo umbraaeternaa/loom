@@ -1459,6 +1459,53 @@ def main():
         print(f"  {'ok  ' if manifest_contract_ok else 'FAIL'} gate: deterministic fail-closed task manifest v1")
     except Exception as e:
         print(f"  FAIL Gate manifest v1 contract: {e}")
+    try:                                               # Gate policy v1: role/path ownership and evidence classify deterministically
+        def gate_manifest(agent, role, read_paths, write_paths, actions, evidence, repositories=None):
+            return {
+                "schema": "loom-gate-manifest/v1",
+                "agent": {"id": agent, "role": role},
+                "task": {"summary": "Policy probe", "intent": "Pin advisory role boundaries"},
+                "repositories": repositories or [],
+                "read_paths": read_paths,
+                "write_paths": write_paths,
+                "actions": actions,
+                "evidence_required": evidence,
+            }
+        loom_repo = [{"root": "/Users/macbook/Projects/loom", "expected_head": "714f35e", "require_clean": True}]
+        loom_evidence = ["syntax", "citadel", "docs-parity", "git-clean"]
+        codex_write_manifest = gate_manifest("codex", "code", ["/Users/macbook/Projects/loom"], ["/Users/macbook/Projects/loom/loom_gate.py"], ["read", "write", "test"], loom_evidence, loom_repo)
+        codex_write = _loom.evaluate_manifest(codex_write_manifest)
+        reordered_policy_manifest = json.loads(json.dumps(codex_write_manifest))
+        reordered_policy_manifest["actions"].reverse(); reordered_policy_manifest["evidence_required"].reverse()
+        cloud_loom = _loom.evaluate_manifest(gate_manifest("cloud-code", "organism", [], ["/Users/macbook/Projects/loom/loom.py"], ["write"], loom_evidence, loom_repo))
+        auditor_read = _loom.evaluate_manifest(gate_manifest("auditor", "audit", ["/Users/macbook/Projects/audit-targets/smolagents"], [], ["read", "audit"], ["audit"]))
+        auditor_write = _loom.evaluate_manifest(gate_manifest("auditor", "audit", [], ["/Users/macbook/Projects/audit-targets/smolagents/pwn.py"], ["write"], []))
+        frozen_write = _loom.evaluate_manifest(gate_manifest("codex", "code", [], ["/Users/macbook/Projects/argus/citadel/loom.py"], ["write"], []))
+        push_without_evidence = _loom.evaluate_manifest(gate_manifest("codex", "code", ["/Users/macbook/Projects/loom"], [], ["read", "git-push"], [], loom_repo))
+        cloud_report = _loom.evaluate_manifest(gate_manifest("cloud-code", "organism", [], ["/Users/macbook/Projects/argus/reports/sec/report.md"], ["report"], []))
+        ci_test = _loom.evaluate_manifest(gate_manifest("ci", "trace", ["/Users/macbook/Projects/loom"], [], ["read", "test"], ["citadel"]))
+        policy_contract_ok = (
+            codex_write["decision"] == "operator-required"
+            and codex_write == _loom.evaluate_manifest(reordered_policy_manifest)
+            and codex_write["schema"] == "loom-gate-decision/v1"
+            and codex_write["policy"] == "operator-codex-cloud/v1"
+            and cloud_loom["decision"] == "reject"
+            and auditor_read["decision"] == "accept"
+            and auditor_write["decision"] == "reject"
+            and frozen_write["decision"] == "reject"
+            and any(item["code"] == "frozen-zone" for item in frozen_write["violations"])
+            and push_without_evidence["decision"] == "reject"
+            and {item["message"] for item in push_without_evidence["violations"]} >= {
+                "action set requires evidence 'git-sync'", "action set requires evidence 'operator-approval'"
+            }
+            and cloud_report["decision"] == "accept"
+            and ci_test["decision"] == "accept"
+            and all(result["advisory"] is True for result in (codex_write, cloud_loom, auditor_read, auditor_write, frozen_write, push_without_evidence, cloud_report, ci_test))
+        )
+        ok += policy_contract_ok
+        print(f"  {'ok  ' if policy_contract_ok else 'FAIL'} gate: deterministic advisory role policy v1")
+    except Exception as e:
+        print(f"  FAIL Gate policy v1 contract: {e}")
     try:                                               # CLI lives behind a stable facade in development builds
         import io, contextlib
         is_browser_bundle = Path(_loom.__file__).parent.name == "docs"
@@ -1522,6 +1569,7 @@ def main():
             and Path(__file__).with_name("verify_docs_parity.py").exists()
             and Path(__file__).with_name("docs").joinpath("asm_v0.md").exists()
             and Path(__file__).with_name("docs").joinpath("gate_manifest_v1.md").exists()
+            and Path(__file__).with_name("docs").joinpath("gate_policy_v1.md").exists()
         )
         ok += docs_discipline_ok
         print(f"  {'ok  ' if docs_discipline_ok else 'FAIL'} docs: published bundle workflow pinned")
@@ -1535,7 +1583,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 77   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest contracts, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 78   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy contracts, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1
