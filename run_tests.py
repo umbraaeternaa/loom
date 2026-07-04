@@ -1577,6 +1577,66 @@ def main():
         print(f"  {'ok  ' if receipt_contract_ok else 'FAIL'} gate: deterministic advisory receipt v1")
     except Exception as e:
         print(f"  FAIL Gate receipt v1 contract: {e}")
+    try:                                               # Gate observer v1: derive Git facts without trusting caller clean claims
+        with tempfile.TemporaryDirectory() as td:
+            repo = (Path(td) / "repo").resolve()
+            repo.mkdir()
+            def git(*args):
+                return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
+            git("init", "-q")
+            git("config", "user.name", "LOOM Citadel")
+            git("config", "user.email", "citadel@example.invalid")
+            tracked = repo / "tracked.txt"
+            tracked.write_text("one\n")
+            git("add", "tracked.txt"); git("commit", "-q", "-m", "baseline")
+            baseline = git("rev-parse", "--short=8", "HEAD")
+            observer_manifest = gate_manifest(
+                "codex", "code", [str(repo)], [str(repo)], ["read", "write", "git-commit"], ["git-clean"],
+                [{"root": str(repo), "expected_head": baseline, "require_clean": True}],
+            )
+            clean_collection = _loom.collect_observation(observer_manifest, "completed", ["read"], [])
+            tracked.write_text("two\n")
+            git("add", "tracked.txt"); git("commit", "-q", "-m", "change")
+            committed_collection = _loom.collect_observation(observer_manifest, "completed", ["read", "write", "git-commit"], [])
+            untracked = repo / "untracked.txt"
+            untracked.write_text("dirty\n")
+            dirty_collection = _loom.collect_observation(
+                observer_manifest, "failed", ["read", "write"],
+                [{"kind": "git-clean", "status": "pass", "detail": "caller claims clean"}],
+            )
+            alias = Path(td) / "repo-alias"
+            alias.symlink_to(repo, target_is_directory=True)
+            alias_manifest = json.loads(json.dumps(observer_manifest))
+            alias_manifest["repositories"][0]["root"] = str(alias)
+            alias_manifest["read_paths"] = alias_manifest["write_paths"] = [str(alias)]
+            alias_collection = _loom.collect_observation(alias_manifest, "completed", ["read"], [])
+
+            clean_observation = clean_collection["observation"]
+            committed_observation = committed_collection["observation"]
+            dirty_observation = dirty_collection["observation"]
+            observer_contract_ok = (
+                clean_collection["valid"] is True
+                and clean_collection["schema"] == "loom-gate-observation-collection/v1"
+                and clean_collection["read_only"] is True
+                and clean_observation["repositories"][0]["before_head"] == baseline
+                and clean_observation["repositories"][0]["after_head"] == baseline
+                and clean_observation["files_changed"] == []
+                and clean_observation["evidence"] == [{"kind": "git-clean", "status": "pass", "detail": "all declared repositories clean"}]
+                and committed_collection["valid"] is True
+                and committed_observation["repositories"][0]["after_head"] != baseline
+                and committed_observation["files_changed"] == [str(tracked)]
+                and dirty_collection["valid"] is True
+                and str(untracked) in dirty_observation["files_changed"]
+                and next(item for item in dirty_observation["evidence"] if item["kind"] == "git-clean")["status"] == "fail"
+                and "caller claims clean" not in json.dumps(dirty_observation)
+                and alias_collection["valid"] is False
+                and alias_collection["observation"] is None
+                and any(item["code"] == "repository-root-mismatch" for item in alias_collection["findings"])
+            )
+        ok += observer_contract_ok
+        print(f"  {'ok  ' if observer_contract_ok else 'FAIL'} gate: read-only Git observation collector v1")
+    except Exception as e:
+        print(f"  FAIL Gate observer v1 contract: {e}")
     try:                                               # CLI lives behind a stable facade in development builds
         import io, contextlib
         is_browser_bundle = Path(_loom.__file__).parent.name == "docs"
@@ -1642,6 +1702,7 @@ def main():
             and Path(__file__).with_name("docs").joinpath("gate_manifest_v1.md").exists()
             and Path(__file__).with_name("docs").joinpath("gate_policy_v1.md").exists()
             and Path(__file__).with_name("docs").joinpath("gate_receipt_v1.md").exists()
+            and Path(__file__).with_name("docs").joinpath("gate_observer_v1.md").exists()
         )
         ok += docs_discipline_ok
         print(f"  {'ok  ' if docs_discipline_ok else 'FAIL'} docs: published bundle workflow pinned")
@@ -1655,7 +1716,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 79   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt contracts, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 80   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer contracts, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

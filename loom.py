@@ -66,6 +66,7 @@ import loom_checker as _loom_checker
 import loom_runtime as _loom_runtime
 import loom_cli as _loom_cli
 import loom_gate as _loom_gate
+import loom_observer as _loom_observer
 
 _PARSE_FRONTEND = _loom_parse.Frontend(LoomError)
 
@@ -185,6 +186,11 @@ def evaluate_manifest(manifest):
 def build_receipt(manifest, observation):
     """Build a deterministic advisory receipt from a manifest and observation."""
     return _loom_gate.build_receipt(manifest, observation)
+
+
+def collect_observation(manifest, result, actions_observed, evidence):
+    """Collect read-only Git facts for a LOOM Gate observation."""
+    return _loom_observer.collect_observation(manifest, result, actions_observed, evidence)
 
 
 def _cli(argv):

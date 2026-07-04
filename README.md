@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 382 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 383 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 382/382 citadel checks
+PASS — 383/383 citadel checks
 ```
 
 ## The idea in one screen
@@ -182,6 +182,13 @@ files, observed actions, and evidence into a deterministic
 `loom-gate-receipt/v1` with its own SHA-256. It validates the supplied
 observation but does not yet collect host facts itself. See
 [`docs/gate_receipt_v1.md`](docs/gate_receipt_v1.md).
+
+`loom.collect_observation(manifest, result, actions_observed, evidence)` adds a
+read-only host bridge: it derives repository heads, changed/untracked files, and
+`git-clean` evidence from declared Git repositories without shell, hooks,
+network, tests, or writes. Other evidence and the reported result remain
+explicitly supplied assertions. See
+[`docs/gate_observer_v1.md`](docs/gate_observer_v1.md).
 
 The same verified program runs in the interpreter, compiles to **Python** and **JavaScript**,
 and lowers tagged values, closures, structured data, and effects to **WebAssembly** — one checked source, many platforms. LOOM integers have one portable contract on every backend: signed i31 values (`-2^30..2^30-1`) with deterministic modulo-`2^31` wraparound; out-of-range literals are rejected before execution.

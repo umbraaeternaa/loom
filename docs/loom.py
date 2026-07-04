@@ -9,9 +9,12 @@
 # + interpreter. Grown nightly by the organism, verified by run_tests.py — the language only ever grows GREEN.
 import hashlib
 import json
+import os
 import re
+import subprocess
 import unicodedata
 from contextvars import ContextVar
+from pathlib import Path
 
 EFFECTS = {"Pure", "IO", "Net", "Alloc", "FFI", "Rand"}   # Rand = nondeterminism (randomness / wall-clock)
 # checker vocab MUST stay == interpreter (ev) vocab — no form the checker knows that the runtime can't run.
@@ -2390,6 +2393,7 @@ GATE_DECISION_SCHEMA = "loom-gate-decision/v1"
 GATE_OBSERVATION_SCHEMA = "loom-gate-observation/v1"
 GATE_RECEIPT_SCHEMA = "loom-gate-receipt/v1"
 GATE_RECEIPT_VALIDATION_SCHEMA = "loom-gate-receipt-validation/v1"
+GATE_COLLECTION_SCHEMA = "loom-gate-observation-collection/v1"
 GATE_POLICY_ID = "operator-codex-cloud/v1"
 GATE_AGENTS = {"codex", "cloud-code", "auditor", "argus", "nostromo", "ci", "operator"}
 GATE_ROLES = {"code", "organism", "audit", "night", "trace", "operator"}
@@ -2665,6 +2669,80 @@ def build_receipt(manifest, observation):
     body = {"schema": GATE_RECEIPT_SCHEMA, "advisory": True, "manifest_sha256": validation["manifest_sha256"], "policy": decision["policy"], "policy_decision": decision["decision"], "agent": normalized["agent"], "result": result, "repositories": observed["repositories"], "files_changed": observed["files_changed"], "actions_observed": observed["actions_observed"], "evidence": observed["evidence"]}
     body["receipt_sha256"] = hashlib.sha256(json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
     return _gate_receipt_result(body, [])
+
+
+def _gate_collection_result(observation, findings):
+    return {"schema": GATE_COLLECTION_SCHEMA, "valid": not findings, "advisory": True, "read_only": True, "observation": observation if not findings else None, "findings": _gate_unique(findings)}
+
+
+def _gate_git(root, *args):
+    env = os.environ.copy(); env.update({"GIT_OPTIONAL_LOCKS": "0", "GIT_NO_LAZY_FETCH": "1", "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", "LANG": "C"})
+    try:
+        proc = subprocess.run(["git", "-c", "core.fsmonitor=false", "-C", root, *args], capture_output=True, env=env, timeout=5)
+    except FileNotFoundError:
+        return None, "git executable not found"
+    except (subprocess.TimeoutExpired, OSError) as error:
+        return None, f"git command unavailable: {error}"
+    if proc.returncode != 0:
+        detail = proc.stderr.decode("utf-8", "replace").strip()
+        return None, detail or f"git exited with status {proc.returncode}"
+    return proc.stdout, None
+
+
+def _gate_decode_paths(data, root, path, findings):
+    values = []
+    for raw in data.split(b"\0"):
+        if not raw: continue
+        try: relative = raw.decode("utf-8", "strict")
+        except UnicodeDecodeError:
+            findings.append(_gate_finding(path, "non-utf8-git-path", "Git path is not valid UTF-8")); continue
+        absolute = str((Path(root) / relative).resolve(strict=False))
+        if not _gate_under(absolute, root):
+            findings.append(_gate_finding(path, "changed-path-outside-repository", f"Git reported path outside repository '{root}'")); continue
+        values.append(absolute)
+    return values
+
+
+def collect_observation(manifest, result, actions_observed, evidence):
+    """Collect read-only Git facts; fail closed where host Git is unavailable."""
+    validation = validate_manifest(manifest)
+    if not validation["valid"]: return _gate_collection_result(None, validation["findings"])
+    normalized = validation["normalized_manifest"]; findings = []; repositories = []; changed_files = []; clean = True
+    for index, repository in enumerate(normalized["repositories"]):
+        root = repository["root"]; base = f"repositories[{index}]"; declared = Path(root)
+        if not declared.is_absolute() or not declared.is_dir():
+            findings.append(_gate_finding(base + ".root", "repository-unavailable", f"repository root is not an available directory '{root}'")); continue
+        top_raw, error = _gate_git(root, "rev-parse", "--show-toplevel")
+        if error: findings.append(_gate_finding(base + ".root", "git-read-failed", error)); continue
+        top = top_raw.decode("utf-8", "replace").strip()
+        if top != root or str(declared.resolve()) != root:
+            findings.append(_gate_finding(base + ".root", "repository-root-mismatch", f"declared root '{root}' does not match canonical Git root '{top}'")); continue
+        expected = repository["expected_head"]
+        expected_raw, error = _gate_git(root, "rev-parse", "--verify", expected + "^{commit}")
+        if error: findings.append(_gate_finding(base + ".expected_head", "expected-head-unavailable", error)); continue
+        expected_full = expected_raw.decode("ascii", "replace").strip()
+        head_raw, error = _gate_git(root, "rev-parse", "--verify", "HEAD^{commit}")
+        if error: findings.append(_gate_finding(base + ".root", "head-unavailable", error)); continue
+        head_full = head_raw.decode("ascii", "replace").strip()
+        _, ancestor_error = _gate_git(root, "merge-base", "--is-ancestor", expected_full, head_full)
+        if ancestor_error: findings.append(_gate_finding(base + ".expected_head", "expected-head-not-ancestor", "manifest expected_head is not an ancestor of current HEAD")); continue
+        short_raw, error = _gate_git(root, "rev-parse", f"--short={len(expected)}", head_full)
+        if error: findings.append(_gate_finding(base + ".root", "head-unavailable", error)); continue
+        diff_raw, error = _gate_git(root, "diff", "--no-ext-diff", "--name-only", "-z", expected_full, "--")
+        if error: findings.append(_gate_finding(base + ".root", "git-diff-failed", error)); continue
+        untracked_raw, error = _gate_git(root, "ls-files", "--others", "--exclude-standard", "-z")
+        if error: findings.append(_gate_finding(base + ".root", "git-status-failed", error)); continue
+        status_raw, error = _gate_git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+        if error: findings.append(_gate_finding(base + ".root", "git-status-failed", error)); continue
+        changed_files.extend(_gate_decode_paths(diff_raw, root, base, findings)); changed_files.extend(_gate_decode_paths(untracked_raw, root, base, findings))
+        repo_clean = not bool(status_raw); clean = clean and repo_clean
+        repositories.append({"root": root, "before_head": expected, "after_head": short_raw.decode("ascii", "replace").strip()})
+    supplied = [item for item in evidence if not (isinstance(item, dict) and item.get("kind") == "git-clean")] if isinstance(evidence, list) else evidence
+    if isinstance(supplied, list):
+        supplied = list(supplied) + [{"kind": "git-clean", "status": "pass" if clean and not findings else "fail", "detail": "all declared repositories clean" if clean and not findings else "one or more declared repositories dirty or unreadable"}]
+    observation = {"schema": GATE_OBSERVATION_SCHEMA, "result": result, "repositories": repositories, "files_changed": sorted(set(changed_files)), "actions_observed": actions_observed, "evidence": supplied}
+    observed, observed_findings = _gate_validate_observation(observation); findings.extend(observed_findings)
+    return _gate_collection_result(observed, findings)
 
 
 # ---- CLI + structured verdict: one checker truth for humans, Gate clients, and receipts. ----
