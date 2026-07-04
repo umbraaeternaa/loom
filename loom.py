@@ -68,6 +68,7 @@ import loom_cli as _loom_cli
 import loom_gate as _loom_gate
 import loom_observer as _loom_observer
 import loom_evidence as _loom_evidence
+import loom_approval as _loom_approval
 
 _PARSE_FRONTEND = _loom_parse.Frontend(LoomError)
 
@@ -197,6 +198,21 @@ def collect_observation(manifest, result, actions_observed, evidence):
 def collect_ci_evidence(manifest, observation, run_id):
     """Collect read-only GitHub CI evidence bound to an observed LOOM head."""
     return _loom_evidence.collect_ci_evidence(manifest, observation, run_id)
+
+
+def build_approval_challenge(manifest, nonce):
+    """Build a manifest-bound operator approval challenge."""
+    return _loom_approval.build_approval_challenge(manifest, nonce)
+
+
+def verify_operator_approval(manifest, challenge, approval):
+    """Verify a signed approval against the pinned operator public key."""
+    return _loom_approval.verify_operator_approval(manifest, challenge, approval)
+
+
+def consume_operator_approval(manifest, challenge, approval):
+    """Verify and atomically consume a signed one-use operator approval."""
+    return _loom_approval.consume_operator_approval(manifest, challenge, approval)
 
 
 def _cli(argv):

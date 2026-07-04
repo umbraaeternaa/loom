@@ -3,6 +3,7 @@
 # The organism appends new CASES here every cycle; the language only grows if ALL stay green.
 import sys
 import json
+import hashlib
 import subprocess
 import tempfile
 from pathlib import Path
@@ -1677,6 +1678,46 @@ def main():
         print(f"  {'ok  ' if ci_evidence_ok else 'FAIL'} gate: GitHub CI evidence collector v1")
     except Exception as e:
         print(f"  FAIL Gate CI evidence v1 contract: {e}")
+    try:                                               # Gate operator approval v1: signed manifest binding + atomic one-use ledger
+        test_n_hex = "9839b5f2780d273a675993740acd545b6081d18edba0e9dffb4b2623faf6143d4b649d8ab89da611a5cae1128a5690607011601bbb94585a477d4e75f3a94f225dfacfc8911a5f68a4c558c7162305d63eb03e46c8c1438f1d6d4cae24e936ef0958756fcd8ea083b3bc262356b9d5b2427711319452b5b9c0f979d8be60571db915b21faa530653a6e92bdbb9d33cbfdc1040f9910a593b055f5e6eee0a189f300b41a63ff7dd9ec5185ebcb58c3927945fbf73014fdaccf1fe1179595b0300f8f80684e2b40508e68c09ef88893b9446149bcb150a5e0a12fed31cdf5eda1d18adb645a089dcf2e845e52f999c2c3939ccf652f92a07d175a5149e8bba81b7"
+        test_d = int("87308eeb37684c5e61f550d9787e6cb1cf937b3869750eea0c3d4132286998054234fe74cf0b08616e8c2ee1a304c853dd333bd7654f943d19205528b6576175740be5b1df5691efad3b010cf8c141d31e4eb200206a58457c2cdadcb835d0c3992e7b9d3f410641f0c2e25bf56434e9e07d3ded24d20f9cad9f8c717676b8e61d7fdbbe4fa8008f088253e843d29a1c01ca9b6d6cbffbb92a77dcac860b9ead5eee8d9ef6b211dd44dd78075d2da309fa68db5c405fd58ccab32042982594495cc1aaab526e0d752f180cd526ab01017dc2ad9b01d354fc22e80b8797faef44e507344ac53b7ae388d65e54299dfbbdeff9be821b0692172736e6de90a2989", 16)
+        test_key = {"algorithm": "rsa-pkcs1v15-sha256", "n": test_n_hex, "e": 65537}
+        approval_manifest = gate_manifest("codex", "code", ["/Users/macbook/Projects/loom"], ["/Users/macbook/Projects/loom/loom_approval.py"], ["read", "write", "test"], ["syntax", "citadel", "docs-parity", "git-clean"], [{"root": "/Users/macbook/Projects/loom", "expected_head": "4281c7b", "require_clean": True}])
+        challenge_result = _loom.build_approval_challenge(approval_manifest, "1" * 64)
+        challenge_same = _loom.build_approval_challenge(json.loads(json.dumps(approval_manifest)), "1" * 64)
+        challenge = challenge_result["challenge"]
+        approval_impl = getattr(_loom, "_loom_approval", _loom)
+        canonical = getattr(approval_impl, "_canonical", getattr(_loom, "_gate_canonical", None))
+        key_hash = hashlib.sha256(canonical(test_key).encode()).hexdigest()
+        approval = {"schema": "loom-gate-operator-approval/v1", "challenge_sha256": challenge["challenge_sha256"], "manifest_sha256": challenge["manifest_sha256"], "approver": "operator", "decision": "approve", "key_sha256": key_hash}
+        message = canonical(approval).encode(); digest_info = bytes.fromhex("3031300d060960864801650304020105000420") + hashlib.sha256(message).digest()
+        modulus = int(test_n_hex, 16); size = (modulus.bit_length() + 7) // 8
+        encoded = b"\x00\x01" + b"\xff" * (size - len(digest_info) - 3) + b"\x00" + digest_info
+        approval["signature"] = pow(int.from_bytes(encoded, "big"), test_d, modulus).to_bytes(size, "big").hex()
+        verify_fn = getattr(approval_impl, "_verify", getattr(_loom, "_gate_verify_approval", None))
+        verified = verify_fn(approval_manifest, challenge, approval, test_key)
+        tampered = json.loads(json.dumps(approval)); tampered["manifest_sha256"] = "0" * 64
+        rejected = verify_fn(approval_manifest, challenge, tampered, test_key)
+        with tempfile.TemporaryDirectory() as td:
+            ledger = Path(td) / "spent.sqlite3"
+            consume_fn = getattr(approval_impl, "_consume_once", getattr(_loom, "_gate_consume_once", None))
+            consume_fn(verified["approval_sha256"], ledger)
+            replay_rejected = False
+            try: consume_fn(verified["approval_sha256"], ledger)
+            except ValueError: replay_rejected = True
+        approval_contract_ok = (
+            challenge_result["valid"] is True and challenge_result == challenge_same
+            and challenge["schema"] == "loom-gate-approval-challenge/v1" and len(challenge["challenge_sha256"]) == 64
+            and verified["valid"] is True and verified["evidence"][0]["kind"] == "operator-approval"
+            and rejected["valid"] is False and any(item["code"] in {"manifest-mismatch", "invalid-signature"} for item in rejected["findings"])
+            and replay_rejected
+            and _loom.build_approval_challenge(approval_manifest, "short")["valid"] is False
+            and _loom.build_approval_challenge(ci_manifest, "1" * 64)["valid"] is False
+        )
+        ok += approval_contract_ok
+        print(f"  {'ok  ' if approval_contract_ok else 'FAIL'} gate: signed one-use operator approval v1")
+    except Exception as e:
+        print(f"  FAIL Gate operator approval v1 contract: {e}")
     try:                                               # CLI lives behind a stable facade in development builds
         import io, contextlib
         is_browser_bundle = Path(_loom.__file__).parent.name == "docs"
@@ -1744,8 +1785,10 @@ def main():
             and Path(__file__).with_name("docs").joinpath("gate_receipt_v1.md").exists()
             and Path(__file__).with_name("docs").joinpath("gate_observer_v1.md").exists()
             and Path(__file__).with_name("docs").joinpath("gate_ci_evidence_v1.md").exists()
+            and Path(__file__).with_name("docs").joinpath("gate_operator_approval_v1.md").exists()
             and "loom_observer.py" in Path(__file__).with_name(".github").joinpath("workflows", "ci.yml").read_text()
             and "loom_evidence.py" in Path(__file__).with_name(".github").joinpath("workflows", "ci.yml").read_text()
+            and "loom_approval.py" in Path(__file__).with_name(".github").joinpath("workflows", "ci.yml").read_text()
         )
         ok += docs_discipline_ok
         print(f"  {'ok  ' if docs_discipline_ok else 'FAIL'} docs: published bundle workflow pinned")
@@ -1759,7 +1802,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 81   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/CI-evidence contracts, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 82   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval contracts, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

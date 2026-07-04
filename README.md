@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 384 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 385 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 384/384 citadel checks
+PASS — 385/385 citadel checks
 ```
 
 ## The idea in one screen
@@ -195,6 +195,12 @@ LOOM head to a successful public GitHub Actions run, its exact verify steps, and
 the public `main` branch. It emits `syntax`, `citadel`, `docs-parity`, `fuzz`,
 and `git-sync` evidence without executing repository code locally. See
 [`docs/gate_ci_evidence_v1.md`](docs/gate_ci_evidence_v1.md).
+
+`loom.build_approval_challenge(...)`, `verify_operator_approval(...)`, and
+`consume_operator_approval(...)` define a signed, manifest-bound operator
+capability with atomic one-use replay protection. LOOM never receives the
+private signing key. See
+[`docs/gate_operator_approval_v1.md`](docs/gate_operator_approval_v1.md).
 
 The same verified program runs in the interpreter, compiles to **Python** and **JavaScript**,
 and lowers tagged values, closures, structured data, and effects to **WebAssembly** — one checked source, many platforms. LOOM integers have one portable contract on every backend: signed i31 values (`-2^30..2^30-1`) with deterministic modulo-`2^31` wraparound; out-of-range literals are rejected before execution.
