@@ -85,6 +85,10 @@ def collect_ci_evidence(manifest, observation, run_id):
         findings.append(_finding("repositories", "unsupported-ci-repository", "CI evidence v1 supports exactly the canonical LOOM repository"))
     if set(observed_repositories) != declared_roots:
         findings.append(_finding("observation.repositories", "repository-mismatch", "observation repositories must exactly match the manifest"))
+    expected_repositories = {item["root"]: item for item in normalized["repositories"]}
+    for root in sorted(set(observed_repositories) & set(expected_repositories)):
+        if observed_repositories[root]["before_head"] != expected_repositories[root]["expected_head"]:
+            findings.append(_finding("observation.repositories.before_head", "stale-before-head", "observation before_head does not match manifest expected_head"))
     if findings:
         return _result(None, findings)
 

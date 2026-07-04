@@ -2784,6 +2784,9 @@ def collect_ci_evidence(manifest, observation, run_id):
     normalized = validation["normalized_manifest"]; roots = {item["root"] for item in normalized["repositories"]}; observed_repos = {item["root"]: item for item in observed["repositories"]}
     if roots != {_GATE_LOOM}: findings.append(_gate_finding("repositories", "unsupported-ci-repository", "CI evidence v1 supports exactly the canonical LOOM repository"))
     if set(observed_repos) != roots: findings.append(_gate_finding("observation.repositories", "repository-mismatch", "observation repositories must exactly match the manifest"))
+    expected_repos = {item["root"]: item for item in normalized["repositories"]}
+    for root in sorted(set(observed_repos) & set(expected_repos)):
+        if observed_repos[root]["before_head"] != expected_repos[root]["expected_head"]: findings.append(_gate_finding("observation.repositories.before_head", "stale-before-head", "observation before_head does not match manifest expected_head"))
     if findings: return _gate_evidence_result(None, findings)
     after_head = observed_repos[_GATE_LOOM]["after_head"]
     if len(after_head) != 40: return _gate_evidence_result(None, [_gate_finding("observation.repositories.after_head", "full-head-required", "CI evidence requires a full 40-character observed after_head")])

@@ -7,6 +7,8 @@ GitHub API at a fixed repository endpoint and binds one completed workflow run
 to the observation's `after_head`.
 The observed `after_head` must be the full 40-character commit SHA; abbreviated
 prefixes are rejected at this remote trust boundary.
+The observation `before_head` must also exactly equal the manifest
+`expected_head`, so evidence cannot be rebound to a different starting state.
 
 Version 1 accepts exactly `umbraaeternaa/loom`, workflow `LOOM Citadel`, job
 `verify`, and these successful steps:

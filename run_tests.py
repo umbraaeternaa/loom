@@ -1659,6 +1659,8 @@ def main():
             ci_bad_id = _loom.collect_ci_evidence(ci_manifest, ci_observation, "not-a-run")
             short_observation = json.loads(json.dumps(ci_observation)); short_observation["repositories"][0]["after_head"] = ci_head[:7]
             ci_short_head = _loom.collect_ci_evidence(ci_manifest, short_observation, 28713238218)
+            stale_observation = json.loads(json.dumps(ci_observation)); stale_observation["repositories"][0]["before_head"] = "a1065c2"
+            ci_stale_before = _loom.collect_ci_evidence(ci_manifest, stale_observation, 28713238218)
         finally:
             setattr(evidence_impl, fetch_name, original_fetch)
         ci_evidence_ok = (
@@ -1669,6 +1671,7 @@ def main():
             and ci_missing_step["valid"] is False and any(item["code"] == "required-step-not-successful" for item in ci_missing_step["findings"])
             and ci_bad_id["valid"] is False and any(item["code"] == "invalid-run-id" for item in ci_bad_id["findings"])
             and ci_short_head["valid"] is False and any(item["code"] == "full-head-required" for item in ci_short_head["findings"])
+            and ci_stale_before["valid"] is False and any(item["code"] == "stale-before-head" for item in ci_stale_before["findings"])
         )
         ok += ci_evidence_ok
         print(f"  {'ok  ' if ci_evidence_ok else 'FAIL'} gate: GitHub CI evidence collector v1")
