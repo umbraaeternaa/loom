@@ -17,8 +17,15 @@ PLAY_HTML = ROOT / "docs" / "play.html"
 
 def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
-    if 'fetch("./loom.py")' not in text:
-        raise SystemExit("docs parity: play.html no longer fetches ./loom.py")
+    loader_contract = (
+        'new URL("./loom.py", location.href)',
+        'bundleUrl.searchParams.set("v", "385-pyodide-cache-v1")',
+        'fetch(bundleUrl, {cache: "no-store"})',
+        'if (!response.ok)',
+    )
+    missing_loader = [needle for needle in loader_contract if needle not in text]
+    if missing_loader or 'fetch("./loom.py")' in text:
+        raise SystemExit("docs parity: play.html lost cache-safe LOOM loader contract: " + ", ".join(missing_loader))
     required = (
         'id="bWasm"',
         "loom.compile_wasm(",

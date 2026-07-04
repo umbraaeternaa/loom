@@ -1748,7 +1748,11 @@ def main():
         play = Path(__file__).with_name("docs").joinpath("play.html").read_text()
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
-            'fetch("./loom.py")' in play
+            'new URL("./loom.py", location.href)' in play
+            and 'bundleUrl.searchParams.set("v", "385-pyodide-cache-v1")' in play
+            and 'fetch(bundleUrl, {cache: "no-store"})' in play
+            and 'if (!response.ok)' in play
+            and 'fetch("./loom.py")' not in play
             and 'id="bWasm"' in play
             and "loom.compile_wasm(" in play
             and "WebAssembly.instantiate(" in play

@@ -225,7 +225,11 @@ async function boot(){
     setStatus("downloading runtime…");
     pyodide = await loadPyodide();
     setStatus("loading LOOM…");
-    const code = await (await fetch("./loom.py")).text();
+    const bundleUrl = new URL("./loom.py", location.href);
+    bundleUrl.searchParams.set("v", "385-pyodide-cache-v1");
+    const response = await fetch(bundleUrl, {cache: "no-store"});
+    if (!response.ok) throw new Error("LOOM bundle HTTP " + response.status);
+    const code = await response.text();
     pyodide.FS.writeFile("loom.py", code);
     pyodide.runPython("import loom, json");
     setStatus("ready ✓");
