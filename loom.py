@@ -67,6 +67,7 @@ import loom_runtime as _loom_runtime
 import loom_cli as _loom_cli
 import loom_gate as _loom_gate
 import loom_observer as _loom_observer
+import loom_evidence as _loom_evidence
 
 _PARSE_FRONTEND = _loom_parse.Frontend(LoomError)
 
@@ -191,6 +192,11 @@ def build_receipt(manifest, observation):
 def collect_observation(manifest, result, actions_observed, evidence):
     """Collect read-only Git facts for a LOOM Gate observation."""
     return _loom_observer.collect_observation(manifest, result, actions_observed, evidence)
+
+
+def collect_ci_evidence(manifest, observation, run_id):
+    """Collect read-only GitHub CI evidence bound to an observed LOOM head."""
+    return _loom_evidence.collect_ci_evidence(manifest, observation, run_id)
 
 
 def _cli(argv):

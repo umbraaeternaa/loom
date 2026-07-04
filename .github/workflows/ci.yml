@@ -20,7 +20,7 @@ jobs:
         with:
           node-version: "22"
       - name: Compile Python sources
-        run: python -m py_compile loom.py loom_parse.py loom_checker.py loom_frontend.py loom_runtime.py loom_cli.py loom_gate.py loom_codegen.py loom_wasm.py verify_docs_parity.py docs/loom.py run_tests.py fuzz_tests.py
+        run: python -m py_compile loom.py loom_parse.py loom_checker.py loom_frontend.py loom_runtime.py loom_cli.py loom_gate.py loom_observer.py loom_evidence.py loom_codegen.py loom_wasm.py verify_docs_parity.py docs/loom.py run_tests.py fuzz_tests.py
       - name: Run citadel
         run: python run_tests.py
       - name: Verify published docs parity

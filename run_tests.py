@@ -1637,6 +1637,43 @@ def main():
         print(f"  {'ok  ' if observer_contract_ok else 'FAIL'} gate: read-only Git observation collector v1")
     except Exception as e:
         print(f"  FAIL Gate observer v1 contract: {e}")
+    try:                                               # Gate CI evidence v1: remote run/steps/main bind to observed head
+        ci_head = "a" * 40
+        ci_manifest = gate_manifest("codex", "code", ["/Users/macbook/Projects/loom"], [], ["read", "test"], ["syntax", "citadel", "docs-parity", "fuzz", "git-sync"], [{"root": "/Users/macbook/Projects/loom", "expected_head": "e02994e", "require_clean": True}])
+        ci_observation = {"schema": "loom-gate-observation/v1", "result": "completed", "repositories": [{"root": "/Users/macbook/Projects/loom", "before_head": "e02994e", "after_head": ci_head}], "files_changed": [], "actions_observed": ["read", "test"], "evidence": []}
+        run_payload = {"repository": {"full_name": "umbraaeternaa/loom"}, "name": "LOOM Citadel", "status": "completed", "conclusion": "success", "head_sha": ci_head}
+        steps = [{"name": name, "status": "completed", "conclusion": "success"} for name in ("Compile Python sources", "Run citadel", "Verify published docs parity", "Run extended deterministic fuzz seeds")]
+        jobs_payload = {"jobs": [{"name": "verify", "status": "completed", "conclusion": "success", "steps": steps}]}
+        payloads = {"run": run_payload, "jobs": jobs_payload, "branch": {"commit": {"sha": ci_head}}}
+        def fake_fetch(path):
+            return payloads["jobs"] if path.endswith("/jobs?per_page=100") else (payloads["branch"] if path == "/branches/main" else payloads["run"])
+        evidence_impl = getattr(_loom, "_loom_evidence", _loom)
+        fetch_name = "_fetch_json" if hasattr(evidence_impl, "_fetch_json") else "_gate_fetch_json"
+        original_fetch = getattr(evidence_impl, fetch_name); setattr(evidence_impl, fetch_name, fake_fetch)
+        try:
+            ci_success = _loom.collect_ci_evidence(ci_manifest, ci_observation, 28713238218)
+            payloads["run"] = dict(run_payload, head_sha="b" * 40)
+            ci_bad_head = _loom.collect_ci_evidence(ci_manifest, ci_observation, 28713238218)
+            payloads["run"] = run_payload; payloads["jobs"] = {"jobs": [dict(jobs_payload["jobs"][0], steps=steps[:-1])]}
+            ci_missing_step = _loom.collect_ci_evidence(ci_manifest, ci_observation, 28713238218)
+            ci_bad_id = _loom.collect_ci_evidence(ci_manifest, ci_observation, "not-a-run")
+            short_observation = json.loads(json.dumps(ci_observation)); short_observation["repositories"][0]["after_head"] = ci_head[:7]
+            ci_short_head = _loom.collect_ci_evidence(ci_manifest, short_observation, 28713238218)
+        finally:
+            setattr(evidence_impl, fetch_name, original_fetch)
+        ci_evidence_ok = (
+            ci_success["valid"] is True and ci_success["schema"] == "loom-gate-evidence-collection/v1" and ci_success["read_only"] is True
+            and [item["kind"] for item in ci_success["evidence"]] == ["citadel", "docs-parity", "fuzz", "git-sync", "syntax"]
+            and all(item["status"] == "pass" and ci_head in item["detail"] for item in ci_success["evidence"])
+            and ci_bad_head["valid"] is False and any(item["code"] == "head-mismatch" for item in ci_bad_head["findings"])
+            and ci_missing_step["valid"] is False and any(item["code"] == "required-step-not-successful" for item in ci_missing_step["findings"])
+            and ci_bad_id["valid"] is False and any(item["code"] == "invalid-run-id" for item in ci_bad_id["findings"])
+            and ci_short_head["valid"] is False and any(item["code"] == "full-head-required" for item in ci_short_head["findings"])
+        )
+        ok += ci_evidence_ok
+        print(f"  {'ok  ' if ci_evidence_ok else 'FAIL'} gate: GitHub CI evidence collector v1")
+    except Exception as e:
+        print(f"  FAIL Gate CI evidence v1 contract: {e}")
     try:                                               # CLI lives behind a stable facade in development builds
         import io, contextlib
         is_browser_bundle = Path(_loom.__file__).parent.name == "docs"
@@ -1703,6 +1740,9 @@ def main():
             and Path(__file__).with_name("docs").joinpath("gate_policy_v1.md").exists()
             and Path(__file__).with_name("docs").joinpath("gate_receipt_v1.md").exists()
             and Path(__file__).with_name("docs").joinpath("gate_observer_v1.md").exists()
+            and Path(__file__).with_name("docs").joinpath("gate_ci_evidence_v1.md").exists()
+            and "loom_observer.py" in Path(__file__).with_name(".github").joinpath("workflows", "ci.yml").read_text()
+            and "loom_evidence.py" in Path(__file__).with_name(".github").joinpath("workflows", "ci.yml").read_text()
         )
         ok += docs_discipline_ok
         print(f"  {'ok  ' if docs_discipline_ok else 'FAIL'} docs: published bundle workflow pinned")
@@ -1716,7 +1756,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 80   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer contracts, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 81   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/CI-evidence contracts, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

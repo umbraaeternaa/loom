@@ -11,10 +11,13 @@ import hashlib
 import json
 import os
 import re
+import ssl
 import subprocess
 import unicodedata
 from contextvars import ContextVar
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 EFFECTS = {"Pure", "IO", "Net", "Alloc", "FFI", "Rand"}   # Rand = nondeterminism (randomness / wall-clock)
 # checker vocab MUST stay == interpreter (ev) vocab — no form the checker knows that the runtime can't run.
@@ -2394,6 +2397,7 @@ GATE_OBSERVATION_SCHEMA = "loom-gate-observation/v1"
 GATE_RECEIPT_SCHEMA = "loom-gate-receipt/v1"
 GATE_RECEIPT_VALIDATION_SCHEMA = "loom-gate-receipt-validation/v1"
 GATE_COLLECTION_SCHEMA = "loom-gate-observation-collection/v1"
+GATE_EVIDENCE_COLLECTION_SCHEMA = "loom-gate-evidence-collection/v1"
 GATE_POLICY_ID = "operator-codex-cloud/v1"
 GATE_AGENTS = {"codex", "cloud-code", "auditor", "argus", "nostromo", "ci", "operator"}
 GATE_ROLES = {"code", "organism", "audit", "night", "trace", "operator"}
@@ -2743,6 +2747,69 @@ def collect_observation(manifest, result, actions_observed, evidence):
     observation = {"schema": GATE_OBSERVATION_SCHEMA, "result": result, "repositories": repositories, "files_changed": sorted(set(changed_files)), "actions_observed": actions_observed, "evidence": supplied}
     observed, observed_findings = _gate_validate_observation(observation); findings.extend(observed_findings)
     return _gate_collection_result(observed, findings)
+
+
+_GATE_CI_API = "https://api.github.com/repos/umbraaeternaa/loom"
+_GATE_CI_STEPS = {"Compile Python sources": "syntax", "Run citadel": "citadel", "Verify published docs parity": "docs-parity", "Run extended deterministic fuzz seeds": "fuzz"}
+_GATE_FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
+_GATE_CA_BUNDLES = (Path("/etc/ssl/cert.pem"), Path("/opt/homebrew/etc/openssl@3/cert.pem"), Path("/usr/local/etc/openssl@3/cert.pem"))
+
+
+def _gate_evidence_result(evidence, findings):
+    return {"schema": GATE_EVIDENCE_COLLECTION_SCHEMA, "valid": not findings, "advisory": True, "read_only": True, "evidence": evidence if not findings else None, "findings": _gate_unique(findings)}
+
+
+def _gate_fetch_json(path):
+    url = _GATE_CI_API + path
+    request = Request(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "loom-gate-evidence-v1", "X-GitHub-Api-Version": "2022-11-28"})
+    ca_bundle = next((path for path in _GATE_CA_BUNDLES if path.is_file()), None); context = ssl.create_default_context(cafile=str(ca_bundle) if ca_bundle else None)
+    try:
+        with urlopen(request, timeout=5, context=context) as response:
+            if response.geturl() != url: raise ValueError("GitHub API redirect refused")
+            payload = response.read(1_000_001)
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError) as error:
+        raise ValueError(f"GitHub API read failed: {error}") from error
+    if len(payload) > 1_000_000: raise ValueError("GitHub API response exceeds size limit")
+    try: value = json.loads(payload.decode("utf-8", "strict"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error: raise ValueError(f"GitHub API returned invalid JSON: {error}") from error
+    if not isinstance(value, dict): raise ValueError("GitHub API response must be an object")
+    return value
+
+
+def collect_ci_evidence(manifest, observation, run_id):
+    validation = validate_manifest(manifest); observed, observed_findings = _gate_validate_observation(observation)
+    findings = list(validation["findings"]) + observed_findings
+    if isinstance(run_id, bool) or not isinstance(run_id, (int, str)) or not str(run_id).isdigit() or int(run_id) <= 0: findings.append(_gate_finding("run_id", "invalid-run-id", "run_id must be a positive decimal integer"))
+    if findings: return _gate_evidence_result(None, findings)
+    normalized = validation["normalized_manifest"]; roots = {item["root"] for item in normalized["repositories"]}; observed_repos = {item["root"]: item for item in observed["repositories"]}
+    if roots != {_GATE_LOOM}: findings.append(_gate_finding("repositories", "unsupported-ci-repository", "CI evidence v1 supports exactly the canonical LOOM repository"))
+    if set(observed_repos) != roots: findings.append(_gate_finding("observation.repositories", "repository-mismatch", "observation repositories must exactly match the manifest"))
+    if findings: return _gate_evidence_result(None, findings)
+    after_head = observed_repos[_GATE_LOOM]["after_head"]
+    if len(after_head) != 40: return _gate_evidence_result(None, [_gate_finding("observation.repositories.after_head", "full-head-required", "CI evidence requires a full 40-character observed after_head")])
+    run_id = int(run_id)
+    try:
+        run = _gate_fetch_json(f"/actions/runs/{run_id}"); jobs = _gate_fetch_json(f"/actions/runs/{run_id}/jobs?per_page=100"); branch = _gate_fetch_json("/branches/main")
+    except ValueError as error: return _gate_evidence_result(None, [_gate_finding("github", "github-api-failed", str(error))])
+    repository = run.get("repository"); head_sha = run.get("head_sha")
+    if not isinstance(repository, dict) or repository.get("full_name") != "umbraaeternaa/loom": findings.append(_gate_finding("github.run.repository", "repository-mismatch", "workflow run does not belong to canonical LOOM"))
+    if run.get("name") != "LOOM Citadel": findings.append(_gate_finding("github.run.name", "workflow-mismatch", "expected workflow 'LOOM Citadel'"))
+    if run.get("status") != "completed" or run.get("conclusion") != "success": findings.append(_gate_finding("github.run", "workflow-not-successful", "workflow run must be completed with success"))
+    if not isinstance(head_sha, str) or not _GATE_FULL_SHA.fullmatch(head_sha) or not head_sha.startswith(after_head): findings.append(_gate_finding("github.run.head_sha", "head-mismatch", "workflow head_sha does not match observed after_head"))
+    commit = branch.get("commit"); branch_sha = commit.get("sha") if isinstance(commit, dict) else None
+    if not isinstance(branch_sha, str) or not _GATE_FULL_SHA.fullmatch(branch_sha) or not branch_sha.startswith(after_head): findings.append(_gate_finding("github.branch.main", "git-sync-failed", "origin main does not match observed after_head"))
+    job_list = jobs.get("jobs"); verify_jobs = [job for job in job_list if isinstance(job, dict) and job.get("name") == "verify"] if isinstance(job_list, list) else []
+    verify_job = verify_jobs[0] if len(verify_jobs) == 1 else None
+    if verify_job is None: findings.append(_gate_finding("github.jobs", "verify-job-missing", "expected exactly one verify job"))
+    elif verify_job.get("status") != "completed" or verify_job.get("conclusion") != "success": findings.append(_gate_finding("github.jobs.verify", "verify-job-not-successful", "verify job must be completed with success"))
+    steps = {step.get("name"): step for step in verify_job.get("steps", []) if isinstance(step, dict) and isinstance(step.get("name"), str)} if verify_job else {}
+    for name in sorted(_GATE_CI_STEPS):
+        step = steps.get(name)
+        if step is None or step.get("status") != "completed" or step.get("conclusion") != "success": findings.append(_gate_finding("github.jobs.verify.steps", "required-step-not-successful", f"required step '{name}' must complete successfully"))
+    if findings: return _gate_evidence_result(None, findings)
+    evidence = [{"kind": kind, "status": "pass", "detail": f"GitHub Actions run {run_id}: {name} passed at {head_sha}"} for name, kind in sorted(_GATE_CI_STEPS.items(), key=lambda item: item[1])]
+    evidence.append({"kind": "git-sync", "status": "pass", "detail": f"GitHub main matches {head_sha}"})
+    return _gate_evidence_result(sorted(evidence, key=lambda item: item["kind"]), [])
 
 
 # ---- CLI + structured verdict: one checker truth for humans, Gate clients, and receipts. ----
