@@ -12,15 +12,9 @@ import hmac
 import json
 import os
 import re
-import ssl
-import sqlite3
-import stat
-import subprocess
 import unicodedata
 from contextvars import ContextVar
 from pathlib import Path
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
 EFFECTS = {"Pure", "IO", "Net", "Alloc", "FFI", "Rand"}   # Rand = nondeterminism (randomness / wall-clock)
 # checker vocab MUST stay == interpreter (ev) vocab — no form the checker knows that the runtime can't run.
@@ -2683,6 +2677,10 @@ def _gate_collection_result(observation, findings):
 
 
 def _gate_git(root, *args):
+    try:
+        import subprocess
+    except ImportError as error:
+        return None, f"git unavailable in this Python runtime: {error}"
     env = os.environ.copy(); env.update({"GIT_OPTIONAL_LOCKS": "0", "GIT_NO_LAZY_FETCH": "1", "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", "LANG": "C"})
     try:
         proc = subprocess.run(["git", "-c", "core.fsmonitor=false", "-C", root, *args], capture_output=True, env=env, timeout=5)
@@ -2763,6 +2761,12 @@ def _gate_evidence_result(evidence, findings):
 
 
 def _gate_fetch_json(path):
+    try:
+        import ssl
+        from urllib.error import HTTPError, URLError
+        from urllib.request import Request, urlopen
+    except ImportError as error:
+        raise ValueError(f"GitHub API unavailable in this Python runtime: {error}") from error
     url = _GATE_CI_API + path
     request = Request(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "loom-gate-evidence-v1", "X-GitHub-Api-Version": "2022-11-28"})
     ca_bundle = next((path for path in _GATE_CA_BUNDLES if path.is_file()), None); context = ssl.create_default_context(cafile=str(ca_bundle) if ca_bundle else None)
@@ -2896,6 +2900,7 @@ def _gate_verify_approval(manifest, challenge, approval, public_key_value):
 
 def _gate_load_operator_key():
     try:
+        import stat
         if _GATE_KEY_PATH.is_symlink() or not _GATE_KEY_PATH.is_file(): raise ValueError("operator public key path must be a regular non-symlink file")
         if _GATE_KEY_PATH.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH): raise ValueError("operator public key must not be group/world-writable")
         return json.loads(_GATE_KEY_PATH.read_text(encoding="utf-8"))
@@ -2909,18 +2914,26 @@ def verify_operator_approval(manifest, challenge, approval):
 
 
 def _gate_consume_once(approval_sha, ledger_path):
+    try:
+        import sqlite3
+        import stat
+    except ImportError as error:
+        raise ValueError(f"approval ledger unavailable in this Python runtime: {error}") from error
     ledger_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     ledger_path.parent.chmod(0o700)
     if ledger_path.is_symlink(): raise ValueError("approval ledger path must not be a symlink")
     if ledger_path.exists() and ledger_path.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH): raise ValueError("approval ledger must not be group/world-writable")
-    connection = sqlite3.connect(str(ledger_path), timeout=5, isolation_level=None)
     try:
-        connection.execute("PRAGMA trusted_schema=OFF"); connection.execute("BEGIN IMMEDIATE")
-        connection.execute("CREATE TABLE IF NOT EXISTS spent (approval_sha256 TEXT PRIMARY KEY CHECK(length(approval_sha256)=64))")
-        try: connection.execute("INSERT INTO spent(approval_sha256) VALUES (?)", (approval_sha,))
-        except sqlite3.IntegrityError as error: connection.execute("ROLLBACK"); raise ValueError("operator approval was already consumed") from error
-        connection.execute("COMMIT")
-    finally: connection.close()
+        connection = sqlite3.connect(str(ledger_path), timeout=5, isolation_level=None)
+        try:
+            connection.execute("PRAGMA trusted_schema=OFF"); connection.execute("BEGIN IMMEDIATE")
+            connection.execute("CREATE TABLE IF NOT EXISTS spent (approval_sha256 TEXT PRIMARY KEY CHECK(length(approval_sha256)=64))")
+            try: connection.execute("INSERT INTO spent(approval_sha256) VALUES (?)", (approval_sha,))
+            except sqlite3.IntegrityError as error: connection.execute("ROLLBACK"); raise ValueError("operator approval was already consumed") from error
+            connection.execute("COMMIT")
+        finally: connection.close()
+    except sqlite3.Error as error:
+        raise ValueError(f"approval ledger failed: {error}") from error
     ledger_path.chmod(0o600)
 
 
@@ -2928,7 +2941,7 @@ def consume_operator_approval(manifest, challenge, approval):
     verified = verify_operator_approval(manifest, challenge, approval)
     if not verified["valid"]: return verified
     try: _gate_consume_once(verified["approval_sha256"], _GATE_LEDGER_PATH)
-    except (OSError, sqlite3.Error, ValueError) as error: return _gate_approval_result(None, None, [_gate_finding("ledger", "approval-consume-failed", str(error))])
+    except (OSError, ValueError) as error: return _gate_approval_result(None, None, [_gate_finding("ledger", "approval-consume-failed", str(error))])
     return verified
 
 

@@ -1789,6 +1789,11 @@ def main():
             and "loom_observer.py" in Path(__file__).with_name(".github").joinpath("workflows", "ci.yml").read_text()
             and "loom_evidence.py" in Path(__file__).with_name(".github").joinpath("workflows", "ci.yml").read_text()
             and "loom_approval.py" in Path(__file__).with_name(".github").joinpath("workflows", "ci.yml").read_text()
+            and all(("\n" + name + "\n") not in ("\n" + Path(__file__).with_name("docs").joinpath("loom.py").read_text()) for name in (
+                "import ssl", "import sqlite3", "import stat", "import subprocess",
+                "from urllib.error import HTTPError, URLError",
+                "from urllib.request import Request, urlopen",
+            ))
         )
         ok += docs_discipline_ok
         print(f"  {'ok  ' if docs_discipline_ok else 'FAIL'} docs: published bundle workflow pinned")

@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import importlib.util
+import ast
+import builtins
 import sys
 from pathlib import Path
 
@@ -52,6 +54,15 @@ def _check_playground_loader() -> None:
     leaked = [name for name in forbidden if name in text]
     if leaked:
         raise SystemExit("docs parity: play.html references development modules: " + ", ".join(leaked))
+    tree = ast.parse(DOCS_LOOM.read_text())
+    host_only = {"ssl", "sqlite3", "stat", "subprocess", "urllib"}
+    imported = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import): imported.update(alias.name.split(".", 1)[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module: imported.add(node.module.split(".", 1)[0])
+    leaked_imports = sorted(imported & host_only)
+    if leaked_imports:
+        raise SystemExit("docs parity: standalone bundle has host-only top-level imports: " + ", ".join(leaked_imports))
 
 
 def _run_injected_citadel() -> int:
@@ -66,8 +77,29 @@ def _run_injected_citadel() -> int:
     return run_tests.main()
 
 
+def _check_pyodide_import_boundary() -> None:
+    real_import = builtins.__import__
+    blocked = {"ssl", "sqlite3", "subprocess", "urllib"}
+    def guarded_import(name, *args, **kwargs):
+        if name.split(".", 1)[0] in blocked:
+            raise ModuleNotFoundError(name)
+        return real_import(name, *args, **kwargs)
+    spec = importlib.util.spec_from_file_location("loom_pyodide_probe", DOCS_LOOM)
+    if spec is None or spec.loader is None:
+        raise SystemExit("docs parity: could not create Pyodide import probe")
+    module = importlib.util.module_from_spec(spec)
+    try:
+        builtins.__import__ = guarded_import
+        spec.loader.exec_module(module)
+    finally:
+        builtins.__import__ = real_import
+    if module.run_call("(defx main () (fn () 42))", "(main)") != (42, []):
+        raise SystemExit("docs parity: Pyodide import probe loaded but runtime diverged")
+
+
 def main() -> int:
     _check_playground_loader()
+    _check_pyodide_import_boundary()
     result = _run_injected_citadel()
     if result != 0:
         return result
