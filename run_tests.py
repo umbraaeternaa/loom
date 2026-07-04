@@ -1506,6 +1506,77 @@ def main():
         print(f"  {'ok  ' if policy_contract_ok else 'FAIL'} gate: deterministic advisory role policy v1")
     except Exception as e:
         print(f"  FAIL Gate policy v1 contract: {e}")
+    try:                                               # Gate receipt v1: bind declaration, policy, scope, heads, and evidence
+        receipt_manifest = gate_manifest(
+            "codex", "code", ["/Users/macbook/Projects/loom"],
+            ["/Users/macbook/Projects/loom/loom_gate.py", "/Users/macbook/Projects/loom/run_tests.py"],
+            ["read", "write", "test", "git-commit"],
+            ["syntax", "citadel", "docs-parity", "git-clean"],
+            [{"root": "/Users/macbook/Projects/loom", "expected_head": "e93e7ac", "require_clean": True}],
+        )
+        receipt_observation = {
+            "schema": "loom-gate-observation/v1",
+            "result": "completed",
+            "repositories": [{"root": "/Users/macbook/Projects/loom", "before_head": "e93e7ac", "after_head": "abcdef12"}],
+            "files_changed": ["/Users/macbook/Projects/loom/loom_gate.py", "/Users/macbook/Projects/loom/run_tests.py"],
+            "actions_observed": ["read", "write", "test", "git-commit"],
+            "evidence": [
+                {"kind": "syntax", "status": "pass", "detail": "PASS syntax"},
+                {"kind": "citadel", "status": "pass", "detail": "382/382"},
+                {"kind": "docs-parity", "status": "pass", "detail": "PASS docs parity"},
+                {"kind": "git-clean", "status": "pass", "detail": "clean"},
+                {"kind": "operator-approval", "status": "pass", "detail": "manifest-bound approval observed"},
+            ],
+        }
+        receipt = _loom.build_receipt(receipt_manifest, receipt_observation)
+        reordered_observation = json.loads(json.dumps(receipt_observation))
+        reordered_observation["files_changed"].reverse(); reordered_observation["actions_observed"].reverse(); reordered_observation["evidence"].reverse()
+        receipt_same = _loom.build_receipt(receipt_manifest, reordered_observation)
+        bad_receipts = {}
+        for case in ("action", "scope", "stale", "missing-evidence", "failed-evidence", "same-head"):
+            observed = json.loads(json.dumps(receipt_observation))
+            if case == "action": observed["actions_observed"].append("network")
+            elif case == "scope": observed["files_changed"].append("/Users/macbook/Projects/loom/README.md")
+            elif case == "stale": observed["repositories"][0]["before_head"] = "1234567"
+            elif case == "missing-evidence": observed["evidence"] = [item for item in observed["evidence"] if item["kind"] != "operator-approval"]
+            elif case == "failed-evidence":
+                next(item for item in observed["evidence"] if item["kind"] == "citadel")["status"] = "fail"
+            else: observed["repositories"][0]["after_head"] = observed["repositories"][0]["before_head"]
+            bad_receipts[case] = _loom.build_receipt(receipt_manifest, observed)
+        rejected_manifest = gate_manifest("cloud-code", "organism", [], ["/Users/macbook/Projects/loom/loom.py"], ["write"], loom_evidence, loom_repo)
+        rejected_completed_observation = json.loads(json.dumps(receipt_observation))
+        rejected_completed_observation["repositories"][0]["before_head"] = "714f35e"
+        rejected_completed_observation["repositories"][0]["after_head"] = "714f35e"
+        rejected_completed_observation["files_changed"] = ["/Users/macbook/Projects/loom/loom.py"]
+        rejected_completed_observation["actions_observed"] = ["write"]
+        rejected_completed = _loom.build_receipt(rejected_manifest, rejected_completed_observation)
+        blocked_observation = json.loads(json.dumps(rejected_completed_observation))
+        blocked_observation["result"] = "blocked"; blocked_observation["files_changed"] = []; blocked_observation["actions_observed"] = []; blocked_observation["evidence"] = []
+        rejected_blocked = _loom.build_receipt(rejected_manifest, blocked_observation)
+        bad_codes = {case: {item["code"] for item in result["findings"]} for case, result in bad_receipts.items()}
+        receipt_contract_ok = (
+            receipt["valid"] is True
+            and receipt["receipt"]["schema"] == "loom-gate-receipt/v1"
+            and receipt["receipt"]["policy_decision"] == "operator-required"
+            and len(receipt["receipt"]["receipt_sha256"]) == 64
+            and receipt == receipt_same
+            and all(result["valid"] is False and result["receipt"] is None for result in bad_receipts.values())
+            and "undeclared-action" in bad_codes["action"]
+            and "changed-file-outside-scope" in bad_codes["scope"]
+            and "stale-before-head" in bad_codes["stale"]
+            and "missing-evidence" in bad_codes["missing-evidence"]
+            and "failed-evidence" in bad_codes["failed-evidence"]
+            and "commit-without-new-head" in bad_codes["same-head"]
+            and rejected_completed["valid"] is False
+            and any(item["code"] == "rejected-task-completed" for item in rejected_completed["findings"])
+            and rejected_blocked["valid"] is True
+            and rejected_blocked["receipt"]["policy_decision"] == "reject"
+            and rejected_blocked["receipt"]["result"] == "blocked"
+        )
+        ok += receipt_contract_ok
+        print(f"  {'ok  ' if receipt_contract_ok else 'FAIL'} gate: deterministic advisory receipt v1")
+    except Exception as e:
+        print(f"  FAIL Gate receipt v1 contract: {e}")
     try:                                               # CLI lives behind a stable facade in development builds
         import io, contextlib
         is_browser_bundle = Path(_loom.__file__).parent.name == "docs"
@@ -1570,6 +1641,7 @@ def main():
             and Path(__file__).with_name("docs").joinpath("asm_v0.md").exists()
             and Path(__file__).with_name("docs").joinpath("gate_manifest_v1.md").exists()
             and Path(__file__).with_name("docs").joinpath("gate_policy_v1.md").exists()
+            and Path(__file__).with_name("docs").joinpath("gate_receipt_v1.md").exists()
         )
         ok += docs_discipline_ok
         print(f"  {'ok  ' if docs_discipline_ok else 'FAIL'} docs: published bundle workflow pinned")
@@ -1583,7 +1655,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 78   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy contracts, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 79   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt contracts, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

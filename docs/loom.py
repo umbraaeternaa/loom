@@ -2387,12 +2387,17 @@ def run_wasm(program_src, call_src):
 GATE_MANIFEST_SCHEMA = "loom-gate-manifest/v1"
 GATE_VALIDATION_SCHEMA = "loom-gate-manifest-validation/v1"
 GATE_DECISION_SCHEMA = "loom-gate-decision/v1"
+GATE_OBSERVATION_SCHEMA = "loom-gate-observation/v1"
+GATE_RECEIPT_SCHEMA = "loom-gate-receipt/v1"
+GATE_RECEIPT_VALIDATION_SCHEMA = "loom-gate-receipt-validation/v1"
 GATE_POLICY_ID = "operator-codex-cloud/v1"
 GATE_AGENTS = {"codex", "cloud-code", "auditor", "argus", "nostromo", "ci", "operator"}
 GATE_ROLES = {"code", "organism", "audit", "night", "trace", "operator"}
 GATE_ACTIONS = {"read", "write", "test", "process", "network", "git-commit", "git-push", "delete", "backup", "memory-write", "dashboard", "report", "audit"}
 GATE_EVIDENCE = {"syntax", "citadel", "docs-parity", "fuzz", "git-clean", "git-sync", "live-site", "backup", "operator-approval", "audit"}
 _GATE_KEYS = {"schema", "agent", "task", "repositories", "read_paths", "write_paths", "actions", "evidence_required"}
+_GATE_OBS_KEYS = {"schema", "result", "repositories", "files_changed", "actions_observed", "evidence"}
+_GATE_RESULTS = {"completed", "failed", "blocked"}; _GATE_EVIDENCE_STATUS = {"pass", "fail", "not-run"}
 _GATE_ROLES_BY_AGENT = {"codex": "code", "cloud-code": "organism", "auditor": "audit", "argus": "organism", "nostromo": "night", "ci": "trace", "operator": "operator"}
 _GATE_LOOM = "/Users/macbook/Projects/loom"; _GATE_ARGUS = "/Users/macbook/Projects/argus"; _GATE_NOSTROMO = "/Users/macbook/Projects/nostromo"
 _GATE_MEMORY = "/Users/macbook/codex/Кодекс"; _GATE_FROZEN = "/Users/macbook/Projects/argus/citadel"; _GATE_AUDIT = "/Users/macbook/Projects/audit-targets"
@@ -2584,6 +2589,82 @@ def evaluate_manifest(manifest):
     for item in sorted(required - evidence): violations.append(_gate_issue("missing-evidence", f"action set requires evidence '{item}'", "evidence_required"))
     reasons = _gate_unique(reasons); violations = _gate_unique(violations)
     return _gate_decision("reject" if violations else ("operator-required" if reasons else "accept"), digest, reasons, violations)
+
+
+def _gate_validate_observation(observation):
+    findings = []
+    if not isinstance(observation, dict): return None, [_gate_finding("observation", "expected-object", "observation must be an object")]
+    for key in sorted(set(observation) - _GATE_OBS_KEYS): findings.append(_gate_finding(key, "unknown-field", f"unknown observation field '{key}'"))
+    for key in sorted(_GATE_OBS_KEYS - set(observation)): findings.append(_gate_finding(key, "missing-field", f"missing required observation field '{key}'"))
+    normalized = {}; schema = _gate_text(observation.get("schema"), "schema", findings)
+    if schema is not None and schema != GATE_OBSERVATION_SCHEMA: findings.append(_gate_finding("schema", "unsupported-schema", f"expected '{GATE_OBSERVATION_SCHEMA}'"))
+    normalized["schema"] = schema; result = _gate_text(observation.get("result"), "result", findings)
+    if result is not None and result not in _GATE_RESULTS: findings.append(_gate_finding("result", "unknown-result", f"unknown result '{result}'"))
+    normalized["result"] = result
+    normalized["files_changed"] = _gate_path_list(observation.get("files_changed"), "files_changed", findings)
+    normalized["actions_observed"] = _gate_enum_list(observation.get("actions_observed"), "actions_observed", GATE_ACTIONS, findings)
+    repositories = observation.get("repositories"); normalized_repositories = []
+    if not isinstance(repositories, list): findings.append(_gate_finding("repositories", "expected-array", "expected an array"))
+    else:
+        for index, repository in enumerate(repositories):
+            base = f"repositories[{index}]"
+            if not _gate_object(repository, base, {"root", "before_head", "after_head"}, findings): continue
+            roots = _gate_path_list([repository["root"]], base + ".root", findings)
+            before = _gate_text(repository["before_head"], base + ".before_head", findings); after = _gate_text(repository["after_head"], base + ".after_head", findings)
+            if before is not None and re.fullmatch(r"[0-9a-f]{7,40}", before) is None: findings.append(_gate_finding(base + ".before_head", "invalid-git-head", "expected 7-40 lowercase hexadecimal characters"))
+            if after is not None and re.fullmatch(r"[0-9a-f]{7,40}", after) is None: findings.append(_gate_finding(base + ".after_head", "invalid-git-head", "expected 7-40 lowercase hexadecimal characters"))
+            normalized_repositories.append({"root": roots[0] if roots else None, "before_head": before, "after_head": after})
+        roots = [item["root"] for item in normalized_repositories if item["root"] is not None]
+        for root in sorted({root for root in roots if roots.count(root) > 1}): findings.append(_gate_finding("repositories", "duplicate-repository", f"duplicate observation repository '{root}'"))
+    normalized["repositories"] = sorted(normalized_repositories, key=lambda item: item["root"] or "")
+    evidence = observation.get("evidence"); normalized_evidence = []
+    if not isinstance(evidence, list): findings.append(_gate_finding("evidence", "expected-array", "expected an array"))
+    else:
+        for index, item in enumerate(evidence):
+            base = f"evidence[{index}]"
+            if not _gate_object(item, base, {"kind", "status", "detail"}, findings): continue
+            kind = _gate_text(item["kind"], base + ".kind", findings); status = _gate_text(item["status"], base + ".status", findings); detail = _gate_text(item["detail"], base + ".detail", findings)
+            if kind is not None and kind not in GATE_EVIDENCE: findings.append(_gate_finding(base + ".kind", "unknown-evidence", f"unknown evidence '{kind}'"))
+            if status is not None and status not in _GATE_EVIDENCE_STATUS: findings.append(_gate_finding(base + ".status", "unknown-evidence-status", f"unknown evidence status '{status}'"))
+            normalized_evidence.append({"kind": kind, "status": status, "detail": detail})
+        kinds = [item["kind"] for item in normalized_evidence if item["kind"] is not None]
+        for kind in sorted({kind for kind in kinds if kinds.count(kind) > 1}): findings.append(_gate_finding("evidence", "duplicate-evidence", f"duplicate evidence '{kind}'"))
+    normalized["evidence"] = sorted(normalized_evidence, key=lambda item: item["kind"] or "")
+    return (None if findings else normalized), findings
+
+
+def _gate_receipt_result(receipt, findings):
+    return {"schema": GATE_RECEIPT_VALIDATION_SCHEMA, "valid": not findings, "advisory": True, "receipt": receipt, "findings": _gate_unique(findings)}
+
+
+def build_receipt(manifest, observation):
+    validation = validate_manifest(manifest); observed, findings = _gate_validate_observation(observation)
+    if not validation["valid"]: findings = list(validation["findings"]) + findings
+    if findings: return _gate_receipt_result(None, findings)
+    normalized = validation["normalized_manifest"]; decision = evaluate_manifest(normalized); result = observed["result"]; findings = []
+    if decision["decision"] == "reject" and result == "completed": findings.append(_gate_finding("result", "rejected-task-completed", "a policy-rejected task cannot produce a completed receipt"))
+    declared = set(normalized["actions"])
+    for action in sorted(set(observed["actions_observed"]) - declared): findings.append(_gate_finding("actions_observed", "undeclared-action", f"observed action '{action}' was not declared"))
+    for index, path in enumerate(observed["files_changed"]):
+        if not any(_gate_under(path, scope) for scope in normalized["write_paths"]): findings.append(_gate_finding(f"files_changed[{index}]", "changed-file-outside-scope", f"changed file '{path}' was not declared by the manifest"))
+    expected = {item["root"]: item for item in normalized["repositories"]}; actual = {item["root"]: item for item in observed["repositories"]}
+    for root in sorted(set(expected) - set(actual)): findings.append(_gate_finding("repositories", "missing-repository-observation", f"missing observation for repository '{root}'"))
+    for root in sorted(set(actual) - set(expected)): findings.append(_gate_finding("repositories", "unexpected-repository", f"unexpected observation repository '{root}'"))
+    for root in sorted(set(expected) & set(actual)):
+        if actual[root]["before_head"] != expected[root]["expected_head"]: findings.append(_gate_finding("repositories", "stale-before-head", f"repository '{root}' before_head does not match manifest expected_head"))
+    if result == "completed" and "git-commit" in observed["actions_observed"] and not any(item["before_head"] != item["after_head"] for item in observed["repositories"]): findings.append(_gate_finding("repositories", "commit-without-new-head", "completed git-commit must change at least one repository head"))
+    evidence = {item["kind"]: item for item in observed["evidence"]}
+    if result == "completed":
+        required = set(normalized["evidence_required"])
+        if decision["decision"] == "operator-required": required.add("operator-approval")
+        for kind in sorted(required):
+            item = evidence.get(kind)
+            if item is None: findings.append(_gate_finding("evidence", "missing-evidence", f"missing required evidence '{kind}'"))
+            elif item["status"] != "pass": findings.append(_gate_finding("evidence", "failed-evidence", f"required evidence '{kind}' has status '{item['status']}'"))
+    if findings: return _gate_receipt_result(None, findings)
+    body = {"schema": GATE_RECEIPT_SCHEMA, "advisory": True, "manifest_sha256": validation["manifest_sha256"], "policy": decision["policy"], "policy_decision": decision["decision"], "agent": normalized["agent"], "result": result, "repositories": observed["repositories"], "files_changed": observed["files_changed"], "actions_observed": observed["actions_observed"], "evidence": observed["evidence"]}
+    body["receipt_sha256"] = hashlib.sha256(json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return _gate_receipt_result(body, [])
 
 
 # ---- CLI + structured verdict: one checker truth for humans, Gate clients, and receipts. ----

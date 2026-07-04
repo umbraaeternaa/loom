@@ -182,6 +182,11 @@ def evaluate_manifest(manifest):
     return _loom_gate.evaluate_manifest(manifest)
 
 
+def build_receipt(manifest, observation):
+    """Build a deterministic advisory receipt from a manifest and observation."""
+    return _loom_gate.build_receipt(manifest, observation)
+
+
 def _cli(argv):
     return _loom_cli.cli(argv, _CLI_FRONTEND)
 

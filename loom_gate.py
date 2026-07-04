@@ -10,6 +10,9 @@ import unicodedata
 MANIFEST_SCHEMA = "loom-gate-manifest/v1"
 VALIDATION_SCHEMA = "loom-gate-manifest-validation/v1"
 DECISION_SCHEMA = "loom-gate-decision/v1"
+OBSERVATION_SCHEMA = "loom-gate-observation/v1"
+RECEIPT_SCHEMA = "loom-gate-receipt/v1"
+RECEIPT_VALIDATION_SCHEMA = "loom-gate-receipt-validation/v1"
 POLICY_ID = "operator-codex-cloud/v1"
 AGENTS = frozenset({"codex", "cloud-code", "auditor", "argus", "nostromo", "ci", "operator"})
 ROLES = frozenset({"code", "organism", "audit", "night", "trace", "operator"})
@@ -26,6 +29,9 @@ _TOP_KEYS = frozenset({
     "actions", "evidence_required",
 })
 _HEX_HEAD = re.compile(r"^[0-9a-f]{7,40}$")
+_OBSERVATION_KEYS = frozenset({"schema", "result", "repositories", "files_changed", "actions_observed", "evidence"})
+_OBSERVATION_RESULTS = frozenset({"completed", "failed", "blocked"})
+_EVIDENCE_STATUS = frozenset({"pass", "fail", "not-run"})
 _EXPECTED_ROLES = {
     "codex": "code", "cloud-code": "organism", "auditor": "audit",
     "argus": "organism", "nostromo": "night", "ci": "trace", "operator": "operator",
@@ -341,4 +347,149 @@ def _decision(decision, digest, reasons, violations):
         "policy": POLICY_ID,
         "reasons": _unique_issues(reasons),
         "violations": _unique_issues(violations),
+    }
+
+
+def _validate_observation(observation):
+    findings = []
+    if not isinstance(observation, dict):
+        return None, [_finding("observation", "expected-object", "observation must be an object")]
+    for key in sorted(set(observation) - _OBSERVATION_KEYS):
+        findings.append(_finding(key, "unknown-field", f"unknown observation field '{key}'"))
+    for key in sorted(_OBSERVATION_KEYS - set(observation)):
+        findings.append(_finding(key, "missing-field", f"missing required observation field '{key}'"))
+    normalized = {}
+    schema = _text(observation.get("schema"), "schema", findings)
+    if schema is not None and schema != OBSERVATION_SCHEMA:
+        findings.append(_finding("schema", "unsupported-schema", f"expected '{OBSERVATION_SCHEMA}'"))
+    normalized["schema"] = schema
+    result = _text(observation.get("result"), "result", findings)
+    if result is not None and result not in _OBSERVATION_RESULTS:
+        findings.append(_finding("result", "unknown-result", f"unknown result '{result}'"))
+    normalized["result"] = result
+    normalized["files_changed"] = _path_list(observation.get("files_changed"), "files_changed", findings)
+    normalized["actions_observed"] = _enum_list(observation.get("actions_observed"), "actions_observed", ACTIONS, findings)
+
+    repositories = observation.get("repositories")
+    normalized_repositories = []
+    if not isinstance(repositories, list):
+        findings.append(_finding("repositories", "expected-array", "expected an array"))
+    else:
+        for index, repository in enumerate(repositories):
+            base = f"repositories[{index}]"
+            if not _closed_object(repository, base, {"root", "before_head", "after_head"}, findings):
+                continue
+            roots = _path_list([repository["root"]], base + ".root", findings)
+            before = _text(repository["before_head"], base + ".before_head", findings)
+            after = _text(repository["after_head"], base + ".after_head", findings)
+            if before is not None and not _HEX_HEAD.fullmatch(before):
+                findings.append(_finding(base + ".before_head", "invalid-git-head", "expected 7-40 lowercase hexadecimal characters"))
+            if after is not None and not _HEX_HEAD.fullmatch(after):
+                findings.append(_finding(base + ".after_head", "invalid-git-head", "expected 7-40 lowercase hexadecimal characters"))
+            normalized_repositories.append({"root": roots[0] if roots else None, "before_head": before, "after_head": after})
+        roots = [item["root"] for item in normalized_repositories if item["root"] is not None]
+        for root in sorted({root for root in roots if roots.count(root) > 1}):
+            findings.append(_finding("repositories", "duplicate-repository", f"duplicate observation repository '{root}'"))
+    normalized["repositories"] = sorted(normalized_repositories, key=lambda item: item["root"] or "")
+
+    evidence = observation.get("evidence")
+    normalized_evidence = []
+    if not isinstance(evidence, list):
+        findings.append(_finding("evidence", "expected-array", "expected an array"))
+    else:
+        for index, item in enumerate(evidence):
+            base = f"evidence[{index}]"
+            if not _closed_object(item, base, {"kind", "status", "detail"}, findings):
+                continue
+            kind = _text(item["kind"], base + ".kind", findings)
+            status = _text(item["status"], base + ".status", findings)
+            detail = _text(item["detail"], base + ".detail", findings)
+            if kind is not None and kind not in EVIDENCE:
+                findings.append(_finding(base + ".kind", "unknown-evidence", f"unknown evidence '{kind}'"))
+            if status is not None and status not in _EVIDENCE_STATUS:
+                findings.append(_finding(base + ".status", "unknown-evidence-status", f"unknown evidence status '{status}'"))
+            normalized_evidence.append({"kind": kind, "status": status, "detail": detail})
+        kinds = [item["kind"] for item in normalized_evidence if item["kind"] is not None]
+        for kind in sorted({kind for kind in kinds if kinds.count(kind) > 1}):
+            findings.append(_finding("evidence", "duplicate-evidence", f"duplicate evidence '{kind}'"))
+    normalized["evidence"] = sorted(normalized_evidence, key=lambda item: item["kind"] or "")
+    return (None if findings else normalized), findings
+
+
+def build_receipt(manifest, observation):
+    """Build a deterministic advisory receipt from declared, self-reported evidence."""
+    validation = validate_manifest(manifest)
+    normalized_observation, findings = _validate_observation(observation)
+    if not validation["valid"]:
+        findings = list(validation["findings"]) + findings
+    if findings:
+        return _receipt_validation(None, findings)
+
+    normalized_manifest = validation["normalized_manifest"]
+    decision = evaluate_manifest(normalized_manifest)
+    result = normalized_observation["result"]
+    findings = []
+    if decision["decision"] == "reject" and result == "completed":
+        findings.append(_finding("result", "rejected-task-completed", "a policy-rejected task cannot produce a completed receipt"))
+
+    declared_actions = set(normalized_manifest["actions"])
+    for action in sorted(set(normalized_observation["actions_observed"]) - declared_actions):
+        findings.append(_finding("actions_observed", "undeclared-action", f"observed action '{action}' was not declared"))
+
+    scopes = normalized_manifest["write_paths"]
+    for index, path in enumerate(normalized_observation["files_changed"]):
+        if not any(_under(path, scope) for scope in scopes):
+            findings.append(_finding(f"files_changed[{index}]", "changed-file-outside-scope", f"changed file '{path}' was not declared by the manifest"))
+
+    expected_repositories = {item["root"]: item for item in normalized_manifest["repositories"]}
+    observed_repositories = {item["root"]: item for item in normalized_observation["repositories"]}
+    for root in sorted(set(expected_repositories) - set(observed_repositories)):
+        findings.append(_finding("repositories", "missing-repository-observation", f"missing observation for repository '{root}'"))
+    for root in sorted(set(observed_repositories) - set(expected_repositories)):
+        findings.append(_finding("repositories", "unexpected-repository", f"unexpected observation repository '{root}'"))
+    for root in sorted(set(expected_repositories) & set(observed_repositories)):
+        if observed_repositories[root]["before_head"] != expected_repositories[root]["expected_head"]:
+            findings.append(_finding("repositories", "stale-before-head", f"repository '{root}' before_head does not match manifest expected_head"))
+    if result == "completed" and "git-commit" in normalized_observation["actions_observed"]:
+        if not any(item["before_head"] != item["after_head"] for item in normalized_observation["repositories"]):
+            findings.append(_finding("repositories", "commit-without-new-head", "completed git-commit must change at least one repository head"))
+
+    evidence = {item["kind"]: item for item in normalized_observation["evidence"]}
+    if result == "completed":
+        required = set(normalized_manifest["evidence_required"])
+        if decision["decision"] == "operator-required":
+            required.add("operator-approval")
+        for kind in sorted(required):
+            item = evidence.get(kind)
+            if item is None:
+                findings.append(_finding("evidence", "missing-evidence", f"missing required evidence '{kind}'"))
+            elif item["status"] != "pass":
+                findings.append(_finding("evidence", "failed-evidence", f"required evidence '{kind}' has status '{item['status']}'"))
+
+    if findings:
+        return _receipt_validation(None, findings)
+    body = {
+        "schema": RECEIPT_SCHEMA,
+        "advisory": True,
+        "manifest_sha256": validation["manifest_sha256"],
+        "policy": decision["policy"],
+        "policy_decision": decision["decision"],
+        "agent": normalized_manifest["agent"],
+        "result": result,
+        "repositories": normalized_observation["repositories"],
+        "files_changed": normalized_observation["files_changed"],
+        "actions_observed": normalized_observation["actions_observed"],
+        "evidence": normalized_observation["evidence"],
+    }
+    body["receipt_sha256"] = hashlib.sha256(_canonical_json(body).encode("utf-8")).hexdigest()
+    return _receipt_validation(body, [])
+
+
+def _receipt_validation(receipt, findings):
+    return {
+        "schema": RECEIPT_VALIDATION_SCHEMA,
+        "valid": not findings,
+        "advisory": True,
+        "receipt": receipt,
+        "findings": _unique_issues(findings),
     }
