@@ -205,6 +205,16 @@ def build_approval_challenge(manifest, nonce):
     return _loom_approval.build_approval_challenge(manifest, nonce)
 
 
+def build_approval_request(manifest, challenge):
+    """Build a closed approval envelope for an operator-controlled issuer."""
+    return _loom_approval.build_approval_request(manifest, challenge)
+
+
+def validate_approval_request(request):
+    """Validate an approval envelope at the operator issuer boundary."""
+    return _loom_approval.validate_approval_request(request)
+
+
 def verify_operator_approval(manifest, challenge, approval):
     """Verify a signed approval against the pinned operator public key."""
     return _loom_approval.verify_operator_approval(manifest, challenge, approval)

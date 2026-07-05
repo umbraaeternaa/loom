@@ -14,6 +14,8 @@ import loom_gate
 
 CHALLENGE_SCHEMA = "loom-gate-approval-challenge/v1"
 CHALLENGE_VALIDATION_SCHEMA = "loom-gate-approval-challenge-validation/v1"
+REQUEST_SCHEMA = "loom-gate-approval-request/v1"
+REQUEST_VALIDATION_SCHEMA = "loom-gate-approval-request-validation/v1"
 APPROVAL_SCHEMA = "loom-gate-operator-approval/v1"
 APPROVAL_VALIDATION_SCHEMA = "loom-gate-operator-approval-validation/v1"
 ALGORITHM = "rsa-pkcs1v15-sha256"
@@ -40,6 +42,10 @@ def _approval_result(evidence, approval_sha256, findings):
     return {"schema": APPROVAL_VALIDATION_SCHEMA, "valid": not findings, "advisory": True, "evidence": evidence if not findings else None, "approval_sha256": approval_sha256 if not findings else None, "findings": loom_gate._unique_issues(findings)}
 
 
+def _request_result(request, findings):
+    return {"schema": REQUEST_VALIDATION_SCHEMA, "valid": not findings, "advisory": True, "request": request if not findings else None, "findings": loom_gate._unique_issues(findings)}
+
+
 def build_approval_challenge(manifest, nonce):
     """Bind an operator-required manifest to a host-generated 256-bit nonce."""
     validation = loom_gate.validate_manifest(manifest)
@@ -60,6 +66,53 @@ def build_approval_challenge(manifest, nonce):
     }
     body["challenge_sha256"] = hashlib.sha256(_canonical(body).encode("utf-8")).hexdigest()
     return _challenge_result(body, [])
+
+
+def build_approval_request(manifest, challenge):
+    """Build the closed, human-reviewable envelope sent to an operator issuer."""
+    validation = loom_gate.validate_manifest(manifest)
+    findings = list(validation["findings"])
+    decision = loom_gate.evaluate_manifest(manifest)
+    if validation["valid"] and decision["decision"] != "operator-required":
+        findings.append(_finding("manifest", "approval-not-required", "manifest policy decision must be operator-required"))
+    if not isinstance(challenge, dict):
+        findings.append(_finding("challenge", "expected-object", "challenge must be an object"))
+    elif validation["valid"]:
+        rebuilt = build_approval_challenge(manifest, challenge.get("nonce"))
+        if not rebuilt["valid"]:
+            findings.extend(rebuilt["findings"])
+        elif challenge != rebuilt["challenge"]:
+            findings.append(_finding("challenge", "challenge-mismatch", "challenge does not match manifest and nonce"))
+    if findings:
+        return _request_result(None, findings)
+    body = {
+        "schema": REQUEST_SCHEMA,
+        "manifest": validation["normalized_manifest"],
+        "challenge": challenge,
+        "policy_reasons": decision["reasons"],
+    }
+    body["request_sha256"] = hashlib.sha256(_canonical(body).encode("utf-8")).hexdigest()
+    return _request_result(body, [])
+
+
+def validate_approval_request(request):
+    """Rebuild and verify an approval envelope at the issuer boundary."""
+    if not isinstance(request, dict):
+        return _request_result(None, [_finding("request", "expected-object", "approval request must be an object")])
+    required = {"schema", "manifest", "challenge", "policy_reasons", "request_sha256"}
+    findings = []
+    for field in sorted(set(request) - required):
+        findings.append(_finding("request." + field, "unknown-field", f"unknown approval request field '{field}'"))
+    for field in sorted(required - set(request)):
+        findings.append(_finding("request." + field, "missing-field", f"missing approval request field '{field}'"))
+    if findings:
+        return _request_result(None, findings)
+    rebuilt = build_approval_request(request["manifest"], request["challenge"])
+    if not rebuilt["valid"]:
+        return _request_result(None, rebuilt["findings"])
+    if request != rebuilt["request"]:
+        return _request_result(None, [_finding("request", "request-mismatch", "approval request does not match its manifest, challenge, policy, and hash")])
+    return rebuilt
 
 
 def _validate_public_key(value):

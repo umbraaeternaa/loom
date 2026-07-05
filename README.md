@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 386 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 387 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 386/386 citadel checks
+PASS — 387/387 citadel checks
 ```
 
 ## The idea in one screen
@@ -196,11 +196,18 @@ the public `main` branch. It emits `syntax`, `citadel`, `docs-parity`, `fuzz`,
 and `git-sync` evidence without executing repository code locally. See
 [`docs/gate_ci_evidence_v1.md`](docs/gate_ci_evidence_v1.md).
 
-`loom.build_approval_challenge(...)`, `verify_operator_approval(...)`, and
+`loom.build_approval_challenge(...)`, `build_approval_request(...)`,
+`validate_approval_request(...)`,
+`verify_operator_approval(...)`, and
 `consume_operator_approval(...)` define a signed, manifest-bound operator
 capability with atomic one-use replay protection. LOOM never receives the
 private signing key. See
 [`docs/gate_operator_approval_v1.md`](docs/gate_operator_approval_v1.md).
+
+`build_approval_request(...)` is the deterministic bridge to a separate issuer:
+it carries the normalized manifest, exact challenge, policy reasons, and a
+SHA-256 over the complete review envelope. It signs nothing and holds no key.
+The issuer validates the envelope again before displaying or signing it.
 
 `loom.build_consumed_receipt(...)` is the closed approval-to-receipt path: it
 rejects hand-written approval evidence, preflights every receipt requirement,

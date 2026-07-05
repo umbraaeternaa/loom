@@ -1688,6 +1688,34 @@ def main():
         challenge = challenge_result["challenge"]
         approval_impl = getattr(_loom, "_loom_approval", _loom)
         canonical = getattr(approval_impl, "_canonical", getattr(_loom, "_gate_canonical", None))
+        approval_request = _loom.build_approval_request(approval_manifest, challenge)
+        reordered_manifest = {key: approval_manifest[key] for key in reversed(list(approval_manifest))}
+        reordered_request = _loom.build_approval_request(reordered_manifest, challenge)
+        tampered_challenge = json.loads(json.dumps(challenge)); tampered_challenge["nonce"] = "2" * 64
+        rejected_request = _loom.build_approval_request(approval_manifest, tampered_challenge)
+        unnecessary_request = _loom.build_approval_request(ci_manifest, challenge)
+        request_body = dict(approval_request["request"]); request_hash = request_body.pop("request_sha256")
+        validated_request = _loom.validate_approval_request(approval_request["request"])
+        tampered_request = json.loads(json.dumps(approval_request["request"])); tampered_request["policy_reasons"] = []
+        invalid_request = _loom.validate_approval_request(tampered_request)
+        extra_request = json.loads(json.dumps(approval_request["request"])); extra_request["approval"] = "+"
+        invalid_extra_request = _loom.validate_approval_request(extra_request)
+        request_contract_ok = (
+            approval_request["valid"] is True and approval_request == reordered_request
+            and validated_request == approval_request
+            and approval_request["request"]["schema"] == "loom-gate-approval-request/v1"
+            and approval_request["request"]["manifest"] == _loom.validate_manifest(approval_manifest)["normalized_manifest"]
+            and approval_request["request"]["challenge"] == challenge
+            and approval_request["request"]["policy_reasons"] == _loom.evaluate_manifest(approval_manifest)["reasons"]
+            and request_hash == hashlib.sha256(canonical(request_body).encode()).hexdigest()
+            and rejected_request["valid"] is False and rejected_request["request"] is None
+            and any(item["code"] == "challenge-mismatch" for item in rejected_request["findings"])
+            and unnecessary_request["valid"] is False and unnecessary_request["request"] is None
+            and invalid_request["valid"] is False and any(item["code"] == "request-mismatch" for item in invalid_request["findings"])
+            and invalid_extra_request["valid"] is False and any(item["code"] == "unknown-field" for item in invalid_extra_request["findings"])
+        )
+        ok += request_contract_ok
+        print(f"  {'ok  ' if request_contract_ok else 'FAIL'} gate: operator approval request v1")
         key_hash = hashlib.sha256(canonical(test_key).encode()).hexdigest()
         approval = {"schema": "loom-gate-operator-approval/v1", "challenge_sha256": challenge["challenge_sha256"], "manifest_sha256": challenge["manifest_sha256"], "approver": "operator", "decision": "approve", "key_sha256": key_hash}
         message = canonical(approval).encode(); digest_info = bytes.fromhex("3031300d060960864801650304020105000420") + hashlib.sha256(message).digest()
@@ -1778,7 +1806,7 @@ def main():
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "386-consumed-receipt-v1")' in play
+            and 'bundleUrl.searchParams.set("v", "387-approval-request-v1")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -1840,7 +1868,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 83   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-consumption contracts, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 84   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption contracts, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

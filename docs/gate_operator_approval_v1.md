@@ -8,6 +8,23 @@ nonce as 64 lowercase hexadecimal characters. The resulting
 `loom-gate-approval-challenge/v1` binds the manifest SHA-256, policy, decision,
 and nonce under its own `challenge_sha256`.
 
+`loom.build_approval_request(manifest, challenge)` builds the closed
+`loom-gate-approval-request/v1` envelope that crosses into an external issuer.
+It contains the normalized manifest, the exact rebuilt challenge, all policy
+reasons shown to the operator, and `request_sha256` over the complete preceding
+body. A reordered equivalent manifest produces the same request; a changed
+path, action, repository head, nonce, challenge hash, or policy reason cannot
+silently preserve its identity. Invalid, rejected, or approval-free manifests
+receive no request.
+
+The issuer must display the request fields from this envelope before asking for
+operator confirmation. The request is not an approval and carries no signing
+authority; agents may construct it without gaining the ability to approve it.
+Before display or signing, the issuer calls
+`loom.validate_approval_request(request)`, which rejects unknown/missing fields
+and rebuilds the manifest, challenge, policy reasons, and request hash. A
+request that was mutated after construction therefore fails closed.
+
 An operator issuer outside LOOM signs a closed
 `loom-gate-operator-approval/v1` body with RSA-2048-or-stronger PKCS#1 v1.5 and
 SHA-256. The body binds:

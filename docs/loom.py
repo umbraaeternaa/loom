@@ -2823,6 +2823,7 @@ def collect_ci_evidence(manifest, observation, run_id):
 
 
 GATE_CHALLENGE_SCHEMA = "loom-gate-approval-challenge/v1"; GATE_CHALLENGE_VALIDATION_SCHEMA = "loom-gate-approval-challenge-validation/v1"
+GATE_REQUEST_SCHEMA = "loom-gate-approval-request/v1"; GATE_REQUEST_VALIDATION_SCHEMA = "loom-gate-approval-request-validation/v1"
 GATE_APPROVAL_SCHEMA = "loom-gate-operator-approval/v1"; GATE_APPROVAL_VALIDATION_SCHEMA = "loom-gate-operator-approval-validation/v1"
 _GATE_APPROVAL_ALGORITHM = "rsa-pkcs1v15-sha256"; _GATE_NONCE = re.compile(r"^[0-9a-f]{64}$"); _GATE_HEX = re.compile(r"^[0-9a-f]+$")
 _GATE_KEY_PATH = Path(_GATE_MEMORY) / "gate" / "operator_public_key.json"; _GATE_LEDGER_PATH = Path(_GATE_MEMORY) / "gate" / "operator_approvals.sqlite3"
@@ -2831,6 +2832,7 @@ _GATE_DIGEST_INFO = bytes.fromhex("3031300d060960864801650304020105000420")
 
 def _gate_canonical(value): return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 def _gate_challenge_result(challenge, findings): return {"schema": GATE_CHALLENGE_VALIDATION_SCHEMA, "valid": not findings, "advisory": True, "challenge": challenge if not findings else None, "findings": _gate_unique(findings)}
+def _gate_request_result(request, findings): return {"schema": GATE_REQUEST_VALIDATION_SCHEMA, "valid": not findings, "advisory": True, "request": request if not findings else None, "findings": _gate_unique(findings)}
 def _gate_approval_result(evidence, approval_sha, findings): return {"schema": GATE_APPROVAL_VALIDATION_SCHEMA, "valid": not findings, "advisory": True, "evidence": evidence if not findings else None, "approval_sha256": approval_sha if not findings else None, "findings": _gate_unique(findings)}
 
 
@@ -2843,6 +2845,32 @@ def build_approval_challenge(manifest, nonce):
     body = {"schema": GATE_CHALLENGE_SCHEMA, "manifest_sha256": validation["manifest_sha256"], "policy": decision["policy"], "policy_decision": decision["decision"], "nonce": nonce}
     body["challenge_sha256"] = hashlib.sha256(_gate_canonical(body).encode()).hexdigest()
     return _gate_challenge_result(body, [])
+
+
+def build_approval_request(manifest, challenge):
+    validation = validate_manifest(manifest); findings = list(validation["findings"]); decision = evaluate_manifest(manifest)
+    if validation["valid"] and decision["decision"] != "operator-required": findings.append(_gate_finding("manifest", "approval-not-required", "manifest policy decision must be operator-required"))
+    if not isinstance(challenge, dict): findings.append(_gate_finding("challenge", "expected-object", "challenge must be an object"))
+    elif validation["valid"]:
+        rebuilt = build_approval_challenge(manifest, challenge.get("nonce"))
+        if not rebuilt["valid"]: findings.extend(rebuilt["findings"])
+        elif challenge != rebuilt["challenge"]: findings.append(_gate_finding("challenge", "challenge-mismatch", "challenge does not match manifest and nonce"))
+    if findings: return _gate_request_result(None, findings)
+    body = {"schema": GATE_REQUEST_SCHEMA, "manifest": validation["normalized_manifest"], "challenge": challenge, "policy_reasons": decision["reasons"]}
+    body["request_sha256"] = hashlib.sha256(_gate_canonical(body).encode()).hexdigest()
+    return _gate_request_result(body, [])
+
+
+def validate_approval_request(request):
+    if not isinstance(request, dict): return _gate_request_result(None, [_gate_finding("request", "expected-object", "approval request must be an object")])
+    required = {"schema", "manifest", "challenge", "policy_reasons", "request_sha256"}; findings = []
+    for field in sorted(set(request) - required): findings.append(_gate_finding("request." + field, "unknown-field", f"unknown approval request field '{field}'"))
+    for field in sorted(required - set(request)): findings.append(_gate_finding("request." + field, "missing-field", f"missing approval request field '{field}'"))
+    if findings: return _gate_request_result(None, findings)
+    rebuilt = build_approval_request(request["manifest"], request["challenge"])
+    if not rebuilt["valid"]: return _gate_request_result(None, rebuilt["findings"])
+    if request != rebuilt["request"]: return _gate_request_result(None, [_gate_finding("request", "request-mismatch", "approval request does not match its manifest, challenge, policy, and hash")])
+    return rebuilt
 
 
 def _gate_validate_public_key(value):
