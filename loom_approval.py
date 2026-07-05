@@ -154,6 +154,7 @@ def _consume_once(approval_sha, ledger_path):
     if ledger_path.exists() and ledger_path.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH): raise ValueError("approval ledger must not be group/world-writable")
     connection = sqlite3.connect(str(ledger_path), timeout=5, isolation_level=None)
     try:
+        ledger_path.chmod(0o600)
         connection.execute("PRAGMA trusted_schema=OFF")
         connection.execute("BEGIN IMMEDIATE")
         connection.execute("CREATE TABLE IF NOT EXISTS spent (approval_sha256 TEXT PRIMARY KEY CHECK(length(approval_sha256)=64))")
@@ -163,7 +164,6 @@ def _consume_once(approval_sha, ledger_path):
         connection.execute("COMMIT")
     finally:
         connection.close()
-    ledger_path.chmod(0o600)
 
 
 def consume_operator_approval(manifest, challenge, approval):
@@ -173,3 +173,35 @@ def consume_operator_approval(manifest, challenge, approval):
     try: _consume_once(verified["approval_sha256"], _LEDGER_PATH)
     except (OSError, sqlite3.Error, ValueError) as error: return _approval_result(None, None, [_finding("ledger", "approval-consume-failed", str(error))])
     return verified
+
+
+def _build_consumed_receipt(manifest, observation, challenge, approval, public_key, ledger_path):
+    """Preflight a receipt, then atomically consume and inject signed approval evidence."""
+    normalized, findings = loom_gate._validate_observation(observation)
+    if findings:
+        return loom_gate._receipt_validation(None, findings)
+    if normalized["result"] != "completed":
+        return loom_gate._receipt_validation(None, [_finding("result", "completed-required", "signed approval consumption requires a completed observation")])
+    if any(item["kind"] == "operator-approval" for item in normalized["evidence"]):
+        return loom_gate._receipt_validation(None, [_finding("evidence", "supplied-operator-approval", "operator approval evidence must come from signed one-use consumption")])
+
+    verified = _verify(manifest, challenge, approval, public_key)
+    if not verified["valid"]:
+        return loom_gate._receipt_validation(None, verified["findings"])
+    prepared = dict(normalized)
+    prepared["evidence"] = sorted(normalized["evidence"] + verified["evidence"], key=lambda item: item["kind"])
+    preflight = loom_gate.build_receipt(manifest, prepared)
+    if not preflight["valid"]:
+        return preflight
+    try:
+        _consume_once(verified["approval_sha256"], ledger_path)
+    except (OSError, sqlite3.Error, ValueError) as error:
+        return loom_gate._receipt_validation(None, [_finding("ledger", "approval-consume-failed", str(error))])
+    return preflight
+
+
+def build_consumed_receipt(manifest, observation, challenge, approval):
+    """Build a receipt whose operator evidence can only come from one-use consumption."""
+    try: public_key = _load_public_key()
+    except ValueError as error: return loom_gate._receipt_validation(None, [_finding("public_key", "public-key-unavailable", str(error))])
+    return _build_consumed_receipt(manifest, observation, challenge, approval, public_key, _LEDGER_PATH)

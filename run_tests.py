@@ -1702,6 +1702,7 @@ def main():
             ledger = Path(td) / "spent.sqlite3"
             consume_fn = getattr(approval_impl, "_consume_once", getattr(_loom, "_gate_consume_once", None))
             consume_fn(verified["approval_sha256"], ledger)
+            ledger_mode = ledger.stat().st_mode & 0o777
             replay_rejected = False
             try: consume_fn(verified["approval_sha256"], ledger)
             except ValueError: replay_rejected = True
@@ -1710,12 +1711,40 @@ def main():
             and challenge["schema"] == "loom-gate-approval-challenge/v1" and len(challenge["challenge_sha256"]) == 64
             and verified["valid"] is True and verified["evidence"][0]["kind"] == "operator-approval"
             and rejected["valid"] is False and any(item["code"] in {"manifest-mismatch", "invalid-signature"} for item in rejected["findings"])
-            and replay_rejected
+            and replay_rejected and ledger_mode == 0o600
             and _loom.build_approval_challenge(approval_manifest, "short")["valid"] is False
             and _loom.build_approval_challenge(ci_manifest, "1" * 64)["valid"] is False
         )
         ok += approval_contract_ok
         print(f"  {'ok  ' if approval_contract_ok else 'FAIL'} gate: signed one-use operator approval v1")
+        integrated_observation = {
+            "schema": "loom-gate-observation/v1", "result": "completed",
+            "repositories": [{"root": "/Users/macbook/Projects/loom", "before_head": "4281c7b", "after_head": "f" * 40}],
+            "files_changed": ["/Users/macbook/Projects/loom/loom_approval.py"], "actions_observed": ["read", "write", "test"],
+            "evidence": [{"kind": kind, "status": "pass", "detail": kind + " passed"} for kind in ("syntax", "citadel", "docs-parity", "git-clean")],
+        }
+        build_consumed = getattr(approval_impl, "_build_consumed_receipt", getattr(_loom, "_gate_build_consumed_receipt", None))
+        with tempfile.TemporaryDirectory() as td:
+            ledger = Path(td) / "spent.sqlite3"
+            bad = json.loads(json.dumps(integrated_observation)); bad["evidence"] = [item for item in bad["evidence"] if item["kind"] != "citadel"]
+            invalid_preflight = build_consumed(approval_manifest, bad, challenge, approval, test_key, ledger)
+            ledger_absent = not ledger.exists()
+            integrated_receipt = build_consumed(approval_manifest, integrated_observation, challenge, approval, test_key, ledger)
+            replayed_receipt = build_consumed(approval_manifest, integrated_observation, challenge, approval, test_key, ledger)
+        with tempfile.TemporaryDirectory() as td:
+            manual_ledger = Path(td) / "spent.sqlite3"; manual = json.loads(json.dumps(integrated_observation))
+            manual["evidence"].append({"kind": "operator-approval", "status": "pass", "detail": "caller says approved"})
+            manual_receipt = build_consumed(approval_manifest, manual, challenge, approval, test_key, manual_ledger)
+            manual_absent = not manual_ledger.exists()
+        integrated_ok = (
+            not invalid_preflight["valid"] and ledger_absent and any(x["code"] == "missing-evidence" for x in invalid_preflight["findings"])
+            and integrated_receipt["valid"] and integrated_receipt["receipt"]["policy_decision"] == "operator-required"
+            and next(x for x in integrated_receipt["receipt"]["evidence"] if x["kind"] == "operator-approval")["detail"].startswith("signed one-use operator approval ")
+            and not replayed_receipt["valid"] and any(x["code"] == "approval-consume-failed" for x in replayed_receipt["findings"])
+            and not manual_receipt["valid"] and manual_absent and any(x["code"] == "supplied-operator-approval" for x in manual_receipt["findings"])
+        )
+        ok += integrated_ok
+        print(f"  {'ok  ' if integrated_ok else 'FAIL'} gate: consumed approval receipt integration v1")
     except Exception as e:
         print(f"  FAIL Gate operator approval v1 contract: {e}")
     try:                                               # CLI lives behind a stable facade in development builds
@@ -1749,7 +1778,7 @@ def main():
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "385-pyodide-cache-v1")' in play
+            and 'bundleUrl.searchParams.set("v", "386-consumed-receipt-v1")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -1811,7 +1840,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 82   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval contracts, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 83   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-consumption contracts, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

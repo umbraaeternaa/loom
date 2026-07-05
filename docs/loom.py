@@ -2926,6 +2926,7 @@ def _gate_consume_once(approval_sha, ledger_path):
     try:
         connection = sqlite3.connect(str(ledger_path), timeout=5, isolation_level=None)
         try:
+            ledger_path.chmod(0o600)
             connection.execute("PRAGMA trusted_schema=OFF"); connection.execute("BEGIN IMMEDIATE")
             connection.execute("CREATE TABLE IF NOT EXISTS spent (approval_sha256 TEXT PRIMARY KEY CHECK(length(approval_sha256)=64))")
             try: connection.execute("INSERT INTO spent(approval_sha256) VALUES (?)", (approval_sha,))
@@ -2934,7 +2935,6 @@ def _gate_consume_once(approval_sha, ledger_path):
         finally: connection.close()
     except sqlite3.Error as error:
         raise ValueError(f"approval ledger failed: {error}") from error
-    ledger_path.chmod(0o600)
 
 
 def consume_operator_approval(manifest, challenge, approval):
@@ -2943,6 +2943,27 @@ def consume_operator_approval(manifest, challenge, approval):
     try: _gate_consume_once(verified["approval_sha256"], _GATE_LEDGER_PATH)
     except (OSError, ValueError) as error: return _gate_approval_result(None, None, [_gate_finding("ledger", "approval-consume-failed", str(error))])
     return verified
+
+
+def _gate_build_consumed_receipt(manifest, observation, challenge, approval, public_key, ledger_path):
+    observed, findings = _gate_validate_observation(observation)
+    if findings: return _gate_receipt_result(None, findings)
+    if observed["result"] != "completed": return _gate_receipt_result(None, [_gate_finding("result", "completed-required", "signed approval consumption requires a completed observation")])
+    if any(item["kind"] == "operator-approval" for item in observed["evidence"]): return _gate_receipt_result(None, [_gate_finding("evidence", "supplied-operator-approval", "operator approval evidence must come from signed one-use consumption")])
+    verified = _gate_verify_approval(manifest, challenge, approval, public_key)
+    if not verified["valid"]: return _gate_receipt_result(None, verified["findings"])
+    prepared = dict(observed); prepared["evidence"] = sorted(observed["evidence"] + verified["evidence"], key=lambda item: item["kind"])
+    preflight = build_receipt(manifest, prepared)
+    if not preflight["valid"]: return preflight
+    try: _gate_consume_once(verified["approval_sha256"], ledger_path)
+    except (OSError, ValueError) as error: return _gate_receipt_result(None, [_gate_finding("ledger", "approval-consume-failed", str(error))])
+    return preflight
+
+
+def build_consumed_receipt(manifest, observation, challenge, approval):
+    try: key = _gate_load_operator_key()
+    except ValueError as error: return _gate_receipt_result(None, [_gate_finding("public_key", "public-key-unavailable", str(error))])
+    return _gate_build_consumed_receipt(manifest, observation, challenge, approval, key, _GATE_LEDGER_PATH)
 
 
 # ---- CLI + structured verdict: one checker truth for humans, Gate clients, and receipts. ----

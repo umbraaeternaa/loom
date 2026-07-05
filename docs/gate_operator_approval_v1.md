@@ -39,6 +39,13 @@ dashboard or enforcement host must accept operator approval only after a
 successful `consume_operator_approval` result, never directly from arbitrary
 observation JSON.
 
+`loom.build_consumed_receipt(manifest, observation, challenge, approval)` is
+the safe integrated path. It rejects caller-supplied `operator-approval`,
+verifies the signature, injects its own evidence, fully preflights receipt v1,
+and only then atomically consumes the token. Invalid observations or missing
+evidence do not create the ledger or spend the approval; a replay cannot return
+a receipt.
+
 The private-key issuer and operator UI are intentionally not provisioned by
 Codex. Creating the key inside the agent that seeks approval would collapse the
 trust boundary. Filesystem protection is still host-level policy, not a full OS

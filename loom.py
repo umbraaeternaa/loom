@@ -215,6 +215,11 @@ def consume_operator_approval(manifest, challenge, approval):
     return _loom_approval.consume_operator_approval(manifest, challenge, approval)
 
 
+def build_consumed_receipt(manifest, observation, challenge, approval):
+    """Build a receipt after atomically consuming its signed operator approval."""
+    return _loom_approval.build_consumed_receipt(manifest, observation, challenge, approval)
+
+
 def _cli(argv):
     return _loom_cli.cli(argv, _CLI_FRONTEND)
 
