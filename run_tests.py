@@ -1773,6 +1773,48 @@ def main():
         )
         ok += integrated_ok
         print(f"  {'ok  ' if integrated_ok else 'FAIL'} gate: consumed approval receipt integration v1")
+        claim_fn = getattr(approval_impl, "_claim_operator_approval", getattr(_loom, "_gate_claim_operator_approval", None))
+        finish_fn = getattr(approval_impl, "_finish_claimed_receipt", getattr(_loom, "_gate_finish_claimed_receipt", None))
+        with tempfile.TemporaryDirectory() as td:
+            claim_ledger = Path(td) / "spent.sqlite3"
+            claimed = claim_fn(approval_manifest, challenge, approval, test_key, claim_ledger)
+            duplicate_claim = claim_fn(approval_manifest, challenge, approval, test_key, claim_ledger)
+            forged_claim = json.loads(json.dumps(claimed["claim"])); forged_claim["claim_sha256"] = "0" * 64
+            forged_finish = finish_fn(approval_manifest, integrated_observation, challenge, approval, forged_claim, test_key, claim_ledger)
+            completed_finish = finish_fn(approval_manifest, integrated_observation, challenge, approval, claimed["claim"], test_key, claim_ledger)
+            repeated_finish = finish_fn(approval_manifest, integrated_observation, challenge, approval, claimed["claim"], test_key, claim_ledger)
+            consume_after_claim = False
+            try: consume_fn(verified["approval_sha256"], claim_ledger)
+            except ValueError: consume_after_claim = True
+            import sqlite3
+            with sqlite3.connect(claim_ledger) as connection:
+                completed_status = connection.execute("SELECT status FROM claims WHERE approval_sha256=?", (verified["approval_sha256"],)).fetchone()
+        failed_observation = json.loads(json.dumps(integrated_observation)); failed_observation["result"] = "failed"; failed_observation["evidence"] = []
+        with tempfile.TemporaryDirectory() as td:
+            failed_ledger = Path(td) / "spent.sqlite3"
+            failed_claim = claim_fn(approval_manifest, challenge, approval, test_key, failed_ledger)
+            failed_finish = finish_fn(approval_manifest, failed_observation, challenge, approval, failed_claim["claim"], test_key, failed_ledger)
+            repeated_failed = finish_fn(approval_manifest, failed_observation, challenge, approval, failed_claim["claim"], test_key, failed_ledger)
+            with sqlite3.connect(failed_ledger) as connection:
+                failed_status = connection.execute("SELECT status FROM claims WHERE approval_sha256=?", (verified["approval_sha256"],)).fetchone()
+        with tempfile.TemporaryDirectory() as td:
+            spent_ledger = Path(td) / "spent.sqlite3"
+            consume_fn(verified["approval_sha256"], spent_ledger)
+            claim_after_consume = claim_fn(approval_manifest, challenge, approval, test_key, spent_ledger)
+        claimed_execution_ok = (
+            claimed["valid"] and claimed["advisory"] is False and claimed["claim"]["status"] == "claimed"
+            and len(claimed["claim"]["claim_sha256"]) == 64
+            and not duplicate_claim["valid"] and any(x["code"] == "approval-claim-failed" for x in duplicate_claim["findings"])
+            and not forged_finish["valid"] and any(x["code"] == "claim-mismatch" for x in forged_finish["findings"])
+            and completed_finish["valid"] and completed_finish["receipt"]["result"] == "completed"
+            and completed_status == ("completed",) and consume_after_claim
+            and not repeated_finish["valid"] and any(x["code"] == "approval-finalize-failed" for x in repeated_finish["findings"])
+            and failed_finish["valid"] and failed_finish["receipt"]["result"] == "failed" and failed_status == ("failed",)
+            and not repeated_failed["valid"] and any(x["code"] == "approval-finalize-failed" for x in repeated_failed["findings"])
+            and not claim_after_consume["valid"] and any(x["code"] == "approval-claim-failed" for x in claim_after_consume["findings"])
+        )
+        ok += claimed_execution_ok
+        print(f"  {'ok  ' if claimed_execution_ok else 'FAIL'} gate: claimed execution lifecycle v1")
     except Exception as e:
         print(f"  FAIL Gate operator approval v1 contract: {e}")
     try:                                               # CLI lives behind a stable facade in development builds
@@ -1806,7 +1848,7 @@ def main():
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "387-approval-request-v1")' in play
+            and 'bundleUrl.searchParams.set("v", "388-claimed-execution-v1")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -1868,7 +1910,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 84   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption contracts, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 85   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution contracts, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

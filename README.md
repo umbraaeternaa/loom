@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 387 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 388 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 387/387 citadel checks
+PASS — 388/388 citadel checks
 ```
 
 ## The idea in one screen
@@ -212,6 +212,12 @@ The issuer validates the envelope again before displaying or signing it.
 `loom.build_consumed_receipt(...)` is the closed approval-to-receipt path: it
 rejects hand-written approval evidence, preflights every receipt requirement,
 and consumes the signed token only after that preflight succeeds.
+
+Trusted executors that must block an action *before it starts* use the two-phase
+path: `loom.claim_operator_approval(...)` atomically claims the signed token,
+then `loom.finish_claimed_receipt(...)` closes that exact claim once as
+`completed` or `failed`. A claim cannot be consumed through the older path,
+replayed, rebound to another manifest, or finalized twice.
 
 The same verified program runs in the interpreter, compiles to **Python** and **JavaScript**,
 and lowers tagged values, closures, structured data, and effects to **WebAssembly** — one checked source, many platforms. LOOM integers have one portable contract on every backend: signed i31 values (`-2^30..2^30-1`) with deterministic modulo-`2^31` wraparound; out-of-range literals are rejected before execution.

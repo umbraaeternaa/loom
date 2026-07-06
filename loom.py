@@ -225,6 +225,16 @@ def consume_operator_approval(manifest, challenge, approval):
     return _loom_approval.consume_operator_approval(manifest, challenge, approval)
 
 
+def claim_operator_approval(manifest, challenge, approval):
+    """Claim a signed approval before a trusted host starts its action."""
+    return _loom_approval.claim_operator_approval(manifest, challenge, approval)
+
+
+def finish_claimed_receipt(manifest, observation, challenge, approval, claim):
+    """Finalize a claimed action exactly once as completed or failed."""
+    return _loom_approval.finish_claimed_receipt(manifest, observation, challenge, approval, claim)
+
+
 def build_consumed_receipt(manifest, observation, challenge, approval):
     """Build a receipt after atomically consuming its signed operator approval."""
     return _loom_approval.build_consumed_receipt(manifest, observation, challenge, approval)

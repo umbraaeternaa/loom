@@ -63,6 +63,29 @@ and only then atomically consumes the token. Invalid observations or missing
 evidence do not create the ledger or spend the approval; a replay cannot return
 a receipt.
 
+## Pre-execution claim lifecycle
+
+The integrated receipt path above is retained for compatibility, but a trusted
+host that must stop an action before execution uses two phases:
+
+1. `loom.claim_operator_approval(manifest, challenge, approval)` verifies the
+   signature and atomically records a manifest/challenge-bound `claimed` row.
+2. Only after that succeeds may the trusted host start the declared action.
+3. `loom.finish_claimed_receipt(...)` preflights the terminal observation and
+   atomically changes the same row to exactly `completed` or `failed`.
+
+The claim has a canonical SHA-256 identity. A forged or rebound claim, an
+approval already spent through the compatibility path, a second claim, and a
+second finalization all fail closed. `blocked` is not a valid terminal state
+after execution has been claimed: if the host attempted the action and it did
+not complete, it must record `failed`.
+
+This lifecycle closes the ordering gap in which an action could run before its
+one-use approval was atomically reserved. It still does not by itself prevent a
+host process from bypassing LOOM and invoking a tool directly; real enforcement
+also requires an executor whose underlying credential or capability is not
+available to the agent process.
+
 The private-key issuer and operator UI are intentionally not provisioned by
 Codex. Creating the key inside the agent that seeks approval would collapse the
 trust boundary. Filesystem protection is still host-level policy, not a full OS

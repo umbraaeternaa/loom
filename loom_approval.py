@@ -18,6 +18,8 @@ REQUEST_SCHEMA = "loom-gate-approval-request/v1"
 REQUEST_VALIDATION_SCHEMA = "loom-gate-approval-request-validation/v1"
 APPROVAL_SCHEMA = "loom-gate-operator-approval/v1"
 APPROVAL_VALIDATION_SCHEMA = "loom-gate-operator-approval-validation/v1"
+CLAIM_SCHEMA = "loom-gate-approval-claim/v1"
+CLAIM_VALIDATION_SCHEMA = "loom-gate-approval-claim-validation/v1"
 ALGORITHM = "rsa-pkcs1v15-sha256"
 _NONCE = re.compile(r"^[0-9a-f]{64}$")
 _HEX = re.compile(r"^[0-9a-f]+$")
@@ -40,6 +42,10 @@ def _challenge_result(challenge, findings):
 
 def _approval_result(evidence, approval_sha256, findings):
     return {"schema": APPROVAL_VALIDATION_SCHEMA, "valid": not findings, "advisory": True, "evidence": evidence if not findings else None, "approval_sha256": approval_sha256 if not findings else None, "findings": loom_gate._unique_issues(findings)}
+
+
+def _claim_result(claim, findings):
+    return {"schema": CLAIM_VALIDATION_SCHEMA, "valid": not findings, "advisory": False, "claim": claim if not findings else None, "findings": loom_gate._unique_issues(findings)}
 
 
 def _request_result(request, findings):
@@ -211,12 +217,114 @@ def _consume_once(approval_sha, ledger_path):
         connection.execute("PRAGMA trusted_schema=OFF")
         connection.execute("BEGIN IMMEDIATE")
         connection.execute("CREATE TABLE IF NOT EXISTS spent (approval_sha256 TEXT PRIMARY KEY CHECK(length(approval_sha256)=64))")
+        connection.execute("CREATE TABLE IF NOT EXISTS claims (approval_sha256 TEXT PRIMARY KEY CHECK(length(approval_sha256)=64), manifest_sha256 TEXT NOT NULL CHECK(length(manifest_sha256)=64), challenge_sha256 TEXT NOT NULL CHECK(length(challenge_sha256)=64), claim_sha256 TEXT UNIQUE NOT NULL CHECK(length(claim_sha256)=64), status TEXT NOT NULL CHECK(status IN ('claimed','completed','failed')))")
+        if connection.execute("SELECT 1 FROM claims WHERE approval_sha256=?", (approval_sha,)).fetchone():
+            connection.execute("ROLLBACK"); raise ValueError("operator approval was already claimed")
         try: connection.execute("INSERT INTO spent(approval_sha256) VALUES (?)", (approval_sha,))
         except sqlite3.IntegrityError as error:
             connection.execute("ROLLBACK"); raise ValueError("operator approval was already consumed") from error
         connection.execute("COMMIT")
     finally:
         connection.close()
+
+
+def _claim_once(verified, challenge, ledger_path):
+    approval_sha = verified["approval_sha256"]
+    body = {
+        "schema": CLAIM_SCHEMA,
+        "approval_sha256": approval_sha,
+        "manifest_sha256": challenge["manifest_sha256"],
+        "challenge_sha256": challenge["challenge_sha256"],
+        "status": "claimed",
+    }
+    body["claim_sha256"] = hashlib.sha256(_canonical(body).encode("utf-8")).hexdigest()
+    ledger_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    ledger_path.parent.chmod(0o700)
+    if ledger_path.is_symlink(): raise ValueError("approval ledger path must not be a symlink")
+    if ledger_path.exists() and ledger_path.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH): raise ValueError("approval ledger must not be group/world-writable")
+    connection = sqlite3.connect(str(ledger_path), timeout=5, isolation_level=None)
+    try:
+        ledger_path.chmod(0o600)
+        connection.execute("PRAGMA trusted_schema=OFF")
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute("CREATE TABLE IF NOT EXISTS spent (approval_sha256 TEXT PRIMARY KEY CHECK(length(approval_sha256)=64))")
+        connection.execute("CREATE TABLE IF NOT EXISTS claims (approval_sha256 TEXT PRIMARY KEY CHECK(length(approval_sha256)=64), manifest_sha256 TEXT NOT NULL CHECK(length(manifest_sha256)=64), challenge_sha256 TEXT NOT NULL CHECK(length(challenge_sha256)=64), claim_sha256 TEXT UNIQUE NOT NULL CHECK(length(claim_sha256)=64), status TEXT NOT NULL CHECK(status IN ('claimed','completed','failed')))")
+        if connection.execute("SELECT 1 FROM spent WHERE approval_sha256=?", (approval_sha,)).fetchone():
+            connection.execute("ROLLBACK"); raise ValueError("operator approval was already consumed")
+        try:
+            connection.execute("INSERT INTO claims VALUES (?,?,?,?,?)", (approval_sha, body["manifest_sha256"], body["challenge_sha256"], body["claim_sha256"], "claimed"))
+        except sqlite3.IntegrityError as error:
+            connection.execute("ROLLBACK"); raise ValueError("operator approval was already claimed") from error
+        connection.execute("COMMIT")
+    finally:
+        connection.close()
+    return body
+
+
+def _claim_operator_approval(manifest, challenge, approval, public_key, ledger_path):
+    verified = _verify(manifest, challenge, approval, public_key)
+    if not verified["valid"]: return _claim_result(None, verified["findings"])
+    try: claim = _claim_once(verified, challenge, ledger_path)
+    except (OSError, sqlite3.Error, ValueError) as error: return _claim_result(None, [_finding("ledger", "approval-claim-failed", str(error))])
+    return _claim_result(claim, [])
+
+
+def claim_operator_approval(manifest, challenge, approval):
+    """Claim a signed approval before a trusted host starts the bound action."""
+    try: public_key = _load_public_key()
+    except ValueError as error: return _claim_result(None, [_finding("public_key", "public-key-unavailable", str(error))])
+    return _claim_operator_approval(manifest, challenge, approval, public_key, _LEDGER_PATH)
+
+
+def _finish_claimed_receipt(manifest, observation, challenge, approval, claim, public_key, ledger_path):
+    normalized, findings = loom_gate._validate_observation(observation)
+    if findings: return loom_gate._receipt_validation(None, findings)
+    if normalized["result"] not in {"completed", "failed"}:
+        return loom_gate._receipt_validation(None, [_finding("result", "terminal-result-required", "claimed execution must finish as completed or failed")])
+    if any(item["kind"] == "operator-approval" for item in normalized["evidence"]):
+        return loom_gate._receipt_validation(None, [_finding("evidence", "supplied-operator-approval", "operator approval evidence must come from the claimed execution")])
+    verified = _verify(manifest, challenge, approval, public_key)
+    if not verified["valid"]: return loom_gate._receipt_validation(None, verified["findings"])
+    expected = {
+        "schema": CLAIM_SCHEMA,
+        "approval_sha256": verified["approval_sha256"],
+        "manifest_sha256": challenge["manifest_sha256"],
+        "challenge_sha256": challenge["challenge_sha256"],
+        "status": "claimed",
+    }
+    expected["claim_sha256"] = hashlib.sha256(_canonical(expected).encode("utf-8")).hexdigest()
+    if claim != expected:
+        return loom_gate._receipt_validation(None, [_finding("claim", "claim-mismatch", "claim does not match the signed manifest and challenge")])
+    prepared = dict(normalized)
+    prepared["evidence"] = sorted(normalized["evidence"] + verified["evidence"], key=lambda item: item["kind"])
+    preflight = loom_gate.build_receipt(manifest, prepared)
+    if not preflight["valid"]: return preflight
+    connection = None
+    try:
+        if ledger_path.is_symlink() or not ledger_path.is_file(): raise ValueError("approval ledger must be a regular non-symlink file")
+        if ledger_path.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH): raise ValueError("approval ledger must not be group/world-writable")
+        connection = sqlite3.connect(str(ledger_path), timeout=5, isolation_level=None)
+        connection.execute("PRAGMA trusted_schema=OFF")
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute("SELECT manifest_sha256, challenge_sha256, claim_sha256, status FROM claims WHERE approval_sha256=?", (verified["approval_sha256"],)).fetchone()
+        wanted = (expected["manifest_sha256"], expected["challenge_sha256"], expected["claim_sha256"], "claimed")
+        if row != wanted:
+            connection.execute("ROLLBACK"); raise ValueError("approval claim is absent, mismatched, or already finished")
+        connection.execute("UPDATE claims SET status=? WHERE approval_sha256=? AND status='claimed'", (normalized["result"], verified["approval_sha256"]))
+        connection.execute("COMMIT")
+    except (OSError, sqlite3.Error, ValueError) as error:
+        if connection is not None and connection.in_transaction: connection.execute("ROLLBACK")
+        return loom_gate._receipt_validation(None, [_finding("ledger", "approval-finalize-failed", str(error))])
+    finally:
+        if connection is not None: connection.close()
+    return preflight
+
+
+def finish_claimed_receipt(manifest, observation, challenge, approval, claim):
+    """Finalize one claimed execution exactly once and return its terminal receipt."""
+    try: public_key = _load_public_key()
+    except ValueError as error: return loom_gate._receipt_validation(None, [_finding("public_key", "public-key-unavailable", str(error))])
+    return _finish_claimed_receipt(manifest, observation, challenge, approval, claim, public_key, _LEDGER_PATH)
 
 
 def consume_operator_approval(manifest, challenge, approval):
