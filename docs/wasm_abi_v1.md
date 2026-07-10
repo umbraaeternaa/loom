@@ -33,6 +33,10 @@ Every binary module exports:
 - `memory`: linear memory, currently exactly one initial 64 KiB page in
   generated modules.
 - `loom_abi_version`: immutable raw `i32`, currently `1`.
+- `loom_heap_limit`: immutable raw `i32`, currently `65536` for the fixed-page
+  heap policy.
+- `loom_heap_used`: mutable raw `i32`; runtime `$reserve` increments it by
+  each successful heap allocation size.
 - One function for each top-level `defx`, with signature `(i32*) -> i32`.
 
 Arguments and results of exported LOOM functions are tagged values. The
@@ -152,8 +156,10 @@ source names. Those maps describe one module and are not stable ABI IDs.
 - An unmatched variant arm emits a WebAssembly trap.
 - The current allocator does not grow memory. Generated modules declare one 64 KiB page
   and contain no `memory.grow` path. Before each runtime heap
-  allocation, `$reserve` checks `hp + size <= memory.size() << 16`; exhausting
-  the exported memory traps before any object header or payload store.
+  allocation, `$reserve` checks `hp + size <= loom_heap_limit` and also
+  sanity-checks `hp + size <= memory.size() << 16`; successful reserves
+  increment `loom_heap_used` by `size`. Exhausting the exported memory traps
+  before any object header or payload store.
 - The current direct host-call interface accepts integer arguments only.
 - String literals are supported at the value boundary as immutable static
   kind-6 heap objects. General runtime string allocation and string

@@ -1952,9 +1952,11 @@ def compile_wasm(program_src):
     tc = _leb_u(len(ar)) + b"".join(b"\x60" + _leb_u(a) + b"\x7f" * a + b"\x01\x7f" for a in ar)   # type: (i32*)->i32
     fc = _leb_u(len(funcs) + len(lambda_funcs) + 8 + len(apply_arities)) + b"".join(_leb_u(ti[a]) for _, a, _, _, _ in funcs) + b"".join(_leb_u(ti[a]) for _, a, _, _, _, _ in lambda_funcs) + _leb_u(ti[3]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[1]) + _leb_u(ti[1]) + b"".join(_leb_u(ti[arity + 1]) for arity in apply_arities)
     mc = _leb_u(1) + b"\x00" + _leb_u(1)                    # 1 memory, min 1 page (64 KiB heap)
-    gc = (_leb_u(2)
+    gc = (_leb_u(4)
           + b"\x7f\x01" + _wasm_const(ctx.hp_init) + b"\x0b"                       # mutable i32 $hp = static-data end
-          + b"\x7f\x00" + _wasm_const(_WASM_ABI_VERSION) + b"\x0b")  # immutable raw ABI version
+          + b"\x7f\x00" + _wasm_const(_WASM_ABI_VERSION) + b"\x0b"                  # immutable raw ABI version
+          + b"\x7f\x00" + _wasm_const(65536) + b"\x0b"                              # immutable raw heap limit
+          + b"\x7f\x01" + _wasm_const(0) + b"\x0b")                                 # mutable raw heap bytes reserved at runtime
     ic = (_leb_u(8)
           + _leb_u(len("env")) + b"env" + _leb_u(len("push_handler")) + b"push_handler" + b"\x00" + _leb_u(ti[2])
           + _leb_u(len("env")) + b"env" + _leb_u(len("pop_handler")) + b"pop_handler" + b"\x00" + _leb_u(ti[1])
@@ -1964,10 +1966,14 @@ def compile_wasm(program_src):
           + _leb_u(len("env")) + b"env" + _leb_u(len("pop_caps")) + b"pop_caps" + b"\x00" + _leb_u(ti[0])
           + _leb_u(len("env")) + b"env" + _leb_u(len("has_cap")) + b"has_cap" + b"\x00" + _leb_u(ti[1])
           + _leb_u(len("env")) + b"env" + _leb_u(len("host_ffi")) + b"host_ffi" + b"\x00" + _leb_u(ti[3]))
-    ec = _leb_u(len(funcs) + 2)
+    ec = _leb_u(len(funcs) + 4)
     ec += _leb_u(len("memory")) + b"memory" + b"\x02" + _leb_u(0)                  # export linear memory for the heap-backed runtime
     abi_name = b"loom_abi_version"
     ec += _leb_u(len(abi_name)) + abi_name + b"\x03" + _leb_u(1)                    # export immutable global 1
+    heap_limit_name = b"loom_heap_limit"
+    ec += _leb_u(len(heap_limit_name)) + heap_limit_name + b"\x03" + _leb_u(2)       # export immutable global 2
+    heap_used_name = b"loom_heap_used"
+    ec += _leb_u(len(heap_used_name)) + heap_used_name + b"\x03" + _leb_u(3)         # export mutable global 3
     for i, t in enumerate(ds):
         nb = t[1].encode(); ec += _leb_u(len(nb)) + nb + b"\x00" + _leb_u(i + _WASM_IMPORTS)         # export func
     cc = _leb_u(len(funcs) + len(lambda_funcs) + 8 + len(apply_arities))
@@ -2004,8 +2010,11 @@ def compile_wasm(program_src):
     e = (_leb_u(1) + _leb_u(1) + b"\x7f") + resource_use_code; cc += _leb_u(len(e)) + e
     reserve_code = (b"\x23\x00\x21\x01"                                  # $t = $hp
                     b"\x23\x00\x20\x00\x6a\x22\x02"                      # $new = $hp + size
-                    b"\x3f\x00\x41\x10\x74\x4b"                          # $new > memory.size() << 16
+                    b"\x23\x02\x4b"                                      # $new > $heap_limit
                     b"\x04\x40\x00\x0b"                                  # if true: unreachable
+                    b"\x20\x02\x3f\x00\x41\x10\x74\x4b"                  # $new > memory.size() << 16
+                    b"\x04\x40\x00\x0b"                                  # if true: unreachable
+                    b"\x23\x03\x20\x00\x6a\x24\x03"                      # $heap_used += size
                     b"\x20\x02\x24\x00"                                  # $hp = $new
                     b"\x20\x01\x0b")                                      # return $t
     e = (_leb_u(1) + _leb_u(2) + b"\x7f") + reserve_code; cc += _leb_u(len(e)) + e
@@ -2229,16 +2238,26 @@ def emit_wat(program_src):
         lambda_callable = set(spec["callable"]) | {pname(p) for p in fn[1] if platent(p) is not None}
         bodies.append([head] + w(fn[2:][-1] if fn[2:] else 0, "    ", None, None, lambda_callable) + ["  )"])
     lines = ["(module", "  (global $loom_abi_version i32 (i32.const " + str(_WASM_ABI_VERSION) + "))",
-             '  (export "loom_abi_version" (global $loom_abi_version))']
+             "  (global $loom_heap_limit i32 (i32.const 65536))",
+             "  (global $loom_heap_used (mut i32) (i32.const 0))",
+             '  (export "loom_abi_version" (global $loom_abi_version))',
+             '  (export "loom_heap_limit" (global $loom_heap_limit))',
+             '  (export "loom_heap_used" (global $loom_heap_used))']
     if uses_heap[0]:
         lines += ["  (memory 1)", '  (export "memory" (memory 0))', "  (global $hp (mut i32) (i32.const " + str(ctx.hp_init) + "))",
                   "  (func $reserve (param $size i32) (result i32) (local $t i32) (local $new i32)",
                   "    global.get $hp  local.set $t",
                   "    global.get $hp  local.get $size  i32.add  local.tee $new",
+                  "    global.get $loom_heap_limit  i32.gt_u",
+                  "    if",
+                  "      unreachable",
+                  "    end",
+                  "    local.get $new",
                   "    memory.size  i32.const 16  i32.shl  i32.gt_u",
                   "    if",
                   "      unreachable",
                   "    end",
+                  "    global.get $loom_heap_used  local.get $size  i32.add  global.set $loom_heap_used",
                   "    local.get $new  global.set $hp",
                   "    local.get $t)",
                   "  (func $rec (param $next i32) (param $fid i32) (param $val i32) (result i32) (local $t i32)",

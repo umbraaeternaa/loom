@@ -812,9 +812,17 @@ def main():
             and "  (memory 1)" in heap_wat
             and "memory.grow" not in heap_wat
             and "memory.size  i32.const 16  i32.shl  i32.gt_u" in heap_wat
+            and '(export "loom_heap_limit" (global $loom_heap_limit))' in heap_wat
+            and '(export "loom_heap_used" (global $loom_heap_used))' in heap_wat
+            and "global.get $loom_heap_limit  i32.gt_u" in heap_wat
+            and "global.get $loom_heap_used  local.get $size  i32.add  global.set $loom_heap_used" in heap_wat
             and "  (func $reserve " in heap_wat
             and "i32.const 16  call $reserve  local.set $t" in heap_wat
             and "i32.const 12  call $reserve  local.set $t" in heap_wat
+            and b"loom_heap_limit" in heap_wasm
+            and b"loom_heap_used" in heap_wasm
+            and b"\x23\x02\x4b" in heap_wasm
+            and b"\x23\x03\x20\x00\x6a\x24\x03" in heap_wasm
             and b"\x3f\x00\x41\x10\x74\x4b" in heap_wasm
         )
         ok += heap_policy_ok
