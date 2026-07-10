@@ -20,7 +20,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "388-claimed-execution-v1")',
+        'bundleUrl.searchParams.set("v", "389-fixed-heap-policy-v1")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
