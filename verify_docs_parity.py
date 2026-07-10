@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 DOCS_LOOM = ROOT / "docs" / "loom.py"
 PLAY_HTML = ROOT / "docs" / "play.html"
+WASM_ABI_DOC = ROOT / "docs" / "wasm_abi_v1.md"
 
 
 def _check_playground_loader() -> None:
@@ -72,6 +73,32 @@ def _check_playground_loader() -> None:
         raise SystemExit("docs parity: standalone bundle has host-only top-level imports: " + ", ".join(leaked_imports))
 
 
+def _check_wasm_abi_doc() -> None:
+    text = WASM_ABI_DOC.read_text()
+    required = (
+        "Static string, kind 6",
+        "Raw kind `6`",
+        "UTF-8",
+        "one 64 KiB page",
+        "`memory.grow`",
+        "General runtime string allocation and string",
+        "operations are not part of ABI v1.",
+    )
+    missing = [needle for needle in required if needle not in text]
+    forbidden = (
+        "Strings do not yet have a v1 heap kind",
+        "not supported by the WASM\n  value boundary",
+    )
+    stale = [needle for needle in forbidden if needle in text]
+    if missing or stale:
+        details = []
+        if missing:
+            details.append("missing: " + ", ".join(missing))
+        if stale:
+            details.append("stale: " + ", ".join(stale))
+        raise SystemExit("docs parity: wasm ABI doc is out of sync with string/fixed-heap contract: " + "; ".join(details))
+
+
 def _run_injected_citadel() -> int:
     spec = importlib.util.spec_from_file_location("loom", DOCS_LOOM)
     if spec is None or spec.loader is None:
@@ -106,6 +133,7 @@ def _check_pyodide_import_boundary() -> None:
 
 def main() -> int:
     _check_playground_loader()
+    _check_wasm_abi_doc()
     _check_pyodide_import_boundary()
     result = _run_injected_citadel()
     if result != 0:

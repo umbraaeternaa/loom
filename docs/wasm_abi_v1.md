@@ -30,7 +30,8 @@ pointers are at least `9`; `3` is never a heap address.
 
 Every binary module exports:
 
-- `memory`: linear memory, initially at least one 64 KiB page.
+- `memory`: linear memory, currently exactly one initial 64 KiB page in
+  generated modules.
 - `loom_abi_version`: immutable raw `i32`, currently `1`.
 - One function for each top-level `defx`, with signature `(i32*) -> i32`.
 
@@ -100,6 +101,24 @@ separate compilations.
 | 4 | Stable raw effect ID |
 | 8 | Tagged payload |
 
+### Static string, kind 6, 12 bytes plus immutable bytes
+
+String literals are emitted as immutable static data, not allocated at
+runtime. The string object has kind `6`:
+
+| Offset | Word |
+| ---: | --- |
+| 0 | Raw kind `6` |
+| 4 | Raw byte length |
+| 8 | Raw byte address |
+
+The byte payload is UTF-8 data stored in a separate passive-at-load data
+segment. Source-level string values cross the WASM boundary by returning a
+tagged pointer to this object. Hosts decode kind `6` by reading exactly the
+declared byte length from the raw byte address and interpreting those bytes
+as UTF-8. The bytes are immutable for LOOM code; v1 exposes no string
+mutation or concatenation operation.
+
 ## Closure convention
 
 A closure is represented by a kind-2 record chain:
@@ -132,10 +151,12 @@ source names. Those maps describe one module and are not stable ABI IDs.
 - Unsupported LOOM forms fail during compilation with `LoomError`.
 - An unmatched variant arm emits a WebAssembly trap.
 - The current allocator does not grow memory or perform an explicit heap
-  capacity check; exhausting the exported memory traps on a store.
+  capacity check. Generated modules declare one 64 KiB page and contain no
+  `memory.grow` path; exhausting the exported memory traps on a store.
 - The current direct host-call interface accepts integer arguments only.
-- Strings do not yet have a v1 heap kind and are not supported by the WASM
-  value boundary.
+- String literals are supported at the value boundary as immutable static
+  kind-6 heap objects. General runtime string allocation and string
+  operations are not part of ABI v1.
 
 ## Compatibility policy
 
