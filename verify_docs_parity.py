@@ -20,7 +20,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "389-fixed-heap-policy-v1")',
+        'bundleUrl.searchParams.set("v", "389-heap-accounting-ui-v1")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -35,6 +35,10 @@ def _check_playground_loader() -> None:
         '"globalFindings"',
         "TextDecoder()",
         "k === 6",
+        'name: "WASM · heap meter"',
+        'globalValue("loom_heap_limit")',
+        'globalValue("loom_heap_used")',
+        "bytes reserved",
         'name: "WASM · checked i31.add"',
         "(asm wasm i31.add 20 22)",
         'name: "WASM · checked i31.sub"',

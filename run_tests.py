@@ -1874,7 +1874,7 @@ def main():
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "389-fixed-heap-policy-v1")' in play
+            and 'bundleUrl.searchParams.set("v", "389-heap-accounting-ui-v1")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -1885,6 +1885,10 @@ def main():
             and '"globalFindings"' in play
             and "TextDecoder()" in play
             and "k === 6" in play
+            and 'name: "WASM · heap meter"' in play
+            and 'globalValue("loom_heap_limit")' in play
+            and 'globalValue("loom_heap_used")' in play
+            and "bytes reserved" in play
             and 'name: "WASM · checked i31.add"' in play
             and "(asm wasm i31.add 20 22)" in play
             and 'name: "WASM · checked i31.sub"' in play

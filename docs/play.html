@@ -150,6 +150,13 @@ const EXAMPLES = [
 ; too. The semicolon stays data, not syntax or comment masking.
 
 (defx main () (fn () (record (msg "x;y"))))` },
+  { name: "WASM · heap meter", note: "→ heap bytes",
+    src: `; WASM now exposes deterministic heap accounting. Run through WASM:
+; the value is ordinary LOOM data, and the result panel also shows how many
+; heap bytes the module reserved inside its fixed 64 KiB memory.
+
+(defx main () (fn ()
+  (record (xs (list 1 2 3)) (msg "meter"))))` },
   { name: "WASM · checked i31.add", note: "→ 42 / WAT / WASM",
     src: `; Low-level operations are not raw text. LOOM accepts only registered
 ; instructions with fixed inputs, result, effects, and backend lowering.
@@ -226,7 +233,7 @@ async function boot(){
     pyodide = await loadPyodide();
     setStatus("loading LOOM…");
     const bundleUrl = new URL("./loom.py", location.href);
-    bundleUrl.searchParams.set("v", "389-fixed-heap-policy-v1");
+    bundleUrl.searchParams.set("v", "389-heap-accounting-ui-v1");
     const response = await fetch(bundleUrl, {cache: "no-store"});
     if (!response.ok) throw new Error("LOOM bundle HTTP " + response.status);
     const code = await response.text();
@@ -408,6 +415,10 @@ _r
     const abi = mod.instance.exports.loom_abi_version;
     const abiValue = abi && typeof abi.value === "number" ? abi.value : abi;
     if (abiValue !== payload.abi) throw new Error("unsupported LOOM WASM ABI");
+    const globalValue = name => {
+      const x = mod.instance.exports[name];
+      return x && typeof x.value === "number" ? x.value : x;
+    };
     dec = v => {
       if (!Number.isInteger(v)) return v;
       if ((v & 1) === 0) return v >> 1;
@@ -447,9 +458,14 @@ _r
     const main = mod.instance.exports.main;
     if (typeof main !== "function") throw new Error("missing exported main");
     const value = dec(main());
+    const heapLimit = globalValue("loom_heap_limit");
+    const heapUsed = globalValue("loom_heap_used");
     let s = "";
     if (out.length) s += out.map(esc).join("\n") + "\n";
     s += "<span class='v-ok'>=> " + esc(fmtValue(value)) + "</span>";
+    if (Number.isFinite(heapUsed) && Number.isFinite(heapLimit)) {
+      s += "\n<span class='v-eff'>heap: " + esc(heapUsed) + " / " + esc(heapLimit) + " bytes reserved</span>";
+    }
     show(s);
   } catch(e) {
     show("<span class='v-bad'>✗ WASM did not run</span>\n\n  • " + esc(e));
