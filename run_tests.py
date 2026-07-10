@@ -1890,7 +1890,7 @@ def main():
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "390-seamn-static-boundary-v1")' in play
+            and 'bundleUrl.searchParams.set("v", "391-quantity-mediation-roadmap-v1")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -1948,6 +1948,25 @@ def main():
         print(f"  {'ok  ' if docs_discipline_ok else 'FAIL'} docs: published bundle workflow pinned")
     except Exception as e:
         print(f"  FAIL docs workflow pin: {e}")
+    try:                                               # runtime quantity mediation needs a design contract before it becomes ABI/runtime code
+        qdoc = Path(__file__).with_name("docs").joinpath("wasm_quantity_mediation.md").read_text()
+        quantity_doc_ok = (
+            "LOOM WASM Quantity Mediation Roadmap" in qdoc
+            and "Source quantities" in qdoc
+            and "`seamN K`" in qdoc
+            and "`loom_heap_limit`" in qdoc
+            and "`loom_heap_used`" in qdoc
+            and "Do not add `memory.grow` until heap growth is explicitly metered by LOOM." in qdoc
+            and "`push_caps` and `has_cap`" in qdoc
+            and "not represented as a binary runtime meter" in qdoc
+            and "Capability-use quantity and heap-byte quantity are one runtime-mediation family" in qdoc
+            and "ABI v2" in qdoc
+            and "No unmetered `memory.grow`." in qdoc
+        )
+        ok += quantity_doc_ok
+        print(f"  {'ok  ' if quantity_doc_ok else 'FAIL'} docs: wasm quantity mediation roadmap pinned")
+    except Exception as e:
+        print(f"  FAIL quantity mediation roadmap pin: {e}")
     try:                                               # deterministic property fuzz is part of the citadel, not an optional side script
         fuzz = Path(__file__).with_name("fuzz_tests.py")
         fr = subprocess.run([sys.executable, str(fuzz), "--cases", "64", "--seed", "0xC17ADE1"], capture_output=True, text=True)
@@ -1956,7 +1975,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 87   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution contracts, cli proof-surface, string-literal/heap-policy/seamN-static backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 88   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution contracts, cli proof-surface, string-literal/heap-policy/seamN-static backend guards, runtime/cli facades, docs workflow/quantity-roadmap pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

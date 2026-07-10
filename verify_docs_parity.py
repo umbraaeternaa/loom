@@ -14,13 +14,14 @@ ROOT = Path(__file__).resolve().parent
 DOCS_LOOM = ROOT / "docs" / "loom.py"
 PLAY_HTML = ROOT / "docs" / "play.html"
 WASM_ABI_DOC = ROOT / "docs" / "wasm_abi_v1.md"
+QUANTITY_DOC = ROOT / "docs" / "wasm_quantity_mediation.md"
 
 
 def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "390-seamn-static-boundary-v1")',
+        'bundleUrl.searchParams.set("v", "391-quantity-mediation-roadmap-v1")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -111,6 +112,26 @@ def _check_wasm_abi_doc() -> None:
         raise SystemExit("docs parity: wasm ABI doc is out of sync with string/fixed-heap contract: " + "; ".join(details))
 
 
+def _check_quantity_mediation_doc() -> None:
+    text = QUANTITY_DOC.read_text()
+    required = (
+        "LOOM WASM Quantity Mediation Roadmap",
+        "Source quantities",
+        "`seamN K`",
+        "`loom_heap_limit`",
+        "`loom_heap_used`",
+        "Do not add `memory.grow` until heap growth is explicitly metered by LOOM.",
+        "`push_caps` and `has_cap`",
+        "not represented as a binary runtime meter",
+        "Capability-use quantity and heap-byte quantity are one runtime-mediation family",
+        "ABI v2",
+        "No unmetered `memory.grow`.",
+    )
+    missing = [needle for needle in required if needle not in text]
+    if missing:
+        raise SystemExit("docs parity: quantity mediation roadmap drift: missing " + ", ".join(missing))
+
+
 def _run_injected_citadel() -> int:
     spec = importlib.util.spec_from_file_location("loom", DOCS_LOOM)
     if spec is None or spec.loader is None:
@@ -146,6 +167,7 @@ def _check_pyodide_import_boundary() -> None:
 def main() -> int:
     _check_playground_loader()
     _check_wasm_abi_doc()
+    _check_quantity_mediation_doc()
     _check_pyodide_import_boundary()
     result = _run_injected_citadel()
     if result != 0:

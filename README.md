@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 390 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 391 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 390/390 citadel checks
+PASS — 391/391 citadel checks
 ```
 
 ## The idea in one screen
@@ -223,6 +223,7 @@ The same verified program runs in the interpreter, compiles to **Python** and **
 and lowers tagged values, closures, structured data, and effects to **WebAssembly** — one checked source, many platforms. LOOM integers have one portable contract on every backend: signed i31 values (`-2^30..2^30-1`) with deterministic modulo-`2^31` wraparound; out-of-range literals are rejected before execution.
 
 The binary boundary is versioned and documented in the normative [LOOM WebAssembly ABI v1](docs/wasm_abi_v1.md); generated modules export `loom_abi_version = 1`, and hosts reject unknown versions.
+Runtime quantity mediation is tracked separately in the [LOOM WASM Quantity Mediation Roadmap](docs/wasm_quantity_mediation.md): `seamN` quantities are source-checked today, heap bytes are host-visible, and `memory.grow` stays disabled until growth is explicitly metered.
 Binary and WAT compilation use isolated per-program contexts, so closure, helper, tag, and field layouts cannot leak between concurrent builds.
 
 ## Try it in 60 seconds
