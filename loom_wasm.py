@@ -538,10 +538,10 @@ class _WasmContext:
             | {spec["arity"] for spec in self.order}
         )
         self.apply_ids = {
-            arity: self.helper_base + 7 + i
+            arity: self.helper_base + 8 + i
             for i, arity in enumerate(self.apply_arities)
         }
-        self.apply1_id = self.apply_ids.get(1, self.helper_base + 7)
+        self.apply1_id = self.apply_ids.get(1, self.helper_base + 8)
         self.variant_id = self.helper_base + 4
         self.alloc_id = self.helper_base + 5
         self.resource_use_id = self.helper_base + 6
@@ -559,9 +559,12 @@ def compile_wasm(program_src, frontend):
     _, errs = frontend.check(frontend.parse(program_src))
     if errs: raise frontend.error("; ".join(errs))
     ctx = _WasmContext(program_src, frontend)
+    if ctx.hp_init > 65536:
+        raise frontend.error("wasm heap: static data exceeds the fixed 64 KiB memory page")
     ds, order = ctx.defs, ctx.order
     helper_base, apply_arities = ctx.helper_base, ctx.apply_arities
     fmap = {t[1]: i for i, t in enumerate(ds)}; rec_i = helper_base; get_i = helper_base + 1; cons_i = helper_base + 2
+    reserve_i = helper_base + 7
     tags, fields = ctx.tags, ctx.fields
     funcs = []                                              # (name, arity, n_locals, code, params)
     for t in ds:
@@ -585,8 +588,7 @@ def compile_wasm(program_src, frontend):
         nloc = len(seen) + (1 if flags["match"] else 0)
         lambda_callable = set(spec["callable"]) | {frontend.pname(p) for p in fn[1] if frontend.platent(p) is not None}
         lambda_funcs.append((spec["name"], len(params), nloc, _emit_wasm(ctx, fn[2:][-1] if fn[2:] else 0, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, lambda_callable, None, None) + b"\x0b", params, spec))
-    rec_code = (b"\x23\x00\x21\x03"                                         # $t = $hp
-                b"\x23\x00\x41\x10\x6a\x24\x00"                              # $hp += 16
+    rec_code = (_wasm_const(16) + b"\x10" + _leb_u(reserve_i + _WASM_IMPORTS) + b"\x21\x03"  # $t = reserve(16)
                 b"\x20\x03" + _wasm_const(_WASM_K_RECORD) + b"\x36\x02\x00" # kind
                 b"\x20\x03\x20\x01\x36\x02\x04"                              # field-id
                 b"\x20\x03\x20\x02\x36\x02\x08"                              # value
@@ -609,16 +611,16 @@ def compile_wasm(program_src, frontend):
                 b"\x0b"
                 b"\x0b"
                 b"\x0b")
-    cons_code = (b"\x23\x00\x21\x02" b"\x23\x00\x41\x0c\x6a\x24\x00"
+    cons_code = (_wasm_const(12) + b"\x10" + _leb_u(reserve_i + _WASM_IMPORTS) + b"\x21\x02"
                  b"\x20\x02" + _wasm_const(_WASM_K_LIST) + b"\x36\x02\x00"
                  b"\x20\x02\x20\x00\x36\x02\x04" b"\x20\x02\x20\x01\x36\x02\x08"
                  b"\x20\x02" + _wasm_const(1) + b"\x72\x0b")
-    effbox_code = (b"\x23\x00\x21\x02" b"\x23\x00\x41\x0c\x6a\x24\x00"
+    effbox_code = (_wasm_const(12) + b"\x10" + _leb_u(reserve_i + _WASM_IMPORTS) + b"\x21\x02"
                    b"\x20\x02" + _wasm_const(_WASM_K_EFFECT) + b"\x36\x02\x00"
                    b"\x20\x02\x20\x00\x36\x02\x04"
                    b"\x20\x02\x20\x01\x36\x02\x08"
                    b"\x20\x02" + _wasm_const(1) + b"\x72\x0b")
-    variant_code = (b"\x23\x00\x21\x02" b"\x23\x00\x41\x0c\x6a\x24\x00"
+    variant_code = (_wasm_const(12) + b"\x10" + _leb_u(reserve_i + _WASM_IMPORTS) + b"\x21\x02"
                     b"\x20\x02" + _wasm_const(_WASM_K_VARIANT) + b"\x36\x02\x00"
                     b"\x20\x02\x20\x00\x36\x02\x04"
                     b"\x20\x02\x20\x01\x36\x02\x08"
@@ -642,7 +644,7 @@ def compile_wasm(program_src, frontend):
     ar = sorted(set(apply_arities) | {a for _, a, _, _, _ in funcs} | {a for _, a, _, _, _, _ in lambda_funcs} | {2, 3})  # add helper arities
     ti = {a: i for i, a in enumerate(ar)}   # arity-2 type covers $cons/get; arity-3 covers $rec
     tc = _leb_u(len(ar)) + b"".join(b"\x60" + _leb_u(a) + b"\x7f" * a + b"\x01\x7f" for a in ar)   # type: (i32*)->i32
-    fc = _leb_u(len(funcs) + len(lambda_funcs) + 7 + len(apply_arities)) + b"".join(_leb_u(ti[a]) for _, a, _, _, _ in funcs) + b"".join(_leb_u(ti[a]) for _, a, _, _, _, _ in lambda_funcs) + _leb_u(ti[3]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[1]) + b"".join(_leb_u(ti[arity + 1]) for arity in apply_arities)
+    fc = _leb_u(len(funcs) + len(lambda_funcs) + 8 + len(apply_arities)) + b"".join(_leb_u(ti[a]) for _, a, _, _, _ in funcs) + b"".join(_leb_u(ti[a]) for _, a, _, _, _, _ in lambda_funcs) + _leb_u(ti[3]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[1]) + _leb_u(ti[1]) + b"".join(_leb_u(ti[arity + 1]) for arity in apply_arities)
     mc = _leb_u(1) + b"\x00" + _leb_u(1)                    # 1 memory, min 1 page (64 KiB heap)
     gc = (_leb_u(2)
           + b"\x7f\x01" + _wasm_const(ctx.hp_init) + b"\x0b"                       # mutable i32 $hp = static-data end
@@ -662,7 +664,7 @@ def compile_wasm(program_src, frontend):
     ec += _leb_u(len(abi_name)) + abi_name + b"\x03" + _leb_u(1)                    # export immutable global 1
     for i, t in enumerate(ds):
         nb = t[1].encode(); ec += _leb_u(len(nb)) + nb + b"\x00" + _leb_u(i + _WASM_IMPORTS)         # export func
-    cc = _leb_u(len(funcs) + len(lambda_funcs) + 7 + len(apply_arities))
+    cc = _leb_u(len(funcs) + len(lambda_funcs) + 8 + len(apply_arities))
     for _, _, nloc, code, _ in funcs:
         loc = (_leb_u(1) + _leb_u(nloc) + b"\x7f") if nloc else _leb_u(0)                           # let-locals (i32)
         e = loc + code; cc += _leb_u(len(e)) + e
@@ -689,12 +691,18 @@ def compile_wasm(program_src, frontend):
                   b"\x0b"
                   b"\x0b")
     e = (_leb_u(1) + _leb_u(2) + b"\x7f") + alloc_code; cc += _leb_u(len(e)) + e                # $alloc: 2 locals ($n,$i)
-    resource_use_code = (b"\x23\x00\x21\x01"
-                         b"\x23\x00\x41\x08\x6a\x24\x00"
+    resource_use_code = (_wasm_const(8) + b"\x10" + _leb_u(reserve_i + _WASM_IMPORTS) + b"\x21\x01"
                          b"\x20\x01" + _wasm_const(_WASM_K_RESOURCE) + b"\x36\x02\x00"
                          b"\x20\x01\x20\x00\x36\x02\x04"
                          b"\x20\x01" + _wasm_const(1) + b"\x72\x0b")
     e = (_leb_u(1) + _leb_u(1) + b"\x7f") + resource_use_code; cc += _leb_u(len(e)) + e         # $resuse: 1 local ($t)
+    reserve_code = (b"\x23\x00\x21\x01"                                  # $t = $hp
+                    b"\x23\x00\x20\x00\x6a\x22\x02"                      # $new = $hp + size
+                    b"\x3f\x00\x41\x10\x74\x4b"                          # $new > memory.size() << 16
+                    b"\x04\x40\x00\x0b"                                  # if true: unreachable
+                    b"\x20\x02\x24\x00"                                  # $hp = $new
+                    b"\x20\x01\x0b")                                      # return $t
+    e = (_leb_u(1) + _leb_u(2) + b"\x7f") + reserve_code; cc += _leb_u(len(e)) + e              # $reserve: 2 locals ($t,$new)
     for arity in apply_arities:
         apply_code = _apply_cases(
             [{"id": i, "name": t[1], "captures": [], "arity": len(t[3][1]), "kind": "top"} for i, t in enumerate(ds) if len(t[3][1]) == arity] +
@@ -722,6 +730,8 @@ def emit_wat(program_src, frontend):
     _, errs = frontend.check(frontend.parse(program_src))
     if errs: raise frontend.error("; ".join(errs))
     ctx = _WasmContext(program_src, frontend)
+    if ctx.hp_init > 65536:
+        raise frontend.error("wasm heap: static data exceeds the fixed 64 KiB memory page")
     ds, order = ctx.defs, ctx.order
     helper_base, apply_arities = ctx.helper_base, ctx.apply_arities
     fmap = {t[1]: i for i, t in enumerate(ds)}; tags, fields = ctx.tags, ctx.fields; uses_heap = [False]; uses_print = [False]
@@ -918,9 +928,17 @@ def emit_wat(program_src, frontend):
              '  (export "loom_abi_version" (global $loom_abi_version))']
     if uses_heap[0]:
         lines += ["  (memory 1)", '  (export "memory" (memory 0))', "  (global $hp (mut i32) (i32.const " + str(ctx.hp_init) + "))",
-                  "  (func $rec (param $next i32) (param $fid i32) (param $val i32) (result i32) (local $t i32)",
+                  "  (func $reserve (param $size i32) (result i32) (local $t i32) (local $new i32)",
                   "    global.get $hp  local.set $t",
-                  "    global.get $hp  i32.const 16  i32.add  global.set $hp",
+                  "    global.get $hp  local.get $size  i32.add  local.tee $new",
+                  "    memory.size  i32.const 16  i32.shl  i32.gt_u",
+                  "    if",
+                  "      unreachable",
+                  "    end",
+                  "    local.get $new  global.set $hp",
+                  "    local.get $t)",
+                  "  (func $rec (param $next i32) (param $fid i32) (param $val i32) (result i32) (local $t i32)",
+                  "    i32.const 16  call $reserve  local.set $t",
                   "    local.get $t  i32.const 2  i32.store  ;; record kind",
                   "    local.get $t  local.get $fid  i32.store offset=4",
                   "    local.get $t  local.get $val  i32.store offset=8",
@@ -947,22 +965,19 @@ def emit_wat(program_src, frontend):
                   "      end",
                   "    end)",
                   "  (func $cons (param $v i32) (param $rest i32) (result i32) (local $t i32)",
-                  "    global.get $hp  local.set $t",
-                  "    global.get $hp  i32.const 12  i32.add  global.set $hp",
+                  "    i32.const 12  call $reserve  local.set $t",
                   "    local.get $t  i32.const 1  i32.store  ;; list kind",
                   "    local.get $t  local.get $v  i32.store offset=4",
                   "    local.get $t  local.get $rest  i32.store offset=8",
                   "    local.get $t  i32.const 1  i32.or)",
                   "  (func $effbox (param $eff i32) (param $payload i32) (result i32) (local $t i32)",
-                  "    global.get $hp  local.set $t",
-                  "    global.get $hp  i32.const 12  i32.add  global.set $hp",
+                  "    i32.const 12  call $reserve  local.set $t",
                   "    local.get $t  i32.const 4  i32.store  ;; effect kind",
                   "    local.get $t  local.get $eff  i32.store offset=4",
                   "    local.get $t  local.get $payload  i32.store offset=8",
                   "    local.get $t  i32.const 1  i32.or)",
                   "  (func $variant (param $tag i32) (param $payload i32) (result i32) (local $t i32)",
-                  "    global.get $hp  local.set $t",
-                  "    global.get $hp  i32.const 12  i32.add  global.set $hp",
+                  "    i32.const 12  call $reserve  local.set $t",
                   "    local.get $t  i32.const 3  i32.store  ;; variant kind",
                   "    local.get $t  local.get $tag  i32.store offset=4",
                   "    local.get $t  local.get $payload  i32.store offset=8",
@@ -983,8 +998,7 @@ def emit_wat(program_src, frontend):
                   "      call $cons",
                   "    end)",
                   "  (func $resuse (param $rid i32) (result i32) (local $t i32)",
-                  "    global.get $hp  local.set $t",
-                  "    global.get $hp  i32.const 8  i32.add  global.set $hp",
+                  "    i32.const 8  call $reserve  local.set $t",
                   "    local.get $t  i32.const 5  i32.store  ;; resource-use kind",
                   "    local.get $t  local.get $rid  i32.store offset=4",
                   "    local.get $t  i32.const 1  i32.or)"]

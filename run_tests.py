@@ -803,7 +803,7 @@ def main():
         print(f"  {'ok  ' if w_string_boundary else 'FAIL'} backend(WASM): string literals cross the value boundary")
     except Exception as e:
         print(f"  FAIL backend(WASM) string boundary: {e}")
-    try:                                               # WASM heap policy is explicit: fixed page, no grow path, no hidden allocator meter yet
+    try:                                               # WASM heap policy is explicit: fixed page, no grow path, checked reserve before stores
         heap_prog = '(defx t () (fn () (record (xs (list 1 2)) (msg "ok"))))'
         heap_wasm = compile_wasm(heap_prog)
         heap_wat = emit_wat(heap_prog)
@@ -811,12 +811,14 @@ def main():
             b"\x05\x03\x01\x00\x01" in heap_wasm
             and "  (memory 1)" in heap_wat
             and "memory.grow" not in heap_wat
-            and "memory.size" not in heap_wat
-            and "global.get $hp  i32.const 16  i32.add  global.set $hp" in heap_wat
-            and "global.get $hp  i32.const 12  i32.add  global.set $hp" in heap_wat
+            and "memory.size  i32.const 16  i32.shl  i32.gt_u" in heap_wat
+            and "  (func $reserve " in heap_wat
+            and "i32.const 16  call $reserve  local.set $t" in heap_wat
+            and "i32.const 12  call $reserve  local.set $t" in heap_wat
+            and b"\x3f\x00\x41\x10\x74\x4b" in heap_wasm
         )
         ok += heap_policy_ok
-        print(f"  {'ok  ' if heap_policy_ok else 'FAIL'} backend(WASM): heap policy is fixed-page/no-grow")
+        print(f"  {'ok  ' if heap_policy_ok else 'FAIL'} backend(WASM): heap policy is fixed-page/checked-reserve/no-grow")
     except Exception as e:
         print(f"  FAIL backend(WASM) heap policy: {e}")
     try:                                               # i31 overflow semantics must match on every execution backend

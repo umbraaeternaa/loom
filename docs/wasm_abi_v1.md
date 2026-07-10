@@ -150,9 +150,10 @@ source names. Those maps describe one module and are not stable ABI IDs.
 
 - Unsupported LOOM forms fail during compilation with `LoomError`.
 - An unmatched variant arm emits a WebAssembly trap.
-- The current allocator does not grow memory or perform an explicit heap
-  capacity check. Generated modules declare one 64 KiB page and contain no
-  `memory.grow` path; exhausting the exported memory traps on a store.
+- The current allocator does not grow memory. Generated modules declare one 64 KiB page
+  and contain no `memory.grow` path. Before each runtime heap
+  allocation, `$reserve` checks `hp + size <= memory.size() << 16`; exhausting
+  the exported memory traps before any object header or payload store.
 - The current direct host-call interface accepts integer arguments only.
 - String literals are supported at the value boundary as immutable static
   kind-6 heap objects. General runtime string allocation and string

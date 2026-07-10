@@ -81,6 +81,8 @@ def _check_wasm_abi_doc() -> None:
         "UTF-8",
         "one 64 KiB page",
         "`memory.grow`",
+        "`$reserve`",
+        "memory.size() << 16",
         "General runtime string allocation and string",
         "operations are not part of ABI v1.",
     )
