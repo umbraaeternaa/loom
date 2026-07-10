@@ -37,6 +37,12 @@ Every binary module exports:
   heap policy.
 - `loom_heap_used`: mutable raw `i32`; runtime `$reserve` increments it by
   each successful heap allocation size.
+- `loom_heap_static_used`: immutable raw `i32`; bytes occupied by static
+  string/data heap objects before runtime allocation begins.
+- `loom_heap_records`, `loom_heap_lists`, `loom_heap_variants`,
+  `loom_heap_effects`, `loom_heap_resources`: mutable raw `i32` diagnostic
+  counters incremented when the corresponding runtime heap object family is
+  successfully reserved.
 - One function for each top-level `defx`, with signature `(i32*) -> i32`.
 
 Arguments and results of exported LOOM functions are tagged values. The
@@ -162,8 +168,9 @@ source names. Those maps describe one module and are not stable ABI IDs.
   and contain no `memory.grow` path. Before each runtime heap
   allocation, `$reserve` checks `hp + size <= loom_heap_limit` and also
   sanity-checks `hp + size <= memory.size() << 16`; successful reserves
-  increment `loom_heap_used` by `size`. Exhausting the exported memory traps
-  before any object header or payload store.
+  increment `loom_heap_used` by `size`, then the allocating helper increments
+  its object-family diagnostic counter. Exhausting the exported memory traps
+  before any object-family counter, object header, or payload store changes.
 - The current direct host-call interface accepts integer arguments only.
 - String literals are supported at the value boundary as immutable static
   kind-6 heap objects. General runtime string allocation and string

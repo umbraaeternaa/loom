@@ -1894,7 +1894,11 @@ def compile_wasm(program_src):
         nloc = len(seen) + (1 if flags["match"] else 0)
         lambda_callable = set(spec["callable"]) | {pname(p) for p in fn[1] if platent(p) is not None}
         lambda_funcs.append((spec["name"], len(params), nloc, _emit_wasm(ctx, fn[2:][-1] if fn[2:] else 0, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, lambda_callable, None, None) + b"\x0b", params, spec))
+    heap_static_g, heap_record_g, heap_list_g = 4, 5, 6
+    heap_variant_g, heap_effect_g, heap_resource_g = 7, 8, 9
+    def _bump_global(g): return b"\x23" + _leb_u(g) + _wasm_const(1) + b"\x6a\x24" + _leb_u(g)
     rec_code = (_wasm_const(16) + b"\x10" + _leb_u(reserve_i + _WASM_IMPORTS) + b"\x21\x03"  # $t = reserve(16)
+                + _bump_global(heap_record_g) +
                 b"\x20\x03" + _wasm_const(_WASM_K_RECORD) + b"\x36\x02\x00" # kind
                 b"\x20\x03\x20\x01\x36\x02\x04"                              # field-id
                 b"\x20\x03\x20\x02\x36\x02\x08"                              # value
@@ -1918,15 +1922,18 @@ def compile_wasm(program_src):
                 b"\x0b"
                 b"\x0b")
     cons_code = (_wasm_const(12) + b"\x10" + _leb_u(reserve_i + _WASM_IMPORTS) + b"\x21\x02"
+                 + _bump_global(heap_list_g) +
                  b"\x20\x02" + _wasm_const(_WASM_K_LIST) + b"\x36\x02\x00"
                  b"\x20\x02\x20\x00\x36\x02\x04" b"\x20\x02\x20\x01\x36\x02\x08"
                  b"\x20\x02" + _wasm_const(1) + b"\x72\x0b")
     effbox_code = (_wasm_const(12) + b"\x10" + _leb_u(reserve_i + _WASM_IMPORTS) + b"\x21\x02"
+                   + _bump_global(heap_effect_g) +
                    b"\x20\x02" + _wasm_const(_WASM_K_EFFECT) + b"\x36\x02\x00"
                    b"\x20\x02\x20\x00\x36\x02\x04"
                    b"\x20\x02\x20\x01\x36\x02\x08"
                    b"\x20\x02" + _wasm_const(1) + b"\x72\x0b")
     variant_code = (_wasm_const(12) + b"\x10" + _leb_u(reserve_i + _WASM_IMPORTS) + b"\x21\x02"
+                    + _bump_global(heap_variant_g) +
                     b"\x20\x02" + _wasm_const(_WASM_K_VARIANT) + b"\x36\x02\x00"
                     b"\x20\x02\x20\x00\x36\x02\x04"
                     b"\x20\x02\x20\x01\x36\x02\x08"
@@ -1952,11 +1959,17 @@ def compile_wasm(program_src):
     tc = _leb_u(len(ar)) + b"".join(b"\x60" + _leb_u(a) + b"\x7f" * a + b"\x01\x7f" for a in ar)   # type: (i32*)->i32
     fc = _leb_u(len(funcs) + len(lambda_funcs) + 8 + len(apply_arities)) + b"".join(_leb_u(ti[a]) for _, a, _, _, _ in funcs) + b"".join(_leb_u(ti[a]) for _, a, _, _, _, _ in lambda_funcs) + _leb_u(ti[3]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[1]) + _leb_u(ti[1]) + b"".join(_leb_u(ti[arity + 1]) for arity in apply_arities)
     mc = _leb_u(1) + b"\x00" + _leb_u(1)                    # 1 memory, min 1 page (64 KiB heap)
-    gc = (_leb_u(4)
+    gc = (_leb_u(10)
           + b"\x7f\x01" + _wasm_const(ctx.hp_init) + b"\x0b"                       # mutable i32 $hp = static-data end
           + b"\x7f\x00" + _wasm_const(_WASM_ABI_VERSION) + b"\x0b"                  # immutable raw ABI version
           + b"\x7f\x00" + _wasm_const(65536) + b"\x0b"                              # immutable raw heap limit
-          + b"\x7f\x01" + _wasm_const(0) + b"\x0b")                                 # mutable raw heap bytes reserved at runtime
+          + b"\x7f\x01" + _wasm_const(0) + b"\x0b"                                  # mutable raw heap bytes reserved at runtime
+          + b"\x7f\x00" + _wasm_const(max(0, ctx.hp_init - 8)) + b"\x0b"             # immutable static string/data bytes
+          + b"\x7f\x01" + _wasm_const(0) + b"\x0b"                                  # mutable record object count
+          + b"\x7f\x01" + _wasm_const(0) + b"\x0b"                                  # mutable list object count
+          + b"\x7f\x01" + _wasm_const(0) + b"\x0b"                                  # mutable variant object count
+          + b"\x7f\x01" + _wasm_const(0) + b"\x0b"                                  # mutable effect-box object count
+          + b"\x7f\x01" + _wasm_const(0) + b"\x0b")                                 # mutable resource-use object count
     ic = (_leb_u(8)
           + _leb_u(len("env")) + b"env" + _leb_u(len("push_handler")) + b"push_handler" + b"\x00" + _leb_u(ti[2])
           + _leb_u(len("env")) + b"env" + _leb_u(len("pop_handler")) + b"pop_handler" + b"\x00" + _leb_u(ti[1])
@@ -1966,7 +1979,7 @@ def compile_wasm(program_src):
           + _leb_u(len("env")) + b"env" + _leb_u(len("pop_caps")) + b"pop_caps" + b"\x00" + _leb_u(ti[0])
           + _leb_u(len("env")) + b"env" + _leb_u(len("has_cap")) + b"has_cap" + b"\x00" + _leb_u(ti[1])
           + _leb_u(len("env")) + b"env" + _leb_u(len("host_ffi")) + b"host_ffi" + b"\x00" + _leb_u(ti[3]))
-    ec = _leb_u(len(funcs) + 4)
+    ec = _leb_u(len(funcs) + 10)
     ec += _leb_u(len("memory")) + b"memory" + b"\x02" + _leb_u(0)                  # export linear memory for the heap-backed runtime
     abi_name = b"loom_abi_version"
     ec += _leb_u(len(abi_name)) + abi_name + b"\x03" + _leb_u(1)                    # export immutable global 1
@@ -1974,6 +1987,15 @@ def compile_wasm(program_src):
     ec += _leb_u(len(heap_limit_name)) + heap_limit_name + b"\x03" + _leb_u(2)       # export immutable global 2
     heap_used_name = b"loom_heap_used"
     ec += _leb_u(len(heap_used_name)) + heap_used_name + b"\x03" + _leb_u(3)         # export mutable global 3
+    for name, index in (
+        (b"loom_heap_static_used", heap_static_g),
+        (b"loom_heap_records", heap_record_g),
+        (b"loom_heap_lists", heap_list_g),
+        (b"loom_heap_variants", heap_variant_g),
+        (b"loom_heap_effects", heap_effect_g),
+        (b"loom_heap_resources", heap_resource_g),
+    ):
+        ec += _leb_u(len(name)) + name + b"\x03" + _leb_u(index)
     for i, t in enumerate(ds):
         nb = t[1].encode(); ec += _leb_u(len(nb)) + nb + b"\x00" + _leb_u(i + _WASM_IMPORTS)         # export func
     cc = _leb_u(len(funcs) + len(lambda_funcs) + 8 + len(apply_arities))
@@ -2004,6 +2026,7 @@ def compile_wasm(program_src):
                   b"\x0b")
     e = (_leb_u(1) + _leb_u(2) + b"\x7f") + alloc_code; cc += _leb_u(len(e)) + e                # $alloc: 2 locals ($n,$i)
     resource_use_code = (_wasm_const(8) + b"\x10" + _leb_u(reserve_i + _WASM_IMPORTS) + b"\x21\x01"
+                         + _bump_global(heap_resource_g) +
                          b"\x20\x01" + _wasm_const(_WASM_K_RESOURCE) + b"\x36\x02\x00"
                          b"\x20\x01\x20\x00\x36\x02\x04"
                          b"\x20\x01" + _wasm_const(1) + b"\x72\x0b")
@@ -2240,9 +2263,21 @@ def emit_wat(program_src):
     lines = ["(module", "  (global $loom_abi_version i32 (i32.const " + str(_WASM_ABI_VERSION) + "))",
              "  (global $loom_heap_limit i32 (i32.const 65536))",
              "  (global $loom_heap_used (mut i32) (i32.const 0))",
+             "  (global $loom_heap_static_used i32 (i32.const " + str(max(0, ctx.hp_init - 8)) + "))",
+             "  (global $loom_heap_records (mut i32) (i32.const 0))",
+             "  (global $loom_heap_lists (mut i32) (i32.const 0))",
+             "  (global $loom_heap_variants (mut i32) (i32.const 0))",
+             "  (global $loom_heap_effects (mut i32) (i32.const 0))",
+             "  (global $loom_heap_resources (mut i32) (i32.const 0))",
              '  (export "loom_abi_version" (global $loom_abi_version))',
              '  (export "loom_heap_limit" (global $loom_heap_limit))',
-             '  (export "loom_heap_used" (global $loom_heap_used))']
+             '  (export "loom_heap_used" (global $loom_heap_used))',
+             '  (export "loom_heap_static_used" (global $loom_heap_static_used))',
+             '  (export "loom_heap_records" (global $loom_heap_records))',
+             '  (export "loom_heap_lists" (global $loom_heap_lists))',
+             '  (export "loom_heap_variants" (global $loom_heap_variants))',
+             '  (export "loom_heap_effects" (global $loom_heap_effects))',
+             '  (export "loom_heap_resources" (global $loom_heap_resources))']
     if uses_heap[0]:
         lines += ["  (memory 1)", '  (export "memory" (memory 0))', "  (global $hp (mut i32) (i32.const " + str(ctx.hp_init) + "))",
                   "  (func $reserve (param $size i32) (result i32) (local $t i32) (local $new i32)",
@@ -2262,6 +2297,7 @@ def emit_wat(program_src):
                   "    local.get $t)",
                   "  (func $rec (param $next i32) (param $fid i32) (param $val i32) (result i32) (local $t i32)",
                   "    i32.const 16  call $reserve  local.set $t",
+                  "    global.get $loom_heap_records  i32.const 1  i32.add  global.set $loom_heap_records",
                   "    local.get $t  i32.const 2  i32.store  ;; record kind",
                   "    local.get $t  local.get $fid  i32.store offset=4",
                   "    local.get $t  local.get $val  i32.store offset=8",
@@ -2289,18 +2325,21 @@ def emit_wat(program_src):
                   "    end)",
                   "  (func $cons (param $v i32) (param $rest i32) (result i32) (local $t i32)",
                   "    i32.const 12  call $reserve  local.set $t",
+                  "    global.get $loom_heap_lists  i32.const 1  i32.add  global.set $loom_heap_lists",
                   "    local.get $t  i32.const 1  i32.store  ;; list kind",
                   "    local.get $t  local.get $v  i32.store offset=4",
                   "    local.get $t  local.get $rest  i32.store offset=8",
                   "    local.get $t  i32.const 1  i32.or)",
                   "  (func $effbox (param $eff i32) (param $payload i32) (result i32) (local $t i32)",
                   "    i32.const 12  call $reserve  local.set $t",
+                  "    global.get $loom_heap_effects  i32.const 1  i32.add  global.set $loom_heap_effects",
                   "    local.get $t  i32.const 4  i32.store  ;; effect kind",
                   "    local.get $t  local.get $eff  i32.store offset=4",
                   "    local.get $t  local.get $payload  i32.store offset=8",
                   "    local.get $t  i32.const 1  i32.or)",
                   "  (func $variant (param $tag i32) (param $payload i32) (result i32) (local $t i32)",
                   "    i32.const 12  call $reserve  local.set $t",
+                  "    global.get $loom_heap_variants  i32.const 1  i32.add  global.set $loom_heap_variants",
                   "    local.get $t  i32.const 3  i32.store  ;; variant kind",
                   "    local.get $t  local.get $tag  i32.store offset=4",
                   "    local.get $t  local.get $payload  i32.store offset=8",
@@ -2322,6 +2361,7 @@ def emit_wat(program_src):
                   "    end)"]
         lines += ["  (func $resuse (param $rid i32) (result i32) (local $t i32)",
                   "    i32.const 8  call $reserve  local.set $t",
+                  "    global.get $loom_heap_resources  i32.const 1  i32.add  global.set $loom_heap_resources",
                   "    local.get $t  i32.const 5  i32.store  ;; resource-use kind",
                   "    local.get $t  local.get $rid  i32.store offset=4",
                   "    local.get $t  i32.const 1  i32.or)"]

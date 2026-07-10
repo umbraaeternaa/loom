@@ -829,6 +829,38 @@ def main():
         print(f"  {'ok  ' if heap_policy_ok else 'FAIL'} backend(WASM): heap policy is fixed-page/checked-reserve/no-grow")
     except Exception as e:
         print(f"  FAIL backend(WASM) heap policy: {e}")
+    try:                                               # heap diagnostics explain which object families reserved runtime heap
+        heap_diag_prog = '(defx t (Net IO) (fn (u) (record (xs (list 1 2)) (v (variant Some 5)) (e (net u)) (r (resource (res IO) (use res))) (msg "ok"))))'
+        heap_diag_wat = emit_wat(heap_diag_prog)
+        heap_diag_wasm = compile_wasm(heap_diag_prog)
+        heap_diag_ok = (
+            '(export "loom_heap_static_used" (global $loom_heap_static_used))' in heap_diag_wat
+            and '(export "loom_heap_records" (global $loom_heap_records))' in heap_diag_wat
+            and '(export "loom_heap_lists" (global $loom_heap_lists))' in heap_diag_wat
+            and '(export "loom_heap_variants" (global $loom_heap_variants))' in heap_diag_wat
+            and '(export "loom_heap_effects" (global $loom_heap_effects))' in heap_diag_wat
+            and '(export "loom_heap_resources" (global $loom_heap_resources))' in heap_diag_wat
+            and "global.get $loom_heap_records  i32.const 1  i32.add  global.set $loom_heap_records" in heap_diag_wat
+            and "global.get $loom_heap_lists  i32.const 1  i32.add  global.set $loom_heap_lists" in heap_diag_wat
+            and "global.get $loom_heap_variants  i32.const 1  i32.add  global.set $loom_heap_variants" in heap_diag_wat
+            and "global.get $loom_heap_effects  i32.const 1  i32.add  global.set $loom_heap_effects" in heap_diag_wat
+            and "global.get $loom_heap_resources  i32.const 1  i32.add  global.set $loom_heap_resources" in heap_diag_wat
+            and b"loom_heap_static_used" in heap_diag_wasm
+            and b"loom_heap_records" in heap_diag_wasm
+            and b"loom_heap_lists" in heap_diag_wasm
+            and b"loom_heap_variants" in heap_diag_wasm
+            and b"loom_heap_effects" in heap_diag_wasm
+            and b"loom_heap_resources" in heap_diag_wasm
+            and b"\x23\x05\x41\x01\x6a\x24\x05" in heap_diag_wasm
+            and b"\x23\x06\x41\x01\x6a\x24\x06" in heap_diag_wasm
+            and b"\x23\x07\x41\x01\x6a\x24\x07" in heap_diag_wasm
+            and b"\x23\x08\x41\x01\x6a\x24\x08" in heap_diag_wasm
+            and b"\x23\x09\x41\x01\x6a\x24\x09" in heap_diag_wasm
+        )
+        ok += heap_diag_ok
+        print(f"  {'ok  ' if heap_diag_ok else 'FAIL'} backend(WASM): heap family diagnostics exported")
+    except Exception as e:
+        print(f"  FAIL backend(WASM) heap diagnostics: {e}")
     try:                                               # seamN quantity is a source-checker guarantee in ABI v1; WASM carries cap presence, not a runtime quantum counter
         seam_k2 = '(defx t (Net) (fn (u) (seamN 2 (Net) (net u))))'
         seam_k5 = '(defx t (Net) (fn (u) (seamN 5 (Net) (net u))))'
@@ -1890,7 +1922,7 @@ def main():
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "391-quantity-mediation-roadmap-v1")' in play
+            and 'bundleUrl.searchParams.set("v", "392-heap-family-diagnostics-v1")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -1905,6 +1937,12 @@ def main():
             and 'globalValue("loom_heap_limit")' in play
             and 'globalValue("loom_heap_used")' in play
             and "bytes reserved" in play
+            and 'globalValue("loom_heap_records")' in play
+            and 'globalValue("loom_heap_lists")' in play
+            and 'globalValue("loom_heap_variants")' in play
+            and 'globalValue("loom_heap_effects")' in play
+            and 'globalValue("loom_heap_resources")' in play
+            and "heap objects:" in play
             and 'name: "WASM · checked i31.add"' in play
             and "(asm wasm i31.add 20 22)" in play
             and 'name: "WASM · checked i31.sub"' in play
@@ -1975,7 +2013,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 88   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution contracts, cli proof-surface, string-literal/heap-policy/seamN-static backend guards, runtime/cli facades, docs workflow/quantity-roadmap pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 89   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution contracts, cli proof-surface, string-literal/heap-policy/heap-diagnostics/seamN-static backend guards, runtime/cli facades, docs workflow/quantity-roadmap pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

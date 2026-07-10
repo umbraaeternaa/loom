@@ -233,7 +233,7 @@ async function boot(){
     pyodide = await loadPyodide();
     setStatus("loading LOOM…");
     const bundleUrl = new URL("./loom.py", location.href);
-    bundleUrl.searchParams.set("v", "391-quantity-mediation-roadmap-v1");
+    bundleUrl.searchParams.set("v", "392-heap-family-diagnostics-v1");
     const response = await fetch(bundleUrl, {cache: "no-store"});
     if (!response.ok) throw new Error("LOOM bundle HTTP " + response.status);
     const code = await response.text();
@@ -460,11 +460,25 @@ _r
     const value = dec(main());
     const heapLimit = globalValue("loom_heap_limit");
     const heapUsed = globalValue("loom_heap_used");
+    const heapStatic = globalValue("loom_heap_static_used");
+    const heapObjects = [
+      ["records", globalValue("loom_heap_records")],
+      ["lists", globalValue("loom_heap_lists")],
+      ["variants", globalValue("loom_heap_variants")],
+      ["effects", globalValue("loom_heap_effects")],
+      ["resources", globalValue("loom_heap_resources")]
+    ].filter(([, v]) => Number.isFinite(v));
     let s = "";
     if (out.length) s += out.map(esc).join("\n") + "\n";
     s += "<span class='v-ok'>=> " + esc(fmtValue(value)) + "</span>";
     if (Number.isFinite(heapUsed) && Number.isFinite(heapLimit)) {
       s += "\n<span class='v-eff'>heap: " + esc(heapUsed) + " / " + esc(heapLimit) + " bytes reserved</span>";
+    }
+    if (Number.isFinite(heapStatic) && heapStatic > 0) {
+      s += "\n<span class='v-eff'>static heap: " + esc(heapStatic) + " bytes</span>";
+    }
+    if (heapObjects.length) {
+      s += "\n<span class='v-eff'>heap objects: " + heapObjects.map(([k, v]) => esc(k + '=' + v)).join(" · ") + "</span>";
     }
     show(s);
   } catch(e) {
