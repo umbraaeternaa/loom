@@ -154,6 +154,10 @@ source names. Those maps describe one module and are not stable ABI IDs.
 
 - Unsupported LOOM forms fail during compilation with `LoomError`.
 - An unmatched variant arm emits a WebAssembly trap.
+- Metered source seams such as `seamN K` are enforced by the LOOM source
+  checker before code generation. In ABI v1, generated WASM carries capability
+  presence only (`push_caps` / `has_cap`); the numeric quantum `K` is not a
+  runtime counter in the binary artifact.
 - The current allocator does not grow memory. Generated modules declare one 64 KiB page
   and contain no `memory.grow` path. Before each runtime heap
   allocation, `$reserve` checks `hp + size <= loom_heap_limit` and also

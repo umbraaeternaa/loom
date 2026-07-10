@@ -20,7 +20,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "389-heap-accounting-ui-v1")',
+        'bundleUrl.searchParams.set("v", "390-seamn-static-boundary-v1")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -86,6 +86,9 @@ def _check_wasm_abi_doc() -> None:
         "one 64 KiB page",
         "`memory.grow`",
         "`$reserve`",
+        "`seamN K`",
+        "`push_caps` / `has_cap`",
+        "not a\n  runtime counter",
         "`loom_heap_limit`",
         "`loom_heap_used`",
         "hp + size <= loom_heap_limit",

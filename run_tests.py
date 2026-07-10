@@ -829,6 +829,22 @@ def main():
         print(f"  {'ok  ' if heap_policy_ok else 'FAIL'} backend(WASM): heap policy is fixed-page/checked-reserve/no-grow")
     except Exception as e:
         print(f"  FAIL backend(WASM) heap policy: {e}")
+    try:                                               # seamN quantity is a source-checker guarantee in ABI v1; WASM carries cap presence, not a runtime quantum counter
+        seam_k2 = '(defx t (Net) (fn (u) (seamN 2 (Net) (net u))))'
+        seam_k5 = '(defx t (Net) (fn (u) (seamN 5 (Net) (net u))))'
+        seam_wat_k2 = emit_wat(seam_k2)
+        seam_meter_boundary_ok = (
+            seam_wat_k2 == emit_wat(seam_k5)
+            and compile_wasm(seam_k2) == compile_wasm(seam_k5)
+            and "call $push_caps" in seam_wat_k2
+            and "call $has_cap" in seam_wat_k2
+            and "seamN" not in seam_wat_k2
+            and "quantum" not in seam_wat_k2
+        )
+        ok += seam_meter_boundary_ok
+        print(f"  {'ok  ' if seam_meter_boundary_ok else 'FAIL'} backend(WASM): seamN quantum is static-only in ABI v1")
+    except Exception as e:
+        print(f"  FAIL backend(WASM) seamN static boundary: {e}")
     try:                                               # i31 overflow semantics must match on every execution backend
         import shutil as _num_sh
         pnum = '(defx bounds () (fn () (record (add (+ 1073741823 1)) (sub (- -1073741824 1)) (mul (* 1073741823 2)) (wide (* 1073741823 1073741823)))))'
@@ -1874,7 +1890,7 @@ def main():
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "389-heap-accounting-ui-v1")' in play
+            and 'bundleUrl.searchParams.set("v", "390-seamn-static-boundary-v1")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -1940,7 +1956,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 86   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution contracts, cli proof-surface, string-literal/heap-policy backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 87   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution contracts, cli proof-surface, string-literal/heap-policy/seamN-static backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1
