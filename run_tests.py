@@ -803,6 +803,22 @@ def main():
         print(f"  {'ok  ' if w_string_boundary else 'FAIL'} backend(WASM): string literals cross the value boundary")
     except Exception as e:
         print(f"  FAIL backend(WASM) string boundary: {e}")
+    try:                                               # WASM heap policy is explicit: fixed page, no grow path, no hidden allocator meter yet
+        heap_prog = '(defx t () (fn () (record (xs (list 1 2)) (msg "ok"))))'
+        heap_wasm = compile_wasm(heap_prog)
+        heap_wat = emit_wat(heap_prog)
+        heap_policy_ok = (
+            b"\x05\x03\x01\x00\x01" in heap_wasm
+            and "  (memory 1)" in heap_wat
+            and "memory.grow" not in heap_wat
+            and "memory.size" not in heap_wat
+            and "global.get $hp  i32.const 16  i32.add  global.set $hp" in heap_wat
+            and "global.get $hp  i32.const 12  i32.add  global.set $hp" in heap_wat
+        )
+        ok += heap_policy_ok
+        print(f"  {'ok  ' if heap_policy_ok else 'FAIL'} backend(WASM): heap policy is fixed-page/no-grow")
+    except Exception as e:
+        print(f"  FAIL backend(WASM) heap policy: {e}")
     try:                                               # i31 overflow semantics must match on every execution backend
         import shutil as _num_sh
         pnum = '(defx bounds () (fn () (record (add (+ 1073741823 1)) (sub (- -1073741824 1)) (mul (* 1073741823 2)) (wide (* 1073741823 1073741823)))))'
@@ -1910,7 +1926,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 85   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution contracts, cli proof-surface, string-literal backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 86   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution contracts, cli proof-surface, string-literal/heap-policy backend guards, runtime/cli facades, docs workflow pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1
