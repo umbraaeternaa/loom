@@ -28,6 +28,18 @@ Possible decisions are:
 - Agent IDs must use their policy-owned role; a manifest cannot self-assign a
   more powerful role.
 
+## Secret and credential path advisory rules
+
+Policy v1 classifies common secret-bearing paths from the declaration only; it
+does not read file contents. Reads of credential-like paths such as `.env*`,
+`.ssh` keys, cloud credential stores, cookies, sessions, tokens, keychains,
+password stores, wallet seeds, and keystores return `operator-required`.
+
+A secret-like read combined with outbound or reporting actions (`network`,
+`report`, `dashboard`, or `git-push`) is rejected as possible `SecretExfil`.
+Writes or deletes targeting secret-like paths are rejected. This is a defensive
+classification layer; it is not a capability to collect or print secrets.
+
 LOOM writes require `syntax`, `citadel`, `docs-parity`, and `git-clean`
 evidence declarations. Writes under `docs/` also require `live-site`. Git push
 requires `git-sync` and `operator-approval`; backup requires `backup`.

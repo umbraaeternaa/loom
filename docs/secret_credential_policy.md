@@ -94,7 +94,8 @@ blocked, or approved.
 
 1. Document the defensive policy contract and pin it in the citadel.
 2. Add Gate path classification for common secret-bearing paths as advisory
-   `operator-required` or `reject`.
+   `operator-required` or `reject`. Implemented in Gate policy v1 for
+   declaration-only path classification; it does not read secret contents.
 3. Add receipt/evidence wording that proves a secret lane was blocked or
    approved without revealing the secret.
 4. Add VS Code/Playground diagnostics that explain why a task touched a

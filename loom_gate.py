@@ -42,6 +42,17 @@ _NOSTROMO_ROOT = "/Users/macbook/Projects/nostromo"
 _MEMORY_ROOT = "/Users/macbook/codex/Кодекс"
 _FROZEN_ROOT = "/Users/macbook/Projects/argus/citadel"
 _AUDIT_ROOT = "/Users/macbook/Projects/audit-targets"
+_SECRET_SEGMENTS = frozenset({
+    ".aws", ".azure", ".config/gcloud", ".docker", ".gnupg", ".kube",
+    ".ssh", ".1password", "keychain", "keychains", "password-store",
+})
+_CREDENTIAL_FILES = frozenset({
+    ".netrc", ".npmrc", ".pypirc", "credentials", "credentials.json",
+    "hosts.yml", "id_dsa", "id_ecdsa", "id_ed25519", "id_rsa",
+})
+_CREDENTIAL_TOKENS = ("api_key", "apikey", "auth_token", "cookie", "password", "session", "token")
+_WALLET_TOKENS = ("keystore", "mnemonic", "privatekey", "private_key", "seed", "wallet")
+_BANK_TOKENS = ("bank", "card", "payment")
 
 
 def _finding(path, code, message):
@@ -211,6 +222,24 @@ def _zone(path):
     return "external"
 
 
+def _secret_class(path):
+    lowered = path.lower()
+    parts = [part for part in lowered.split("/") if part]
+    base = parts[-1] if parts else ""
+    if base.startswith(".env"):
+        return "CredentialAccess"
+    joined_pairs = {"/".join(parts[index:index + 2]) for index in range(max(0, len(parts) - 1))}
+    if any(segment in _SECRET_SEGMENTS for segment in parts) or any(pair in _SECRET_SEGMENTS for pair in joined_pairs):
+        return "CredentialAccess"
+    if base in _CREDENTIAL_FILES or any(token in base for token in _CREDENTIAL_TOKENS):
+        return "CredentialAccess"
+    if any(token in lowered for token in _WALLET_TOKENS):
+        return "WalletKey"
+    if any(token in lowered for token in _BANK_TOKENS):
+        return "BankCredential"
+    return None
+
+
 def _issue(code, message, path="$"):
     return {"path": path, "code": code, "message": message}
 
@@ -264,9 +293,30 @@ def evaluate_manifest(manifest):
     if actions & {"write", "delete", "memory-write"} and not normalized["write_paths"]:
         violations.append(_issue("missing-write-scope", "mutating action requires at least one write path", "write_paths"))
 
+    secret_reads = []
+    for index, path in enumerate(normalized["read_paths"]):
+        secret = _secret_class(path)
+        if secret is None:
+            continue
+        issue_path = f"read_paths[{index}]"
+        secret_reads.append((path, secret, issue_path))
+        reasons.append(_issue(
+            "secret-read-operator-required",
+            f"secret-like read path requires manifest-bound operator approval ({secret})",
+            issue_path,
+        ))
+
     for index, path in enumerate(normalized["write_paths"]):
         zone = _zone(path)
         issue_path = f"write_paths[{index}]"
+        secret = _secret_class(path)
+        if secret is not None:
+            violations.append(_issue(
+                "secret-write-forbidden",
+                f"secret-like write/delete path is rejected by Gate policy ({secret})",
+                issue_path,
+            ))
+            continue
         if zone == "frozen":
             violations.append(_issue("frozen-zone", "the frozen ARGUS citadel is read-only for every agent", issue_path))
             continue
@@ -313,6 +363,13 @@ def evaluate_manifest(manifest):
     }[agent]
     for action in sorted(actions & operator_actions):
         reasons.append(_issue("operator-gate", f"action '{action}' requires operator approval", "actions"))
+    if secret_reads and actions & {"network", "report", "dashboard", "git-push"}:
+        for _, secret, issue_path in secret_reads:
+            violations.append(_issue(
+                "secret-exfil-forbidden",
+                f"secret-like read combined with outbound/reporting action is rejected by Gate policy ({secret})",
+                issue_path,
+            ))
 
     required = set()
     loom_writes = [path for path in normalized["write_paths"] if _zone(path) == "loom"]

@@ -1693,6 +1693,36 @@ def main():
         print(f"  {'ok  ' if policy_contract_ok else 'FAIL'} gate: deterministic advisory role policy v1")
     except Exception as e:
         print(f"  FAIL Gate policy v1 contract: {e}")
+    try:                                               # Gate secret path policy v1: classify declarations without reading secrets
+        def secret_manifest(read_paths, write_paths, actions):
+            return {
+                "schema": "loom-gate-manifest/v1",
+                "agent": {"id": "codex", "role": "code"},
+                "task": {"summary": "Secret path probe", "intent": "Pin defensive secret path classification"},
+                "repositories": [],
+                "read_paths": read_paths,
+                "write_paths": write_paths,
+                "actions": actions,
+                "evidence_required": [],
+            }
+        secret_read = _loom.evaluate_manifest(secret_manifest(["/Users/macbook/Projects/loom/.env"], [], ["read"]))
+        secret_exfil = _loom.evaluate_manifest(secret_manifest(["/Users/macbook/Projects/loom/.env"], [], ["read", "network"]))
+        secret_write = _loom.evaluate_manifest(secret_manifest([], ["/Users/macbook/.ssh/id_ed25519"], ["write"]))
+        secret_docs = _loom.evaluate_manifest(secret_manifest(["/Users/macbook/Projects/loom/docs/secret_credential_policy.md"], [], ["read"]))
+        secret_path_policy_ok = (
+            secret_read["decision"] == "operator-required"
+            and any(item["code"] == "secret-read-operator-required" for item in secret_read["reasons"])
+            and secret_exfil["decision"] == "reject"
+            and any(item["code"] == "secret-exfil-forbidden" for item in secret_exfil["violations"])
+            and secret_write["decision"] == "reject"
+            and any(item["code"] == "secret-write-forbidden" for item in secret_write["violations"])
+            and secret_docs["decision"] == "accept"
+            and all(result["advisory"] is True for result in (secret_read, secret_exfil, secret_write, secret_docs))
+        )
+        ok += secret_path_policy_ok
+        print(f"  {'ok  ' if secret_path_policy_ok else 'FAIL'} gate: defensive secret path policy v1")
+    except Exception as e:
+        print(f"  FAIL Gate secret path policy v1: {e}")
     try:                                               # Gate receipt v1: bind declaration, policy, scope, heads, and evidence
         receipt_manifest = gate_manifest(
             "codex", "code", ["/Users/macbook/Projects/loom"],
@@ -2192,7 +2222,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 98   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution contracts, cli proof-surface/source-map/json contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap/secret-policy pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 99   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/secret-path contracts, cli proof-surface/source-map/json contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap/secret-policy pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

@@ -2603,6 +2603,11 @@ _GATE_RESULTS = {"completed", "failed", "blocked"}; _GATE_EVIDENCE_STATUS = {"pa
 _GATE_ROLES_BY_AGENT = {"codex": "code", "cloud-code": "organism", "auditor": "audit", "argus": "organism", "nostromo": "night", "ci": "trace", "operator": "operator"}
 _GATE_LOOM = "/Users/macbook/Projects/loom"; _GATE_ARGUS = "/Users/macbook/Projects/argus"; _GATE_NOSTROMO = "/Users/macbook/Projects/nostromo"
 _GATE_MEMORY = "/Users/macbook/codex/Кодекс"; _GATE_FROZEN = "/Users/macbook/Projects/argus/citadel"; _GATE_AUDIT = "/Users/macbook/Projects/audit-targets"
+_GATE_SECRET_SEGMENTS = {".aws", ".azure", ".config/gcloud", ".docker", ".gnupg", ".kube", ".ssh", ".1password", "keychain", "keychains", "password-store"}
+_GATE_CREDENTIAL_FILES = {".netrc", ".npmrc", ".pypirc", "credentials", "credentials.json", "hosts.yml", "id_dsa", "id_ecdsa", "id_ed25519", "id_rsa"}
+_GATE_CREDENTIAL_TOKENS = ("api_key", "apikey", "auth_token", "cookie", "password", "session", "token")
+_GATE_WALLET_TOKENS = ("keystore", "mnemonic", "privatekey", "private_key", "seed", "wallet")
+_GATE_BANK_TOKENS = ("bank", "card", "payment")
 
 
 def _gate_finding(path, code, message): return {"path": path, "code": code, "message": message}
@@ -2716,6 +2721,17 @@ def _gate_zone(path):
     return "external"
 
 
+def _gate_secret_class(path):
+    lowered = path.lower(); parts = [part for part in lowered.split("/") if part]; base = parts[-1] if parts else ""
+    if base.startswith(".env"): return "CredentialAccess"
+    pairs = {"/".join(parts[index:index + 2]) for index in range(max(0, len(parts) - 1))}
+    if any(segment in _GATE_SECRET_SEGMENTS for segment in parts) or any(pair in _GATE_SECRET_SEGMENTS for pair in pairs): return "CredentialAccess"
+    if base in _GATE_CREDENTIAL_FILES or any(token in base for token in _GATE_CREDENTIAL_TOKENS): return "CredentialAccess"
+    if any(token in lowered for token in _GATE_WALLET_TOKENS): return "WalletKey"
+    if any(token in lowered for token in _GATE_BANK_TOKENS): return "BankCredential"
+    return None
+
+
 def _gate_issue(code, message, path="$"): return {"path": path, "code": code, "message": message}
 
 
@@ -2760,8 +2776,17 @@ def evaluate_manifest(manifest):
     }[agent]
     for action in sorted(actions - allowed): violations.append(_gate_issue("action-forbidden", f"agent '{agent}' may not request action '{action}'", "actions"))
     if actions & {"write", "delete", "memory-write"} and not normalized["write_paths"]: violations.append(_gate_issue("missing-write-scope", "mutating action requires at least one write path", "write_paths"))
+    secret_reads = []
+    for index, path in enumerate(normalized["read_paths"]):
+        secret = _gate_secret_class(path)
+        if secret is None: continue
+        where = f"read_paths[{index}]"; secret_reads.append((path, secret, where))
+        reasons.append(_gate_issue("secret-read-operator-required", f"secret-like read path requires manifest-bound operator approval ({secret})", where))
     for index, path in enumerate(normalized["write_paths"]):
         zone = _gate_zone(path); where = f"write_paths[{index}]"
+        secret = _gate_secret_class(path)
+        if secret is not None:
+            violations.append(_gate_issue("secret-write-forbidden", f"secret-like write/delete path is rejected by Gate policy ({secret})", where)); continue
         if zone == "frozen": violations.append(_gate_issue("frozen-zone", "the frozen ARGUS citadel is read-only for every agent", where)); continue
         if agent == "operator": continue
         if agent == "codex":
@@ -2783,6 +2808,9 @@ def evaluate_manifest(manifest):
         if agent != "operator" and owner != agent: violations.append(_gate_issue("git-zone-forbidden", f"agent '{agent}' may not perform Git actions in zone '{zone}'", f"repositories[{index}].root"))
     gated = {"codex": {"write", "memory-write", "process", "network", "git-commit", "git-push", "delete"}, "cloud-code": {"process", "git-commit", "git-push", "delete"}, "auditor": {"network"}, "argus": {"process"}, "nostromo": {"process"}, "ci": set(), "operator": set()}[agent]
     for action in sorted(actions & gated): reasons.append(_gate_issue("operator-gate", f"action '{action}' requires operator approval", "actions"))
+    if secret_reads and actions & {"network", "report", "dashboard", "git-push"}:
+        for _, secret, where in secret_reads:
+            violations.append(_gate_issue("secret-exfil-forbidden", f"secret-like read combined with outbound/reporting action is rejected by Gate policy ({secret})", where))
     required = set(); loom_writes = [path for path in normalized["write_paths"] if _gate_zone(path) == "loom"]
     if loom_writes: required |= {"syntax", "citadel", "docs-parity", "git-clean"}
     if any(_gate_under(path, _GATE_LOOM + "/docs") for path in loom_writes): required.add("live-site")
