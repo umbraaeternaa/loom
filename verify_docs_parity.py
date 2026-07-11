@@ -22,7 +22,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "400-playground-source-line-preview-v1")',
+        'bundleUrl.searchParams.set("v", "405-playground-gate-diagnostics-v1")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -67,6 +67,13 @@ def _check_playground_loader() -> None:
         "(asm wasm i31.lt_s -1 0)",
         'name: "WASM · checked i31.gt_s"',
         "(asm wasm i31.gt_s 0 -1)",
+        'id="bGate"',
+        "function renderGateDiagnostics(diagnostics)",
+        "loom.build_gate_diagnostics(_manifest)",
+        "loom-gate-diagnostics/v1",
+        "SecretExfil",
+        "CredentialAccess",
+        "raw paths and secret values are not displayed",
     )
     missing = [needle for needle in required if needle not in text]
     if missing:

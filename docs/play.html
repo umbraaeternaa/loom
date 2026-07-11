@@ -38,6 +38,7 @@
   button.act:disabled{opacity:.5;cursor:wait}
   .status{color:var(--dim);font-size:13px;margin-left:auto}
   .v-ok{color:var(--good)} .v-bad{color:var(--bad)} .v-key{color:var(--violet)} .v-eff{color:var(--teal)}
+  .gate-note{display:block;color:rgba(231,236,255,.72);margin:.25rem 0 .5rem}
   .map-line{display:block;margin:.08rem 0}
   .map-source{display:block;color:rgba(231,236,255,.78);margin-left:2ch}
   .map-caret{display:block;color:var(--teal);margin-left:2ch}
@@ -72,6 +73,7 @@
     <button type="button" class="act" id="bWasm" disabled>Run → WASM</button>
     <button type="button" class="act" id="bJs" disabled>Compile → JS</button>
     <button type="button" class="act" id="bWat" disabled>Compile → WAT</button>
+    <button type="button" class="act" id="bGate" disabled>Gate diagnostics</button>
     <span class="status" id="status">loading…</span>
   </div>
 
@@ -217,6 +219,8 @@ const EXAMPLES = [
 
 const $ = id => document.getElementById(id);
 let pyodide = null;
+const GATE_DIAGNOSTIC_CLASS_LEGEND = ["CredentialAccess", "SecretExfil"];
+const GATE_DIAGNOSTIC_DISPOSITION_LEGEND = ["approval-required", "blocked"];
 
 function setStatus(t){ $("status").textContent = t; }
 function show(html){ $("out").innerHTML = html; }
@@ -266,6 +270,21 @@ function renderWatSourceMap(wat, src){
   if (rows.length > 12) s += "  … " + esc(String(rows.length - 12)) + " more allocation site(s)\n";
   return s + "\n";
 }
+function renderGateDiagnostics(diagnostics){
+  let s = "<span class='v-eff'>loom-gate-diagnostics/v1</span>\n";
+  s += "decision: <span class='" + (diagnostics.decision === "reject" ? "v-bad" : "v-ok") + "'>" + esc(diagnostics.decision) + "</span>\n";
+  s += "<span class='gate-note'>redacted: raw paths and secret values are not displayed</span>\n";
+  if (diagnostics.secret_lanes && diagnostics.secret_lanes.length) {
+    s += "secret lanes:\n";
+    for (const item of diagnostics.secret_lanes) {
+      s += "  [" + esc(item.disposition) + "] <span class='v-key'>" + esc(item.class) + "</span> at " +
+           esc(item.field) + " (" + esc(item.code) + ")\n";
+    }
+  } else {
+    s += "secret lanes: none\n";
+  }
+  return s;
+}
 
 // render example chips
 EXAMPLES.forEach((ex,i) => {
@@ -283,14 +302,14 @@ async function boot(){
     pyodide = await loadPyodide();
     setStatus("loading LOOM…");
     const bundleUrl = new URL("./loom.py", location.href);
-    bundleUrl.searchParams.set("v", "400-playground-source-line-preview-v1");
+    bundleUrl.searchParams.set("v", "405-playground-gate-diagnostics-v1");
     const response = await fetch(bundleUrl, {cache: "no-store"});
     if (!response.ok) throw new Error("LOOM bundle HTTP " + response.status);
     const code = await response.text();
     pyodide.FS.writeFile("loom.py", code);
     pyodide.runPython("import loom, json");
     setStatus("ready ✓");
-    ["bCheck","bRun","bWasm","bJs","bWat"].forEach(id => $(id).disabled = false);
+    ["bCheck","bRun","bWasm","bJs","bWat","bGate"].forEach(id => $(id).disabled = false);
     show("Ready — press <span class='v-eff'>Check</span>, or pick an example above.");
   } catch (e) {
     setStatus("failed to load");
@@ -560,6 +579,28 @@ _w
 `);
     show(renderWatSourceMap(wat, $("src").value) + "<span class='v-eff'>;; LOOM → WebAssembly text (WAT) — the live published backend surface</span>\n\n" + esc(wat));
   } catch(e){ show("<span class='v-bad'>error</span>\n" + esc(e)); }
+};
+
+$("bGate").onclick = () => {
+  if(!pyodide) return;
+  try {
+    const diagnostics = pyjson(`
+import json
+_manifest = {
+    "schema": "loom-gate-manifest/v1",
+    "agent": {"id": "codex", "role": "code"},
+    "task": {"summary": "Playground redacted diagnostics", "intent": "Explain a secret lane without leaking it"},
+    "repositories": [],
+    "read_paths": ["/tmp/" + "." + "env"],
+    "write_paths": [],
+    "actions": ["read", "network"],
+    "evidence_required": [],
+}
+_r = json.dumps(loom.build_gate_diagnostics(_manifest))
+_r
+`);
+    show(renderGateDiagnostics(diagnostics));
+  } catch(e){ show("<span class='v-bad'>Gate diagnostics error</span>\n" + esc(e)); }
 };
 
 boot();

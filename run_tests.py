@@ -2156,7 +2156,7 @@ def main():
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "400-playground-source-line-preview-v1")' in play
+            and 'bundleUrl.searchParams.set("v", "405-playground-gate-diagnostics-v1")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -2199,6 +2199,13 @@ def main():
             and "(asm wasm i31.lt_s -1 0)" in play
             and 'name: "WASM · checked i31.gt_s"' in play
             and "(asm wasm i31.gt_s 0 -1)" in play
+            and 'id="bGate"' in play
+            and "function renderGateDiagnostics(diagnostics)" in play
+            and "loom.build_gate_diagnostics(_manifest)" in play
+            and "loom-gate-diagnostics/v1" in play
+            and "SecretExfil" in play
+            and "CredentialAccess" in play
+            and "raw paths and secret values are not displayed" in play
             and all(name not in play for name in (
                 "loom_parse.py",
                 "loom_checker.py",
@@ -2261,6 +2268,26 @@ def main():
         print(f"  {'ok  ' if source_line_preview_ok else 'FAIL'} docs: playground source-line preview pinned")
     except Exception as e:
         print(f"  FAIL playground source-line preview pin: {e}")
+    try:                                               # Playground surfaces redacted Gate diagnostics without raw secret material
+        play = Path(__file__).with_name("docs").joinpath("play.html").read_text()
+        gate_diagnostics_ui_ok = (
+            'id="bGate"' in play
+            and "Gate diagnostics" in play
+            and "function renderGateDiagnostics(diagnostics)" in play
+            and "loom.build_gate_diagnostics(_manifest)" in play
+            and "loom-gate-diagnostics/v1" in play
+            and "SecretExfil" in play
+            and "CredentialAccess" in play
+            and "approval-required" in play
+            and "blocked" in play
+            and "raw paths and secret values are not displayed" in play
+            and "/Users" not in play
+            and "API_KEY" not in play
+        )
+        ok += gate_diagnostics_ui_ok
+        print(f"  {'ok  ' if gate_diagnostics_ui_ok else 'FAIL'} docs: playground Gate diagnostics UI pinned")
+    except Exception as e:
+        print(f"  FAIL playground Gate diagnostics UI pin: {e}")
     try:                                               # runtime quantity mediation needs a design contract before it becomes ABI/runtime code
         qdoc = Path(__file__).with_name("docs").joinpath("wasm_quantity_mediation.md").read_text()
         quantity_doc_ok = (
@@ -2314,7 +2341,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 101   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/secret-path/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap/secret-policy pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 102   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/secret-path/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap/secret-policy pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1
