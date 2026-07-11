@@ -21,7 +21,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "393-wat-allocation-labels-v1")',
+        'bundleUrl.searchParams.set("v", "394-tokenize-spans-v1")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -83,6 +83,10 @@ def _check_playground_loader() -> None:
     leaked_imports = sorted(imported & host_only)
     if leaked_imports:
         raise SystemExit("docs parity: standalone bundle has host-only top-level imports: " + ", ".join(leaked_imports))
+    bundle_text = DOCS_LOOM.read_text()
+    for needle in ("def tokenize_spans", '"line"', '"column"', '"offset"', '"end_offset"'):
+        if needle not in bundle_text:
+            raise SystemExit("docs parity: standalone bundle lost source-span tokenizer marker: " + needle)
 
 
 def _check_wasm_abi_doc() -> None:

@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import loom as _loom
 from loom_frontend import ASM_INTRINSICS
-from loom import parse, check, run_call, compile_py, run_compiled, run_js, compile_js, compile_wasm, run_wasm, emit_wat, LoomError, _WASM_ABI_VERSION
+from loom import parse, tokenize, tokenize_spans, check, run_call, compile_py, run_compiled, run_js, compile_js, compile_wasm, run_wasm, emit_wat, LoomError, _WASM_ABI_VERSION
 
 # (name, source, should_be_accepted)
 CASES = [
@@ -711,6 +711,23 @@ def main():
         print(f"  {'ok  ' if parser_ok else 'FAIL'} parser: module boundary + isolated parses (64 parallel reads)")
     except Exception as e:
         print(f"  FAIL parser module boundary: {e}")
+    try:                                               # source spans are a diagnostics layer; parse AST remains unchanged
+        span_src = '  (defx f ()\n  (fn () "a;b")) ; trailing comment\n'
+        spans = tokenize_spans(span_src)
+        span_tokens = [s["token"] for s in spans]
+        source_spans_ok = (
+            span_tokens == tokenize(span_src)
+            and span_tokens == ["(", "defx", "f", "(", ")", "(", "fn", "(", ")", '"a;b"', ")", ")"]
+            and spans[0]["line"] == 1 and spans[0]["column"] == 3 and spans[0]["offset"] == 2
+            and spans[5]["line"] == 2 and spans[5]["column"] == 3
+            and spans[9]["token"] == '"a;b"' and spans[9]["line"] == 2 and spans[9]["column"] == 10
+            and all("trailing" != s["token"] for s in spans)
+            and parse(span_src) == [["defx", "f", [], ["fn", [], "a;b"]]]
+        )
+        ok += source_spans_ok
+        print(f"  {'ok  ' if source_spans_ok else 'FAIL'} parser: source token spans preserve parse semantics")
+    except Exception as e:
+        print(f"  FAIL parser source spans: {e}")
     try:                                               # every runtime call owns its capability stack
         from concurrent.futures import ThreadPoolExecutor
         runtime_programs = [
@@ -1939,7 +1956,7 @@ def main():
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "393-wat-allocation-labels-v1")' in play
+            and 'bundleUrl.searchParams.set("v", "394-tokenize-spans-v1")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -2030,7 +2047,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 90   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution contracts, cli proof-surface, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/seamN-static backend guards, runtime/cli facades, docs workflow/quantity-roadmap pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 91   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution contracts, cli proof-surface, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/seamN-static backend guards, runtime/cli facades, docs workflow/quantity-roadmap pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

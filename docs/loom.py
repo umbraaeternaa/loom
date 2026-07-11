@@ -211,11 +211,48 @@ def is_fn_expr(e, fns, penv):                                    # does this exp
     return (isinstance(e, list) and len(e) > 0 and e[0] == "fn") or (_is_symbol(e) and (e in fns or e in penv))
 
 
+def tokenize_spans(s):
+    spans = []
+    i = 0
+    line = 1
+    column = 1
+    n = len(s)
+    def advance(ch):
+        nonlocal line, column
+        if ch == "\n":
+            line += 1
+            column = 1
+        else:
+            column += 1
+    while i < n:
+        ch = s[i]
+        if ch.isspace():
+            advance(ch); i += 1; continue
+        if ch == ";":
+            while i < n and s[i] != "\n":
+                advance(s[i]); i += 1
+            continue
+        start = i; start_line = line; start_column = column
+        if ch in "()":
+            tok = ch; advance(ch); i += 1
+        elif ch == '"':
+            i += 1; advance(ch)
+            while i < n:
+                c = s[i]
+                i += 1; advance(c)
+                if c == '"':
+                    break
+            tok = s[start:i]
+        else:
+            while i < n and (not s[i].isspace()) and s[i] not in "();":
+                advance(s[i]); i += 1
+            tok = s[start:i]
+        spans.append({"token": tok, "line": start_line, "column": start_column, "offset": start, "end_offset": i})
+    return spans
+
+
 def tokenize(s):
-    # strip `;`-to-end-of-line comments FIRST, but never inside a string literal: the alternation matches a whole
-    # "..." first (kept verbatim, so a ';' within it survives), otherwise a comment (dropped).
-    s = re.sub(r'"[^"]*"|;[^\n]*', lambda m: m.group(0) if m.group(0)[:1] == '"' else '', s)
-    return re.findall(r'"[^"]*"|[()]|[^\s()]+', s)
+    return [span["token"] for span in tokenize_spans(s)]
 
 
 def _read(t):
