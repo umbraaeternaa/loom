@@ -3324,6 +3324,16 @@ def _emit_verdict_json(verdict):
     print(json.dumps(verdict, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
 
 
+def allocation_source_map_lines(wat):
+    rows = sorted({
+        (int(line), int(column), label.strip())
+        for label, line, column in re.findall(r";; alloc ([^\n]*?) at (\d+):(\d+)", wat)
+    })
+    if not rows:
+        return ["allocation source map: no heap allocation sites"]
+    return ["allocation source map"] + [f"  {line}:{column}  {label}" for line, column, label in rows]
+
+
 def _cli(argv):
 
     flags, pos, i = {}, [], 0
@@ -3335,7 +3345,7 @@ def _cli(argv):
         elif a.startswith("--format="): flags["format"] = a.split("=", 1)[1]; i += 1
         else: pos.append(a); i += 1
     if len(pos) < 2:
-        print("usage: python3 loom.py <check|run|build|audit> FILE [call] [--target py|js|wat] [--format text|json]"); return 2
+        print("usage: python3 loom.py <check|run|build|audit|source-map> FILE [call] [--target py|js|wat] [--format text|json]"); return 2
     cmd, path = pos[0], pos[1]; call = pos[2] if len(pos) > 2 else "(main)"
     try: src = open(path).read()
     except OSError as e: print("cannot read file: " + str(e)); return 2
@@ -3367,6 +3377,11 @@ def _cli(argv):
         tgt = flags.get("target", "py")
         try: print(emit_wat(src) if tgt == "wat" else (compile_js(src) if tgt == "js" else compile_py(src)))
         except LoomError as e: print("REJECTED: " + str(e)); return 1
+        return 0
+    if cmd == "source-map":
+        try: lines = allocation_source_map_lines(emit_wat(src))
+        except LoomError as e: print("REJECTED: " + str(e)); return 1
+        for line in lines: print(line)
         return 0
     if cmd == "audit":                                  # DISTRIBUTION: surface the capability surface of AI-written code
         verdict = build_verdict(src)

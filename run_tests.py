@@ -1515,6 +1515,24 @@ def main():
             print(f"  {'ok  ' if r31 else 'FAIL'} cli check: scoped rejection summary")
     except Exception as e:
         print(f"  FAIL cli check summary: {e}")
+    try:                                               # CLI: WAT allocation source map should match Playground diagnostics
+        with tempfile.TemporaryDirectory() as td:
+            sample = Path(td) / "heap.loom"
+            sample.write_text("""(defx main () (fn ()
+  (list 1 2 3)))
+""")
+            loom = Path(__file__).with_name("loom.py")
+            sm = subprocess.run([sys.executable, str(loom), "source-map", str(sample)], capture_output=True, text=True)
+            r32 = (
+                sm.returncode == 0
+                and "allocation source map" in sm.stdout
+                and "2:3  list cell" in sm.stdout
+                and "REJECTED" not in sm.stdout
+            )
+            ok += r32
+            print(f"  {'ok  ' if r32 else 'FAIL'} cli source-map: summarizes WAT allocation labels")
+    except Exception as e:
+        print(f"  FAIL cli source-map: {e}")
     try:                                               # Gate v1: one deterministic JSON verdict across API, check, and audit
         with tempfile.TemporaryDirectory() as td:
             clean_src = '(defx fetch (Net) (fn (u) (net u)))\n'
@@ -1986,7 +2004,7 @@ def main():
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "397-playground-wat-source-map-v1")' in play
+            and 'bundleUrl.searchParams.set("v", "398-cli-source-map-v1")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -2010,6 +2028,8 @@ def main():
             and "function watSourceMap(wat)" in play
             and "function renderWatSourceMap(wat)" in play
             and ";; allocation source map" in play
+            and "allocation_source_map_lines" in Path(__file__).with_name("docs").joinpath("loom.py").read_text()
+            and "source-map" in Path(__file__).with_name("docs").joinpath("loom.py").read_text()
             and "WASM · source map" in play
             and "alloc ([^\\n]*?) at (\\d+):(\\d+)" in play
             and 'name: "WASM · checked i31.add"' in play
@@ -2098,7 +2118,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 94   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution contracts, cli proof-surface, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 95   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution contracts, cli proof-surface/source-map, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1
