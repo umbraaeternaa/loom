@@ -2158,6 +2158,32 @@ def main():
         print(f"  {'ok  ' if quantity_doc_ok else 'FAIL'} docs: wasm quantity mediation roadmap pinned")
     except Exception as e:
         print(f"  FAIL quantity mediation roadmap pin: {e}")
+    try:                                               # secret handling must start as a denial-first safety contract, not ambient host access
+        sdoc = Path(__file__).with_name("docs").joinpath("secret_credential_policy.md").read_text()
+        secret_policy_doc_ok = (
+            "LOOM Secret and Credential Safety Policy" in sdoc
+            and "defensive design contract" in sdoc
+            and "does not grant any capability to collect, extract, or exfiltrate" in sdoc
+            and "`SecretRead`" in sdoc
+            and "`CredentialAccess`" in sdoc
+            and "`WalletKey`" in sdoc
+            and "`BankCredential`" in sdoc
+            and "`SecretExfil`" in sdoc
+            and "No ambient credential access" in sdoc
+            and "No silent exfiltration" in sdoc
+            and "Operator approval must be manifest-bound" in sdoc
+            and "Receipts must not contain the secret" in sdoc
+            and "Agents may not self-vouch credential access" in sdoc
+            and "`loom-gate-manifest/v2`" in sdoc
+            and "`secret_access`" in sdoc
+            and "ordinary `read_paths` must not implicitly" in sdoc
+            and "No password harvesting" in sdoc
+            and "No receipt or dashboard view that prints raw secrets" in sdoc
+        )
+        ok += secret_policy_doc_ok
+        print(f"  {'ok  ' if secret_policy_doc_ok else 'FAIL'} docs: secret credential safety policy pinned")
+    except Exception as e:
+        print(f"  FAIL secret credential safety policy pin: {e}")
     try:                                               # deterministic property fuzz is part of the citadel, not an optional side script
         fuzz = Path(__file__).with_name("fuzz_tests.py")
         fr = subprocess.run([sys.executable, str(fuzz), "--cases", "64", "--seed", "0xC17ADE1"], capture_output=True, text=True)
@@ -2166,7 +2192,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 97   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution contracts, cli proof-surface/source-map/json contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 98   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution contracts, cli proof-surface/source-map/json contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap/secret-policy pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

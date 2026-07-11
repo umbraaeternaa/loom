@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 400 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 401 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 400/400 citadel checks
+PASS — 401/401 citadel checks
 ```
 
 ## The idea in one screen
@@ -220,6 +220,13 @@ path: `loom.claim_operator_approval(...)` atomically claims the signed token,
 then `loom.finish_claimed_receipt(...)` closes that exact claim once as
 `completed` or `failed`. A claim cannot be consumed through the older path,
 replayed, rebound to another manifest, or finalized twice.
+
+Secret and credential handling is denial-first by design. The defensive
+[LOOM Secret and Credential Safety Policy](docs/secret_credential_policy.md)
+pins future Gate behavior: ordinary `read_paths` must not imply credential
+access, approvals must be manifest-bound, and receipts/dashboard views must
+prove use or denial without printing raw secrets. This is a protection contract,
+not a capability to harvest passwords, keys, wallets, cookies, or bank data.
 
 The same verified program runs in the interpreter, compiles to **Python** and **JavaScript**,
 and lowers tagged values, closures, structured data, and effects to **WebAssembly** — one checked source, many platforms. LOOM integers have one portable contract on every backend: signed i31 values (`-2^30..2^30-1`) with deterministic modulo-`2^31` wraparound; out-of-range literals are rejected before execution.

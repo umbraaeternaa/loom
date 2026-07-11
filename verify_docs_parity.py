@@ -15,6 +15,7 @@ DOCS_LOOM = ROOT / "docs" / "loom.py"
 PLAY_HTML = ROOT / "docs" / "play.html"
 WASM_ABI_DOC = ROOT / "docs" / "wasm_abi_v1.md"
 QUANTITY_DOC = ROOT / "docs" / "wasm_quantity_mediation.md"
+SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
 
 
 def _check_playground_loader() -> None:
@@ -157,6 +158,33 @@ def _check_quantity_mediation_doc() -> None:
         raise SystemExit("docs parity: quantity mediation roadmap drift: missing " + ", ".join(missing))
 
 
+def _check_secret_credential_policy_doc() -> None:
+    text = SECRET_POLICY_DOC.read_text()
+    required = (
+        "LOOM Secret and Credential Safety Policy",
+        "defensive design contract",
+        "does not grant any capability to collect, extract, or exfiltrate",
+        "`SecretRead`",
+        "`CredentialAccess`",
+        "`WalletKey`",
+        "`BankCredential`",
+        "`SecretExfil`",
+        "No ambient credential access",
+        "No silent exfiltration",
+        "Operator approval must be manifest-bound",
+        "Receipts must not contain the secret",
+        "Agents may not self-vouch credential access",
+        "`loom-gate-manifest/v2`",
+        "`secret_access`",
+        "ordinary `read_paths` must not implicitly",
+        "No password harvesting",
+        "No receipt or dashboard view that prints raw secrets",
+    )
+    missing = [needle for needle in required if needle not in text]
+    if missing:
+        raise SystemExit("docs parity: secret credential safety policy drift: missing " + ", ".join(missing))
+
+
 def _run_injected_citadel() -> int:
     spec = importlib.util.spec_from_file_location("loom", DOCS_LOOM)
     if spec is None or spec.loader is None:
@@ -193,6 +221,7 @@ def main() -> int:
     _check_playground_loader()
     _check_wasm_abi_doc()
     _check_quantity_mediation_doc()
+    _check_secret_credential_policy_doc()
     _check_pyodide_import_boundary()
     result = _run_injected_citadel()
     if result != 0:
