@@ -22,6 +22,14 @@ evidence item must pass. An `operator-required` decision additionally requires
 passing `operator-approval` evidence. A rejected task cannot claim completion,
 but may produce an honest `blocked` or `failed` receipt.
 
+Secret-lane receipts use a dedicated `secret-lane` evidence kind. Any receipt
+whose policy decision contains a `secret-*` reason or violation must include
+passing `secret-lane` evidence, even when the result is `blocked` or `failed`.
+The detail must start with `secret lane approved:` or `secret lane blocked:`
+and must not contain raw filesystem paths, backslashes, or `KEY=value`-style
+assignments. Receipts may record the class and manifest field, such as
+`CredentialAccess read_paths[0]`; they must not print secret values.
+
 Successful output embeds `loom-gate-receipt/v1` and `receipt_sha256`, computed
 over canonical receipt JSON before the hash field is added. Invalid output uses
 `loom-gate-receipt-validation/v1`, contains no receipt, and reports stable

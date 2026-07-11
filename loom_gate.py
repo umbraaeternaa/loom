@@ -22,7 +22,7 @@ ACTIONS = frozenset({
 })
 EVIDENCE = frozenset({
     "syntax", "citadel", "docs-parity", "fuzz", "git-clean", "git-sync",
-    "live-site", "backup", "operator-approval", "audit",
+    "live-site", "backup", "operator-approval", "audit", "secret-lane",
 })
 _TOP_KEYS = frozenset({
     "schema", "agent", "task", "repositories", "read_paths", "write_paths",
@@ -53,6 +53,7 @@ _CREDENTIAL_FILES = frozenset({
 _CREDENTIAL_TOKENS = ("api_key", "apikey", "auth_token", "cookie", "password", "session", "token")
 _WALLET_TOKENS = ("keystore", "mnemonic", "privatekey", "private_key", "seed", "wallet")
 _BANK_TOKENS = ("bank", "card", "payment")
+_SECRET_EVIDENCE_PREFIXES = ("secret lane approved:", "secret lane blocked:")
 
 
 def _finding(path, code, message):
@@ -407,6 +408,18 @@ def _decision(decision, digest, reasons, violations):
     }
 
 
+def _has_secret_issue(decision):
+    return any(item["code"].startswith("secret-") for item in decision["reasons"] + decision["violations"])
+
+
+def _validate_secret_evidence_detail(detail, path, findings):
+    lowered = detail.lower()
+    if not lowered.startswith(_SECRET_EVIDENCE_PREFIXES):
+        findings.append(_finding(path, "unsafe-secret-evidence", "secret-lane evidence must start with 'secret lane approved:' or 'secret lane blocked:'"))
+    if "/" in detail or "\\" in detail or "=" in detail:
+        findings.append(_finding(path, "unsafe-secret-evidence", "secret-lane evidence must not contain raw paths or secret assignments"))
+
+
 def _validate_observation(observation):
     findings = []
     if not isinstance(observation, dict):
@@ -465,6 +478,8 @@ def _validate_observation(observation):
                 findings.append(_finding(base + ".kind", "unknown-evidence", f"unknown evidence '{kind}'"))
             if status is not None and status not in _EVIDENCE_STATUS:
                 findings.append(_finding(base + ".status", "unknown-evidence-status", f"unknown evidence status '{status}'"))
+            if kind == "secret-lane" and detail is not None:
+                _validate_secret_evidence_detail(detail, base + ".detail", findings)
             normalized_evidence.append({"kind": kind, "status": status, "detail": detail})
         kinds = [item["kind"] for item in normalized_evidence if item["kind"] is not None]
         for kind in sorted({kind for kind in kinds if kinds.count(kind) > 1}):
@@ -516,12 +531,20 @@ def build_receipt(manifest, observation):
         required = set(normalized_manifest["evidence_required"])
         if decision["decision"] == "operator-required":
             required.add("operator-approval")
+        if _has_secret_issue(decision):
+            required.add("secret-lane")
         for kind in sorted(required):
             item = evidence.get(kind)
             if item is None:
                 findings.append(_finding("evidence", "missing-evidence", f"missing required evidence '{kind}'"))
             elif item["status"] != "pass":
                 findings.append(_finding("evidence", "failed-evidence", f"required evidence '{kind}' has status '{item['status']}'"))
+    elif _has_secret_issue(decision):
+        item = evidence.get("secret-lane")
+        if item is None:
+            findings.append(_finding("evidence", "missing-evidence", "missing required evidence 'secret-lane'"))
+        elif item["status"] != "pass":
+            findings.append(_finding("evidence", "failed-evidence", f"required evidence 'secret-lane' has status '{item['status']}'"))
 
     if findings:
         return _receipt_validation(None, findings)

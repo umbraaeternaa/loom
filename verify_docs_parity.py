@@ -95,7 +95,7 @@ def _check_playground_loader() -> None:
     for needle in ("def tokenize_spans", "def parse_spans", "def _wat_at", '"line"', '"column"', '"offset"', '"end_offset"', '"children"', " at "):
         if needle not in bundle_text:
             raise SystemExit("docs parity: standalone bundle lost source-span tokenizer marker: " + needle)
-    for needle in ("_gate_secret_class", "secret-read-operator-required", "secret-exfil-forbidden", "secret-write-forbidden"):
+    for needle in ("_gate_secret_class", "secret-read-operator-required", "secret-exfil-forbidden", "secret-write-forbidden", "secret-lane", "unsafe-secret-evidence"):
         if needle not in bundle_text:
             raise SystemExit("docs parity: standalone bundle lost secret path policy marker: " + needle)
 
@@ -183,6 +183,8 @@ def _check_secret_credential_policy_doc() -> None:
         "No password harvesting",
         "No receipt or dashboard view that prints raw secrets",
         "Implemented in Gate policy v1",
+        "Implemented in Gate receipt v1",
+        "`secret-lane` evidence",
     )
     missing = [needle for needle in required if needle not in text]
     if missing:

@@ -2596,7 +2596,7 @@ GATE_POLICY_ID = "operator-codex-cloud/v1"
 GATE_AGENTS = {"codex", "cloud-code", "auditor", "argus", "nostromo", "ci", "operator"}
 GATE_ROLES = {"code", "organism", "audit", "night", "trace", "operator"}
 GATE_ACTIONS = {"read", "write", "test", "process", "network", "git-commit", "git-push", "delete", "backup", "memory-write", "dashboard", "report", "audit"}
-GATE_EVIDENCE = {"syntax", "citadel", "docs-parity", "fuzz", "git-clean", "git-sync", "live-site", "backup", "operator-approval", "audit"}
+GATE_EVIDENCE = {"syntax", "citadel", "docs-parity", "fuzz", "git-clean", "git-sync", "live-site", "backup", "operator-approval", "audit", "secret-lane"}
 _GATE_KEYS = {"schema", "agent", "task", "repositories", "read_paths", "write_paths", "actions", "evidence_required"}
 _GATE_OBS_KEYS = {"schema", "result", "repositories", "files_changed", "actions_observed", "evidence"}
 _GATE_RESULTS = {"completed", "failed", "blocked"}; _GATE_EVIDENCE_STATUS = {"pass", "fail", "not-run"}
@@ -2608,6 +2608,7 @@ _GATE_CREDENTIAL_FILES = {".netrc", ".npmrc", ".pypirc", "credentials", "credent
 _GATE_CREDENTIAL_TOKENS = ("api_key", "apikey", "auth_token", "cookie", "password", "session", "token")
 _GATE_WALLET_TOKENS = ("keystore", "mnemonic", "privatekey", "private_key", "seed", "wallet")
 _GATE_BANK_TOKENS = ("bank", "card", "payment")
+_GATE_SECRET_EVIDENCE_PREFIXES = ("secret lane approved:", "secret lane blocked:")
 
 
 def _gate_finding(path, code, message): return {"path": path, "code": code, "message": message}
@@ -2758,6 +2759,16 @@ def _gate_decision(decision, digest, reasons, violations):
     return {"schema": GATE_DECISION_SCHEMA, "decision": decision, "advisory": True, "manifest_sha256": digest, "policy": GATE_POLICY_ID, "reasons": _gate_unique(reasons), "violations": _gate_unique(violations)}
 
 
+def _gate_has_secret_issue(decision):
+    return any(item["code"].startswith("secret-") for item in decision["reasons"] + decision["violations"])
+
+
+def _gate_validate_secret_evidence_detail(detail, path, findings):
+    lowered = detail.lower()
+    if not lowered.startswith(_GATE_SECRET_EVIDENCE_PREFIXES): findings.append(_gate_finding(path, "unsafe-secret-evidence", "secret-lane evidence must start with 'secret lane approved:' or 'secret lane blocked:'"))
+    if "/" in detail or "\\" in detail or "=" in detail: findings.append(_gate_finding(path, "unsafe-secret-evidence", "secret-lane evidence must not contain raw paths or secret assignments"))
+
+
 def evaluate_manifest(manifest):
     validation = validate_manifest(manifest)
     if not validation["valid"]: return _gate_decision("reject", None, [], validation["findings"])
@@ -2856,6 +2867,7 @@ def _gate_validate_observation(observation):
             kind = _gate_text(item["kind"], base + ".kind", findings); status = _gate_text(item["status"], base + ".status", findings); detail = _gate_text(item["detail"], base + ".detail", findings)
             if kind is not None and kind not in GATE_EVIDENCE: findings.append(_gate_finding(base + ".kind", "unknown-evidence", f"unknown evidence '{kind}'"))
             if status is not None and status not in _GATE_EVIDENCE_STATUS: findings.append(_gate_finding(base + ".status", "unknown-evidence-status", f"unknown evidence status '{status}'"))
+            if kind == "secret-lane" and detail is not None: _gate_validate_secret_evidence_detail(detail, base + ".detail", findings)
             normalized_evidence.append({"kind": kind, "status": status, "detail": detail})
         kinds = [item["kind"] for item in normalized_evidence if item["kind"] is not None]
         for kind in sorted({kind for kind in kinds if kinds.count(kind) > 1}): findings.append(_gate_finding("evidence", "duplicate-evidence", f"duplicate evidence '{kind}'"))
@@ -2887,10 +2899,15 @@ def build_receipt(manifest, observation):
     if result == "completed":
         required = set(normalized["evidence_required"])
         if decision["decision"] == "operator-required": required.add("operator-approval")
+        if _gate_has_secret_issue(decision): required.add("secret-lane")
         for kind in sorted(required):
             item = evidence.get(kind)
             if item is None: findings.append(_gate_finding("evidence", "missing-evidence", f"missing required evidence '{kind}'"))
             elif item["status"] != "pass": findings.append(_gate_finding("evidence", "failed-evidence", f"required evidence '{kind}' has status '{item['status']}'"))
+    elif _gate_has_secret_issue(decision):
+        item = evidence.get("secret-lane")
+        if item is None: findings.append(_gate_finding("evidence", "missing-evidence", "missing required evidence 'secret-lane'"))
+        elif item["status"] != "pass": findings.append(_gate_finding("evidence", "failed-evidence", f"required evidence 'secret-lane' has status '{item['status']}'"))
     if findings: return _gate_receipt_result(None, findings)
     body = {"schema": GATE_RECEIPT_SCHEMA, "advisory": True, "manifest_sha256": validation["manifest_sha256"], "policy": decision["policy"], "policy_decision": decision["decision"], "agent": normalized["agent"], "result": result, "repositories": observed["repositories"], "files_changed": observed["files_changed"], "actions_observed": observed["actions_observed"], "evidence": observed["evidence"]}
     body["receipt_sha256"] = hashlib.sha256(json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()

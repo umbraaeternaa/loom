@@ -97,7 +97,8 @@ blocked, or approved.
    `operator-required` or `reject`. Implemented in Gate policy v1 for
    declaration-only path classification; it does not read secret contents.
 3. Add receipt/evidence wording that proves a secret lane was blocked or
-   approved without revealing the secret.
+   approved without revealing the secret. Implemented in Gate receipt v1 with
+   `secret-lane` evidence and safe detail wording.
 4. Add VS Code/Playground diagnostics that explain why a task touched a
    protected lane.
 5. Only after the host boundary exists, consider language-level `Secret` effects

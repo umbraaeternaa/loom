@@ -1794,6 +1794,58 @@ def main():
         print(f"  {'ok  ' if receipt_contract_ok else 'FAIL'} gate: deterministic advisory receipt v1")
     except Exception as e:
         print(f"  FAIL Gate receipt v1 contract: {e}")
+    try:                                               # Gate secret receipts: receipts say what happened without raw secret paths/values
+        secret_manifest = {
+            "schema": "loom-gate-manifest/v1",
+            "agent": {"id": "codex", "role": "code"},
+            "task": {"summary": "Secret receipt probe", "intent": "Pin safe secret-lane receipt wording"},
+            "repositories": [],
+            "read_paths": ["/Users/macbook/Projects/loom/.env"],
+            "write_paths": [],
+            "actions": ["read"],
+            "evidence_required": [],
+        }
+        secret_observation = {
+            "schema": "loom-gate-observation/v1",
+            "result": "completed",
+            "repositories": [],
+            "files_changed": [],
+            "actions_observed": ["read"],
+            "evidence": [
+                {"kind": "operator-approval", "status": "pass", "detail": "manifest-bound approval observed"},
+                {"kind": "secret-lane", "status": "pass", "detail": "secret lane approved: CredentialAccess read_paths[0]"},
+            ],
+        }
+        secret_receipt = _loom.build_receipt(secret_manifest, secret_observation)
+        secret_missing = json.loads(json.dumps(secret_observation))
+        secret_missing["evidence"] = [item for item in secret_missing["evidence"] if item["kind"] != "secret-lane"]
+        secret_unsafe = json.loads(json.dumps(secret_observation))
+        next(item for item in secret_unsafe["evidence"] if item["kind"] == "secret-lane")["detail"] = "secret lane approved: /Users/macbook/Projects/loom/.env API_KEY=raw"
+        secret_blocked_manifest = json.loads(json.dumps(secret_manifest))
+        secret_blocked_manifest["actions"] = ["read", "network"]
+        secret_blocked_observation = {
+            "schema": "loom-gate-observation/v1",
+            "result": "blocked",
+            "repositories": [],
+            "files_changed": [],
+            "actions_observed": [],
+            "evidence": [{"kind": "secret-lane", "status": "pass", "detail": "secret lane blocked: SecretExfil read_paths[0]"}],
+        }
+        secret_receipt_contract_ok = (
+            secret_receipt["valid"] is True
+            and secret_receipt["receipt"]["policy_decision"] == "operator-required"
+            and any(item["kind"] == "secret-lane" and "/" not in item["detail"] and "=" not in item["detail"] for item in secret_receipt["receipt"]["evidence"])
+            and _loom.build_receipt(secret_manifest, secret_missing)["valid"] is False
+            and any(item["code"] == "missing-evidence" for item in _loom.build_receipt(secret_manifest, secret_missing)["findings"])
+            and _loom.build_receipt(secret_manifest, secret_unsafe)["valid"] is False
+            and any(item["code"] == "unsafe-secret-evidence" for item in _loom.build_receipt(secret_manifest, secret_unsafe)["findings"])
+            and _loom.build_receipt(secret_blocked_manifest, secret_blocked_observation)["valid"] is True
+            and _loom.build_receipt(secret_blocked_manifest, {**secret_blocked_observation, "evidence": []})["valid"] is False
+        )
+        ok += secret_receipt_contract_ok
+        print(f"  {'ok  ' if secret_receipt_contract_ok else 'FAIL'} gate: safe secret-lane receipt evidence v1")
+    except Exception as e:
+        print(f"  FAIL Gate secret-lane receipt evidence v1: {e}")
     try:                                               # Gate observer v1: derive Git facts without trusting caller clean claims
         with tempfile.TemporaryDirectory() as td:
             repo = (Path(td) / "repo").resolve()
@@ -2222,7 +2274,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 99   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/secret-path contracts, cli proof-surface/source-map/json contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap/secret-policy pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 100   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/secret-path/secret-receipt contracts, cli proof-surface/source-map/json contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap/secret-policy pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1
