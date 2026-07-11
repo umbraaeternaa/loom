@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 403 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 404 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 403/403 citadel checks
+PASS — 404/404 citadel checks
 ```
 
 ## The idea in one screen
@@ -155,6 +155,7 @@ python3 loom.py run   examples/demo.loom            # => [1, 4, 9, 16, 25]
 python3 loom.py build examples/demo.loom --target js   # compile the checked program to JavaScript
 python3 loom.py source-map examples/demo.loom       # summarize WAT heap allocation source locations
 python3 loom.py source-map examples/demo.loom --format json  # stable machine source-map contract
+python3 loom.py gate manifest.json             # redacted Gate manifest diagnostics
 python3 loom.py audit examples/demo.loom            # show declared-vs-performed capability surface
 python3 loom.py check examples/demo.loom --format json  # stable machine verdict for Gate clients
 ```
@@ -177,6 +178,9 @@ v1 does not inspect Git or intercept agent tools. See
 `operator-required`, or `reject`. Hard boundary violations always outrank an
 operator gate. This policy still classifies only the declaration and performs
 no host enforcement. See [`docs/gate_policy_v1.md`](docs/gate_policy_v1.md).
+`loom.build_gate_diagnostics(value)` and `python3 loom.py gate manifest.json`
+surface the same decision as redacted operator diagnostics; secret lanes show
+only class and manifest field, never raw paths or values.
 
 `loom.build_receipt(manifest, observation)` closes the advisory Gate loop by
 binding the manifest, policy decision, reported repository heads, changed

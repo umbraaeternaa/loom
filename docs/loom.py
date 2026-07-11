@@ -2590,6 +2590,7 @@ GATE_DECISION_SCHEMA = "loom-gate-decision/v1"
 GATE_OBSERVATION_SCHEMA = "loom-gate-observation/v1"
 GATE_RECEIPT_SCHEMA = "loom-gate-receipt/v1"
 GATE_RECEIPT_VALIDATION_SCHEMA = "loom-gate-receipt-validation/v1"
+GATE_DIAGNOSTICS_SCHEMA = "loom-gate-diagnostics/v1"
 GATE_COLLECTION_SCHEMA = "loom-gate-observation-collection/v1"
 GATE_EVIDENCE_COLLECTION_SCHEMA = "loom-gate-evidence-collection/v1"
 GATE_POLICY_ID = "operator-codex-cloud/v1"
@@ -2757,6 +2758,25 @@ def _gate_unique(items):
 
 def _gate_decision(decision, digest, reasons, violations):
     return {"schema": GATE_DECISION_SCHEMA, "decision": decision, "advisory": True, "manifest_sha256": digest, "policy": GATE_POLICY_ID, "reasons": _gate_unique(reasons), "violations": _gate_unique(violations)}
+
+
+def _gate_secret_issue_class(code, message):
+    if code == "secret-exfil-forbidden": return "SecretExfil"
+    match = re.search(r"\(([^()]+)\)\s*$", message)
+    return match.group(1) if match else "SecretRead"
+
+
+def _gate_secret_issue_disposition(code):
+    return "approval-required" if code == "secret-read-operator-required" else "blocked"
+
+
+def build_gate_diagnostics(manifest):
+    decision = evaluate_manifest(manifest); lanes = []
+    for item in decision["reasons"] + decision["violations"]:
+        code = item["code"]
+        if not code.startswith("secret-"): continue
+        lanes.append({"field": item["path"], "code": code, "class": _gate_secret_issue_class(code, item["message"]), "disposition": _gate_secret_issue_disposition(code)})
+    return {"schema": GATE_DIAGNOSTICS_SCHEMA, "advisory": True, "decision": decision["decision"], "policy": decision["policy"], "manifest_sha256": decision["manifest_sha256"], "secret_lane_count": len(lanes), "secret_lanes": sorted(lanes, key=lambda item: (item["field"], item["disposition"] != "approval-required", item["code"]))}
 
 
 def _gate_has_secret_issue(decision):
@@ -3419,7 +3439,7 @@ def _cli(argv):
         elif a.startswith("--format="): flags["format"] = a.split("=", 1)[1]; i += 1
         else: pos.append(a); i += 1
     if len(pos) < 2:
-        print("usage: python3 loom.py <check|run|build|audit|source-map> FILE [call] [--target py|js|wat] [--format text|json]"); return 2
+        print("usage: python3 loom.py <check|run|build|audit|source-map|gate> FILE [call] [--target py|js|wat] [--format text|json]"); return 2
     cmd, path = pos[0], pos[1]; call = pos[2] if len(pos) > 2 else "(main)"
     try: src = open(path).read()
     except OSError as e: print("cannot read file: " + str(e)); return 2
@@ -3442,6 +3462,19 @@ def _cli(argv):
             print(f"  [global] {len(verdict['global_findings'])} finding(s)")
             for error in verdict["global_findings"]: print("    - " + error)
         return 1
+    if cmd == "gate":
+        try: manifest = json.loads(src)
+        except json.JSONDecodeError as e: print("invalid Gate manifest JSON: " + str(e)); return 2
+        diagnostics = build_gate_diagnostics(manifest)
+        if output_format == "json":
+            _emit_verdict_json(diagnostics); return 1 if diagnostics["decision"] == "reject" else 0
+        print("LOOM GATE - redacted advisory manifest diagnostics")
+        print("decision: " + diagnostics["decision"])
+        if diagnostics["secret_lanes"]:
+            print("secret lanes:")
+            for item in diagnostics["secret_lanes"]: print(f"  [{item['disposition']}] {item['class']} at {item['field']} ({item['code']})")
+        else: print("secret lanes: none")
+        return 1 if diagnostics["decision"] == "reject" else 0
     if cmd == "run":
         try: val, out = run_call(src, call)
         except LoomError as e: print("REJECTED: " + str(e)); return 1

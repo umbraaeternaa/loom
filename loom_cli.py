@@ -6,6 +6,7 @@ import json
 import re
 from pathlib import Path
 
+import loom_gate as _loom_gate
 from loom_frontend import CliFrontend as _CliFrontend
 
 
@@ -84,6 +85,28 @@ def build_verdict(frontend, src):
 
 def _emit_json(verdict):
     print(json.dumps(verdict, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+
+
+def _gate(frontend, src, output_format="text"):
+    del frontend
+    try:
+        manifest = json.loads(src)
+    except json.JSONDecodeError as err:
+        print("invalid Gate manifest JSON: " + str(err))
+        return 2
+    diagnostics = _loom_gate.build_gate_diagnostics(manifest)
+    if output_format == "json":
+        _emit_json(diagnostics)
+        return 1 if diagnostics["decision"] == "reject" else 0
+    print("LOOM GATE - redacted advisory manifest diagnostics")
+    print("decision: " + diagnostics["decision"])
+    if diagnostics["secret_lanes"]:
+        print("secret lanes:")
+        for item in diagnostics["secret_lanes"]:
+            print(f"  [{item['disposition']}] {item['class']} at {item['field']} ({item['code']})")
+    else:
+        print("secret lanes: none")
+    return 1 if diagnostics["decision"] == "reject" else 0
 
 
 def allocation_source_map_lines(wat):
@@ -182,7 +205,7 @@ def _check(frontend, src, output_format="text"):
 def cli(argv, frontend):
     flags, pos = _parse_flags(argv)
     if len(pos) < 2:
-        print("usage: python3 loom.py <check|run|build|audit|source-map> FILE [call] [--target py|js|wat] [--format text|json]")
+        print("usage: python3 loom.py <check|run|build|audit|source-map|gate> FILE [call] [--target py|js|wat] [--format text|json]")
         return 2
     cmd, path = pos[0], pos[1]
     call = pos[2] if len(pos) > 2 else "(main)"
@@ -197,6 +220,8 @@ def cli(argv, frontend):
         return 2
     if cmd == "check":
         return _check(frontend, src, output_format)
+    if cmd == "gate":
+        return _gate(frontend, src, output_format)
     if cmd == "run":
         try:
             value, out = frontend.run_call(src, call)

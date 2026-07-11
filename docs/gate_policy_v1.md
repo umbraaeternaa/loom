@@ -40,6 +40,12 @@ A secret-like read combined with outbound or reporting actions (`network`,
 Writes or deletes targeting secret-like paths are rejected. This is a defensive
 classification layer; it is not a capability to collect or print secrets.
 
+Redacted diagnostics are available through `loom.build_gate_diagnostics(value)`
+and `python3 loom.py gate manifest.json`. The diagnostics use
+`loom-gate-diagnostics/v1` and expose only the secret class, manifest field, and
+disposition (`approval-required` or `blocked`). They never echo the raw path or
+secret value.
+
 LOOM writes require `syntax`, `citadel`, `docs-parity`, and `git-clean`
 evidence declarations. Writes under `docs/` also require `live-site`. Git push
 requires `git-sync` and `operator-approval`; backup requires `backup`.

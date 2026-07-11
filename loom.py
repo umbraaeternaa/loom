@@ -193,6 +193,11 @@ def evaluate_manifest(manifest):
     return _loom_gate.evaluate_manifest(manifest)
 
 
+def build_gate_diagnostics(manifest):
+    """Build redacted operator-facing Gate diagnostics for a task manifest."""
+    return _loom_gate.build_gate_diagnostics(manifest)
+
+
 def build_receipt(manifest, observation):
     """Build a deterministic advisory receipt from a manifest and observation."""
     return _loom_gate.build_receipt(manifest, observation)

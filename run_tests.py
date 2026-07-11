@@ -1846,6 +1846,46 @@ def main():
         print(f"  {'ok  ' if secret_receipt_contract_ok else 'FAIL'} gate: safe secret-lane receipt evidence v1")
     except Exception as e:
         print(f"  FAIL Gate secret-lane receipt evidence v1: {e}")
+    try:                                               # CLI Gate diagnostics: explain secret decisions without raw paths/values
+        with tempfile.TemporaryDirectory() as td:
+            manifest_file = Path(td) / "secret-manifest.json"
+            manifest_value = {
+                "schema": "loom-gate-manifest/v1",
+                "agent": {"id": "codex", "role": "code"},
+                "task": {"summary": "Secret CLI probe", "intent": "Pin redacted Gate diagnostics"},
+                "repositories": [],
+                "read_paths": ["/Users/macbook/Projects/loom/.env"],
+                "write_paths": [],
+                "actions": ["read", "network"],
+                "evidence_required": [],
+            }
+            manifest_file.write_text(json.dumps(manifest_value))
+            loom = Path(__file__).with_name("loom.py")
+            gt = subprocess.run([sys.executable, str(loom), "gate", str(manifest_file)], capture_output=True, text=True)
+            gj = subprocess.run([sys.executable, str(loom), "gate", str(manifest_file), "--format=json"], capture_output=True, text=True)
+            parsed = json.loads(gj.stdout)
+            forbidden_text = gt.stdout + gj.stdout
+            gate_redacted_cli_ok = (
+                gt.returncode == 1
+                and gj.returncode == 1
+                and "LOOM GATE - redacted advisory manifest diagnostics" in gt.stdout
+                and "decision: reject" in gt.stdout
+                and "SecretExfil at read_paths[0]" in gt.stdout
+                and "/Users" not in forbidden_text
+                and ".env" not in forbidden_text
+                and "API_KEY" not in forbidden_text
+                and parsed["schema"] == "loom-gate-diagnostics/v1"
+                and parsed["decision"] == "reject"
+                and parsed["secret_lanes"] == [
+                    {"class": "CredentialAccess", "code": "secret-read-operator-required", "disposition": "approval-required", "field": "read_paths[0]"},
+                    {"class": "SecretExfil", "code": "secret-exfil-forbidden", "disposition": "blocked", "field": "read_paths[0]"},
+                ]
+                and parsed == _loom.build_gate_diagnostics(manifest_value)
+            )
+            ok += gate_redacted_cli_ok
+            print(f"  {'ok  ' if gate_redacted_cli_ok else 'FAIL'} cli gate: redacted secret-lane diagnostics")
+    except Exception as e:
+        print(f"  FAIL cli gate redacted diagnostics: {e}")
     try:                                               # Gate observer v1: derive Git facts without trusting caller clean claims
         with tempfile.TemporaryDirectory() as td:
             repo = (Path(td) / "repo").resolve()
@@ -2274,7 +2314,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 100   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/secret-path/secret-receipt contracts, cli proof-surface/source-map/json contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap/secret-policy pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 101   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/secret-path/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap/secret-policy pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

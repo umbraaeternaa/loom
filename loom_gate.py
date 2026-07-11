@@ -13,6 +13,7 @@ DECISION_SCHEMA = "loom-gate-decision/v1"
 OBSERVATION_SCHEMA = "loom-gate-observation/v1"
 RECEIPT_SCHEMA = "loom-gate-receipt/v1"
 RECEIPT_VALIDATION_SCHEMA = "loom-gate-receipt-validation/v1"
+DIAGNOSTICS_SCHEMA = "loom-gate-diagnostics/v1"
 POLICY_ID = "operator-codex-cloud/v1"
 AGENTS = frozenset({"codex", "cloud-code", "auditor", "argus", "nostromo", "ci", "operator"})
 ROLES = frozenset({"code", "organism", "audit", "night", "trace", "operator"})
@@ -405,6 +406,51 @@ def _decision(decision, digest, reasons, violations):
         "policy": POLICY_ID,
         "reasons": _unique_issues(reasons),
         "violations": _unique_issues(violations),
+    }
+
+
+def _secret_issue_class(code, message):
+    if code == "secret-exfil-forbidden":
+        return "SecretExfil"
+    match = re.search(r"\(([^()]+)\)\s*$", message)
+    return match.group(1) if match else "SecretRead"
+
+
+def _secret_issue_disposition(code):
+    if code == "secret-read-operator-required":
+        return "approval-required"
+    return "blocked"
+
+
+def build_gate_diagnostics(manifest):
+    """Return redacted, operator-facing diagnostics for a Gate manifest."""
+    decision = evaluate_manifest(manifest)
+    secret_lanes = []
+    for item in decision["reasons"] + decision["violations"]:
+        code = item["code"]
+        if not code.startswith("secret-"):
+            continue
+        secret_lanes.append({
+            "field": item["path"],
+            "code": code,
+            "class": _secret_issue_class(code, item["message"]),
+            "disposition": _secret_issue_disposition(code),
+        })
+    return {
+        "schema": DIAGNOSTICS_SCHEMA,
+        "advisory": True,
+        "decision": decision["decision"],
+        "policy": decision["policy"],
+        "manifest_sha256": decision["manifest_sha256"],
+        "secret_lane_count": len(secret_lanes),
+        "secret_lanes": sorted(
+            secret_lanes,
+            key=lambda item: (
+                item["field"],
+                item["disposition"] != "approval-required",
+                item["code"],
+            ),
+        ),
     }
 
 
