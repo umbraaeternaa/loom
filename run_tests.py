@@ -861,6 +861,23 @@ def main():
         print(f"  {'ok  ' if heap_diag_ok else 'FAIL'} backend(WASM): heap family diagnostics exported")
     except Exception as e:
         print(f"  FAIL backend(WASM) heap diagnostics: {e}")
+    try:                                               # WAT is the human assembler view, so allocation sites must be labeled there
+        heap_label_prog = '(defx t (Net IO Alloc) (fn (u n) (record (xs (list 1 2)) (v (variant Some 5)) (e (net u)) (a (alloc n)) (r (resource (res IO) (use res))) (msg "ok"))))'
+        heap_label_wat = emit_wat(heap_label_prog)
+        heap_label_ok = (
+            ";; alloc record field xs" in heap_label_wat
+            and ";; alloc list cell" in heap_label_wat
+            and ";; alloc variant Some" in heap_label_wat
+            and ";; alloc effect box from net" in heap_label_wat
+            and ";; alloc list cells from alloc" in heap_label_wat
+            and ";; alloc resource-use marker" in heap_label_wat
+            and ";; alloc static string literal" in heap_label_wat
+            and ";; alloc static string object" in heap_label_wat
+        )
+        ok += heap_label_ok
+        print(f"  {'ok  ' if heap_label_ok else 'FAIL'} backend(WAT): allocation source labels emitted")
+    except Exception as e:
+        print(f"  FAIL backend(WAT) allocation labels: {e}")
     try:                                               # seamN quantity is a source-checker guarantee in ABI v1; WASM carries cap presence, not a runtime quantum counter
         seam_k2 = '(defx t (Net) (fn (u) (seamN 2 (Net) (net u))))'
         seam_k5 = '(defx t (Net) (fn (u) (seamN 5 (Net) (net u))))'
@@ -1922,7 +1939,7 @@ def main():
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "392-heap-family-diagnostics-v1")' in play
+            and 'bundleUrl.searchParams.set("v", "393-wat-allocation-labels-v1")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -2013,7 +2030,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 89   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution contracts, cli proof-surface, string-literal/heap-policy/heap-diagnostics/seamN-static backend guards, runtime/cli facades, docs workflow/quantity-roadmap pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 90   # runtime/backend smokes, including parser/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution contracts, cli proof-surface, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/seamN-static backend guards, runtime/cli facades, docs workflow/quantity-roadmap pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

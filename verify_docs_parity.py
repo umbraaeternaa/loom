@@ -21,7 +21,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "392-heap-family-diagnostics-v1")',
+        'bundleUrl.searchParams.set("v", "393-wat-allocation-labels-v1")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )

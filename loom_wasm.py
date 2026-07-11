@@ -787,7 +787,7 @@ def emit_wat(program_src, frontend):
             return [ind + "local.get $" + node]
         if type(node) is str:
             uses_heap[0] = True
-            return [ind + "i32.const " + str(ctx.string_layout[node]["tagged"]) + "  ;; string literal"]
+            return [ind + "i32.const " + str(ctx.string_layout[node]["tagged"]) + "  ;; alloc static string literal"]
         h = node[0]
         if h == "asm":
             error = asm_validation_error(node)
@@ -858,19 +858,19 @@ def emit_wat(program_src, frontend):
             uses_heap[0] = True
             if "Net" in with_handlers:
                 return w(with_handlers["Net"], ind, handled_effs, with_handlers, callable_env) + w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "call $apply1"]
-            return [ind + "i32.const 1  ;; effect Net", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end", ind + "i32.const 1  ;; effect Net"] + w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "call $effbox"]
+            return [ind + "i32.const 1  ;; effect Net", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end", ind + "i32.const 1  ;; effect Net"] + w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "call $effbox  ;; alloc effect box from net"]
         if h == "rand":
             uses_heap[0] = True
             if "Rand" in with_handlers:
                 return w(with_handlers["Rand"], ind, handled_effs, with_handlers, callable_env) + [ind + "call $apply0"]
-            return [ind + "i32.const 2  ;; effect Rand", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end", ind + "i32.const 2  ;; effect Rand", ind + "i32.const 0"] + [ind + "call $effbox"]
+            return [ind + "i32.const 2  ;; effect Rand", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end", ind + "i32.const 2  ;; effect Rand", ind + "i32.const 0"] + [ind + "call $effbox  ;; alloc effect box from rand"]
         if h == "alloc":
             uses_heap[0] = True
             if "Alloc" in with_handlers:
                 return w(with_handlers["Alloc"], ind, handled_effs, with_handlers, callable_env) + w(node[1] if len(node) > 1 else 0, ind, handled_effs, with_handlers, callable_env) + [ind + "call $apply1"]
             if len(node) == 1:
                 return [ind + "i32.const 3  ;; effect Alloc", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end", ind + "i32.const " + str(_WASM_NIL)]
-            return [ind + "i32.const 3  ;; effect Alloc", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end"] + w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "i32.const 0", ind + "call $alloc"]
+            return [ind + "i32.const 3  ;; effect Alloc", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end"] + w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "i32.const 0", ind + "call $alloc  ;; alloc list cells from alloc"]
         transparent_body = _wasm_transparent_body(frontend, node)
         if transparent_body is not None:
             return seq(transparent_body)
@@ -884,13 +884,13 @@ def emit_wat(program_src, frontend):
                        ind + "call $host_ffi"])
         if h == "use":
             uses_heap[0] = True
-            return [ind + "i32.const " + str(ctx.resources[node[1]]) + "  ;; resource " + node[1], ind + "call $resuse"]
+            return [ind + "i32.const " + str(ctx.resources[node[1]]) + "  ;; resource " + node[1], ind + "call $resuse  ;; alloc resource-use marker"]
         if h == "record":
             uses_heap[0] = True
             items = [fld for fld in node[1:] if isinstance(fld, list) and len(fld) >= 2]
             out = [ind + "i32.const 0"]
             for fld in reversed(items):
-                out = out + [ind + "i32.const " + str(fields[fld[0]])] + w(fld[1], ind, handled_effs, with_handlers, callable_env) + [ind + "call $rec"]
+                out = out + [ind + "i32.const " + str(fields[fld[0]]) + "  ;; field " + str(fld[0])] + w(fld[1], ind, handled_effs, with_handlers, callable_env) + [ind + "call $rec  ;; alloc record field " + str(fld[0])]
             return out
         if h == "get":
             uses_heap[0] = True
@@ -898,14 +898,14 @@ def emit_wat(program_src, frontend):
         if h == "list":
             uses_heap[0] = True; o = []
             for a in node[1:]: o += w(a, ind, handled_effs, with_handlers, callable_env)
-            return o + [ind + "i32.const " + str(_WASM_NIL)] + [ind + "call $cons" for _ in node[1:]]
-        if h == "cons": uses_heap[0] = True; return w(node[1], ind, handled_effs, with_handlers, callable_env) + w(node[2], ind, handled_effs, with_handlers, callable_env) + [ind + "call $cons"]
+            return o + [ind + "i32.const " + str(_WASM_NIL)] + [ind + "call $cons  ;; alloc list cell" for _ in node[1:]]
+        if h == "cons": uses_heap[0] = True; return w(node[1], ind, handled_effs, with_handlers, callable_env) + w(node[2], ind, handled_effs, with_handlers, callable_env) + [ind + "call $cons  ;; alloc cons cell"]
         if h == "head": uses_heap[0] = True; return w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "i32.const -2", ind + "i32.and", ind + "i32.load offset=4"]
         if h == "tail": uses_heap[0] = True; return w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "i32.const -2", ind + "i32.and", ind + "i32.load offset=8"]
         if h == "empty": return w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "i32.const " + str(_WASM_NIL), ind + "i32.eq", ind + "i32.const 1", ind + "i32.shl"]
         if h == "variant":
             uses_heap[0] = True
-            return [ind + "i32.const " + str(tags[node[1]]) + "  ;; tag " + node[1]] + w(node[2], ind, handled_effs, with_handlers, callable_env) + [ind + "call $variant"]
+            return [ind + "i32.const " + str(tags[node[1]]) + "  ;; tag " + node[1]] + w(node[2], ind, handled_effs, with_handlers, callable_env) + [ind + "call $variant  ;; alloc variant " + node[1]]
         if h == "match":
             uses_heap[0] = True; o = w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "local.set $s"]
             def arms(a, ii):
@@ -1062,6 +1062,7 @@ def emit_wat(program_src, frontend):
                   "    local.get $t  local.get $rid  i32.store offset=4",
                   "    local.get $t  i32.const 1  i32.or)"]
         for spec in ctx.string_layout.values():
+            lines += ["  ;; alloc static string object"]
             lines += ['  (data (i32.const ' + str(spec["obj"]) + ") " + _wat_bytes(_wasm_i32(_WASM_K_STRING) + _wasm_i32(len(spec["bytes"])) + _wasm_i32(spec["data"])) + ")"]
             if spec["bytes"]:
                 lines += ['  (data (i32.const ' + str(spec["data"]) + ") " + _wat_bytes(spec["bytes"]) + ")"]
