@@ -41,3 +41,23 @@ Every v1 result says `"advisory": true`. Validation proves only that the
 declaration is unambiguous and content-addressed. It does not inspect Git,
 authorize an agent, intercept a command, or confine host tools. Those are later
 Gate stages and must not be claimed by this contract.
+
+## v2 secret_access lane
+
+`loom-gate-manifest/v2` keeps the v1 fields and adds one required closed field:
+
+```json
+"secret_access": [
+  {
+    "class": "CredentialAccess",
+    "path": "/Users/example/project/.env",
+    "mode": "read",
+    "reason": "load local test credential only after operator approval"
+  }
+]
+```
+
+The lane is a declaration, not host access. Validation rejects unknown classes,
+unsupported modes, relative or unsafe paths, ordinary non-secret paths, class
+mismatches, duplicate lanes, secret-looking assignments in the reason, and vague
+reasons. A v1 manifest that includes `secret_access` remains invalid.

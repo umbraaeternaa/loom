@@ -1723,6 +1723,64 @@ def main():
         print(f"  {'ok  ' if secret_path_policy_ok else 'FAIL'} gate: defensive secret path policy v1")
     except Exception as e:
         print(f"  FAIL Gate secret path policy v1: {e}")
+    try:                                               # Gate manifest v2: secret_access is explicit, closed, and still denial-first
+        def secret_manifest_v2(actions=None, lane=None, schema="loom-gate-manifest/v2"):
+            return {
+                "schema": schema,
+                "agent": {"id": "codex", "role": "code"},
+                "task": {"summary": "Secret access probe", "intent": "Pin explicit secret_access manifest v2"},
+                "repositories": [],
+                "read_paths": [],
+                "write_paths": [],
+                "actions": actions or ["read"],
+                "evidence_required": [],
+                "secret_access": [lane or {
+                    "class": "CredentialAccess",
+                    "path": "/Users/macbook/Projects/loom/.env",
+                    "mode": "read",
+                    "reason": "load local test credential only after operator approval",
+                }],
+            }
+        v2 = secret_manifest_v2()
+        v2_valid = _loom.validate_manifest(v2)
+        v2_decision = _loom.evaluate_manifest(v2)
+        v2_exfil = _loom.evaluate_manifest(secret_manifest_v2(actions=["read", "network"]))
+        v2_diag = _loom.build_gate_diagnostics(secret_manifest_v2(actions=["read", "network"]))
+        v1_with_secret_access = secret_manifest_v2(schema="loom-gate-manifest/v1")
+        v1_invalid = _loom.validate_manifest(v1_with_secret_access)
+        unclassified = _loom.validate_manifest(secret_manifest_v2(lane={
+            "class": "CredentialAccess",
+            "path": "/Users/macbook/Projects/loom/README.md",
+            "mode": "read",
+            "reason": "read ordinary public project documentation",
+        }))
+        vague = _loom.validate_manifest(secret_manifest_v2(lane={
+            "class": "CredentialAccess",
+            "path": "/Users/macbook/Projects/loom/.env",
+            "mode": "read",
+            "reason": "debug",
+        }))
+        v2_secret_access_ok = (
+            v2_valid["valid"] is True
+            and v2_valid["normalized_manifest"]["schema"] == "loom-gate-manifest/v2"
+            and v2_valid["normalized_manifest"]["secret_access"][0]["path"] == "/Users/macbook/Projects/loom/.env"
+            and v2_decision["decision"] == "operator-required"
+            and any(item["code"] == "secret-access-operator-required" for item in v2_decision["reasons"])
+            and v2_exfil["decision"] == "reject"
+            and any(item["code"] == "secret-exfil-forbidden" and item["path"] == "secret_access[0]" for item in v2_exfil["violations"])
+            and {"class": "CredentialAccess", "code": "secret-access-operator-required", "disposition": "approval-required", "field": "secret_access[0]"} in v2_diag["secret_lanes"]
+            and {"class": "SecretExfil", "code": "secret-exfil-forbidden", "disposition": "blocked", "field": "secret_access[0]"} in v2_diag["secret_lanes"]
+            and v1_invalid["valid"] is False
+            and any(item["code"] == "unknown-field" and item["path"] == "secret_access" for item in v1_invalid["findings"])
+            and unclassified["valid"] is False
+            and any(item["code"] == "secret-path-not-classified" for item in unclassified["findings"])
+            and vague["valid"] is False
+            and any(item["code"] == "vague-secret-reason" for item in vague["findings"])
+        )
+        ok += v2_secret_access_ok
+        print(f"  {'ok  ' if v2_secret_access_ok else 'FAIL'} gate: manifest v2 explicit secret_access lane")
+    except Exception as e:
+        print(f"  FAIL Gate manifest v2 secret_access lane: {e}")
     try:                                               # Gate receipt v1: bind declaration, policy, scope, heads, and evidence
         receipt_manifest = gate_manifest(
             "codex", "code", ["/Users/macbook/Projects/loom"],
@@ -2341,7 +2399,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 102   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/secret-path/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap/secret-policy pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 103   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap/secret-policy pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

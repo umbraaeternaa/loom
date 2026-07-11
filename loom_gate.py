@@ -8,6 +8,8 @@ import unicodedata
 
 
 MANIFEST_SCHEMA = "loom-gate-manifest/v1"
+MANIFEST_SCHEMA_V2 = "loom-gate-manifest/v2"
+MANIFEST_SCHEMAS = frozenset({MANIFEST_SCHEMA, MANIFEST_SCHEMA_V2})
 VALIDATION_SCHEMA = "loom-gate-manifest-validation/v1"
 DECISION_SCHEMA = "loom-gate-decision/v1"
 OBSERVATION_SCHEMA = "loom-gate-observation/v1"
@@ -29,6 +31,7 @@ _TOP_KEYS = frozenset({
     "schema", "agent", "task", "repositories", "read_paths", "write_paths",
     "actions", "evidence_required",
 })
+_TOP_KEYS_V2 = _TOP_KEYS | {"secret_access"}
 _HEX_HEAD = re.compile(r"^[0-9a-f]{7,40}$")
 _OBSERVATION_KEYS = frozenset({"schema", "result", "repositories", "files_changed", "actions_observed", "evidence"})
 _OBSERVATION_RESULTS = frozenset({"completed", "failed", "blocked"})
@@ -55,6 +58,8 @@ _CREDENTIAL_TOKENS = ("api_key", "apikey", "auth_token", "cookie", "password", "
 _WALLET_TOKENS = ("keystore", "mnemonic", "privatekey", "private_key", "seed", "wallet")
 _BANK_TOKENS = ("bank", "card", "payment")
 _SECRET_EVIDENCE_PREFIXES = ("secret lane approved:", "secret lane blocked:")
+_SECRET_ACCESS_CLASSES = frozenset({"SecretRead", "CredentialAccess", "WalletKey", "BankCredential"})
+_SECRET_ACCESS_MODES = frozenset({"read"})
 
 
 def _finding(path, code, message):
@@ -124,6 +129,41 @@ def _path_list(value, path, findings):
     return sorted(set(normalized))
 
 
+def _secret_access_list(value, path, findings):
+    if not isinstance(value, list):
+        findings.append(_finding(path, "expected-array", "expected an array"))
+        return None
+    normalized = []
+    for index, item in enumerate(value):
+        base = f"{path}[{index}]"
+        if not _closed_object(item, base, {"class", "path", "mode", "reason"}, findings):
+            continue
+        secret_class = _text(item["class"], base + ".class", findings)
+        mode = _text(item["mode"], base + ".mode", findings)
+        reason = _text(item["reason"], base + ".reason", findings)
+        paths = _path_list([item["path"]], base + ".path", findings)
+        lane_path = paths[0] if paths else None
+        if secret_class is not None and secret_class not in _SECRET_ACCESS_CLASSES:
+            findings.append(_finding(base + ".class", "unknown-secret-class", f"unknown secret class '{secret_class}'"))
+        if mode is not None and mode not in _SECRET_ACCESS_MODES:
+            findings.append(_finding(base + ".mode", "unknown-secret-mode", f"unknown secret access mode '{mode}'"))
+        if reason is not None:
+            if len(reason.split()) < 4:
+                findings.append(_finding(base + ".reason", "vague-secret-reason", "secret access reason must be specific"))
+            if "=" in reason:
+                findings.append(_finding(base + ".reason", "unsafe-secret-reason", "secret access reason must not contain secret assignments"))
+        inferred = _secret_class(lane_path) if lane_path else None
+        if lane_path and inferred is None:
+            findings.append(_finding(base + ".path", "secret-path-not-classified", "secret_access path must be classified as secret-like"))
+        elif secret_class and inferred and secret_class not in {inferred, "SecretRead"}:
+            findings.append(_finding(base + ".class", "secret-class-mismatch", f"declared class '{secret_class}' does not match path class '{inferred}'"))
+        normalized.append({"class": secret_class, "path": lane_path, "mode": mode, "reason": reason})
+    keys = [(item["class"], item["path"], item["mode"]) for item in normalized]
+    for key in sorted({key for key in keys if keys.count(key) > 1}):
+        findings.append(_finding(path, "duplicate-secret-access", f"duplicate secret access lane '{key[0]} {key[2]} {key[1]}'"))
+    return sorted(normalized, key=lambda item: (item["path"] or "", item["class"] or "", item["mode"] or ""))
+
+
 def _canonical_json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -135,15 +175,17 @@ def validate_manifest(manifest):
         findings.append(_finding("$", "expected-object", "manifest must be an object"))
         return _validation(None, findings)
 
-    for key in sorted(set(manifest) - _TOP_KEYS):
+    schema = _text(manifest.get("schema"), "schema", findings)
+    top_keys = _TOP_KEYS_V2 if schema == MANIFEST_SCHEMA_V2 else _TOP_KEYS
+
+    for key in sorted(set(manifest) - top_keys):
         findings.append(_finding(key, "unknown-field", f"unknown field '{key}'"))
-    for key in sorted(_TOP_KEYS - set(manifest)):
+    for key in sorted(top_keys - set(manifest)):
         findings.append(_finding(key, "missing-field", f"missing required field '{key}'"))
 
     normalized = {}
-    schema = _text(manifest.get("schema"), "schema", findings)
-    if schema is not None and schema != MANIFEST_SCHEMA:
-        findings.append(_finding("schema", "unsupported-schema", f"expected '{MANIFEST_SCHEMA}'"))
+    if schema is not None and schema not in MANIFEST_SCHEMAS:
+        findings.append(_finding("schema", "unsupported-schema", f"expected one of {sorted(MANIFEST_SCHEMAS)}"))
     normalized["schema"] = schema
 
     agent = manifest.get("agent")
@@ -192,6 +234,8 @@ def validate_manifest(manifest):
     normalized["write_paths"] = _path_list(manifest.get("write_paths"), "write_paths", findings)
     normalized["actions"] = _enum_list(manifest.get("actions"), "actions", ACTIONS, findings)
     normalized["evidence_required"] = _enum_list(manifest.get("evidence_required"), "evidence_required", EVIDENCE, findings)
+    if schema == MANIFEST_SCHEMA_V2:
+        normalized["secret_access"] = _secret_access_list(manifest.get("secret_access"), "secret_access", findings)
 
     if findings:
         return _validation(None, findings)
@@ -307,6 +351,13 @@ def evaluate_manifest(manifest):
             f"secret-like read path requires manifest-bound operator approval ({secret})",
             issue_path,
         ))
+    for index, lane in enumerate(normalized.get("secret_access", [])):
+        secret_reads.append((lane["path"], lane["class"], f"secret_access[{index}]"))
+        reasons.append(_issue(
+            "secret-access-operator-required",
+            f"declared secret_access lane requires manifest-bound operator approval ({lane['class']})",
+            f"secret_access[{index}]",
+        ))
 
     for index, path in enumerate(normalized["write_paths"]):
         zone = _zone(path)
@@ -417,7 +468,7 @@ def _secret_issue_class(code, message):
 
 
 def _secret_issue_disposition(code):
-    if code == "secret-read-operator-required":
+    if code in {"secret-read-operator-required", "secret-access-operator-required"}:
         return "approval-required"
     return "blocked"
 

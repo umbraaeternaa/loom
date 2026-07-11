@@ -2585,6 +2585,8 @@ def run_wasm(program_src, call_src):
 
 # ---- LOOM Gate phase 1: deterministic advisory manifests (standalone bundle mirror). ----
 GATE_MANIFEST_SCHEMA = "loom-gate-manifest/v1"
+GATE_MANIFEST_SCHEMA_V2 = "loom-gate-manifest/v2"
+GATE_MANIFEST_SCHEMAS = {GATE_MANIFEST_SCHEMA, GATE_MANIFEST_SCHEMA_V2}
 GATE_VALIDATION_SCHEMA = "loom-gate-manifest-validation/v1"
 GATE_DECISION_SCHEMA = "loom-gate-decision/v1"
 GATE_OBSERVATION_SCHEMA = "loom-gate-observation/v1"
@@ -2599,6 +2601,7 @@ GATE_ROLES = {"code", "organism", "audit", "night", "trace", "operator"}
 GATE_ACTIONS = {"read", "write", "test", "process", "network", "git-commit", "git-push", "delete", "backup", "memory-write", "dashboard", "report", "audit"}
 GATE_EVIDENCE = {"syntax", "citadel", "docs-parity", "fuzz", "git-clean", "git-sync", "live-site", "backup", "operator-approval", "audit", "secret-lane"}
 _GATE_KEYS = {"schema", "agent", "task", "repositories", "read_paths", "write_paths", "actions", "evidence_required"}
+_GATE_KEYS_V2 = _GATE_KEYS | {"secret_access"}
 _GATE_OBS_KEYS = {"schema", "result", "repositories", "files_changed", "actions_observed", "evidence"}
 _GATE_RESULTS = {"completed", "failed", "blocked"}; _GATE_EVIDENCE_STATUS = {"pass", "fail", "not-run"}
 _GATE_ROLES_BY_AGENT = {"codex": "code", "cloud-code": "organism", "auditor": "audit", "argus": "organism", "nostromo": "night", "ci": "trace", "operator": "operator"}
@@ -2610,6 +2613,8 @@ _GATE_CREDENTIAL_TOKENS = ("api_key", "apikey", "auth_token", "cookie", "passwor
 _GATE_WALLET_TOKENS = ("keystore", "mnemonic", "privatekey", "private_key", "seed", "wallet")
 _GATE_BANK_TOKENS = ("bank", "card", "payment")
 _GATE_SECRET_EVIDENCE_PREFIXES = ("secret lane approved:", "secret lane blocked:")
+_GATE_SECRET_ACCESS_CLASSES = {"SecretRead", "CredentialAccess", "WalletKey", "BankCredential"}
+_GATE_SECRET_ACCESS_MODES = {"read"}
 
 
 def _gate_finding(path, code, message): return {"path": path, "code": code, "message": message}
@@ -2664,6 +2669,32 @@ def _gate_path_list(value, path, findings):
     return sorted(set(normalized))
 
 
+def _gate_secret_access_list(value, path, findings):
+    if not isinstance(value, list):
+        findings.append(_gate_finding(path, "expected-array", "expected an array")); return None
+    normalized = []
+    for index, item in enumerate(value):
+        base = f"{path}[{index}]"
+        if not _gate_object(item, base, {"class", "path", "mode", "reason"}, findings): continue
+        secret_class = _gate_text(item["class"], base + ".class", findings)
+        mode = _gate_text(item["mode"], base + ".mode", findings)
+        reason = _gate_text(item["reason"], base + ".reason", findings)
+        paths = _gate_path_list([item["path"]], base + ".path", findings)
+        lane_path = paths[0] if paths else None
+        if secret_class is not None and secret_class not in _GATE_SECRET_ACCESS_CLASSES: findings.append(_gate_finding(base + ".class", "unknown-secret-class", f"unknown secret class '{secret_class}'"))
+        if mode is not None and mode not in _GATE_SECRET_ACCESS_MODES: findings.append(_gate_finding(base + ".mode", "unknown-secret-mode", f"unknown secret access mode '{mode}'"))
+        if reason is not None:
+            if len(reason.split()) < 4: findings.append(_gate_finding(base + ".reason", "vague-secret-reason", "secret access reason must be specific"))
+            if "=" in reason: findings.append(_gate_finding(base + ".reason", "unsafe-secret-reason", "secret access reason must not contain secret assignments"))
+        inferred = _gate_secret_class(lane_path) if lane_path else None
+        if lane_path and inferred is None: findings.append(_gate_finding(base + ".path", "secret-path-not-classified", "secret_access path must be classified as secret-like"))
+        elif secret_class and inferred and secret_class not in {inferred, "SecretRead"}: findings.append(_gate_finding(base + ".class", "secret-class-mismatch", f"declared class '{secret_class}' does not match path class '{inferred}'"))
+        normalized.append({"class": secret_class, "path": lane_path, "mode": mode, "reason": reason})
+    keys = [(item["class"], item["path"], item["mode"]) for item in normalized]
+    for key in sorted({key for key in keys if keys.count(key) > 1}): findings.append(_gate_finding(path, "duplicate-secret-access", f"duplicate secret access lane '{key[0]} {key[2]} {key[1]}'"))
+    return sorted(normalized, key=lambda item: (item["path"] or "", item["class"] or "", item["mode"] or ""))
+
+
 def _gate_result(normalized, findings, digest=None):
     return {"schema": GATE_VALIDATION_SCHEMA, "valid": not findings, "advisory": True, "manifest_sha256": digest, "normalized_manifest": normalized, "findings": findings}
 
@@ -2672,11 +2703,12 @@ def validate_manifest(manifest):
     findings = []
     if not isinstance(manifest, dict):
         findings.append(_gate_finding("$", "expected-object", "manifest must be an object")); return _gate_result(None, findings)
-    for key in sorted(set(manifest) - _GATE_KEYS): findings.append(_gate_finding(key, "unknown-field", f"unknown field '{key}'"))
-    for key in sorted(_GATE_KEYS - set(manifest)): findings.append(_gate_finding(key, "missing-field", f"missing required field '{key}'"))
-    normalized = {}
     schema = _gate_text(manifest.get("schema"), "schema", findings)
-    if schema is not None and schema != GATE_MANIFEST_SCHEMA: findings.append(_gate_finding("schema", "unsupported-schema", f"expected '{GATE_MANIFEST_SCHEMA}'"))
+    keys = _GATE_KEYS_V2 if schema == GATE_MANIFEST_SCHEMA_V2 else _GATE_KEYS
+    for key in sorted(set(manifest) - keys): findings.append(_gate_finding(key, "unknown-field", f"unknown field '{key}'"))
+    for key in sorted(keys - set(manifest)): findings.append(_gate_finding(key, "missing-field", f"missing required field '{key}'"))
+    normalized = {}
+    if schema is not None and schema not in GATE_MANIFEST_SCHEMAS: findings.append(_gate_finding("schema", "unsupported-schema", f"expected one of {sorted(GATE_MANIFEST_SCHEMAS)}"))
     normalized["schema"] = schema
     agent = manifest.get("agent")
     if _gate_object(agent, "agent", {"id", "role"}, findings):
@@ -2705,6 +2737,7 @@ def validate_manifest(manifest):
     normalized["write_paths"] = _gate_path_list(manifest.get("write_paths"), "write_paths", findings)
     normalized["actions"] = _gate_enum_list(manifest.get("actions"), "actions", GATE_ACTIONS, findings)
     normalized["evidence_required"] = _gate_enum_list(manifest.get("evidence_required"), "evidence_required", GATE_EVIDENCE, findings)
+    if schema == GATE_MANIFEST_SCHEMA_V2: normalized["secret_access"] = _gate_secret_access_list(manifest.get("secret_access"), "secret_access", findings)
     if findings: return _gate_result(None, findings)
     canonical = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return _gate_result(normalized, [], hashlib.sha256(canonical.encode("utf-8")).hexdigest())
@@ -2767,7 +2800,7 @@ def _gate_secret_issue_class(code, message):
 
 
 def _gate_secret_issue_disposition(code):
-    return "approval-required" if code == "secret-read-operator-required" else "blocked"
+    return "approval-required" if code in {"secret-read-operator-required", "secret-access-operator-required"} else "blocked"
 
 
 def build_gate_diagnostics(manifest):
@@ -2813,6 +2846,9 @@ def evaluate_manifest(manifest):
         if secret is None: continue
         where = f"read_paths[{index}]"; secret_reads.append((path, secret, where))
         reasons.append(_gate_issue("secret-read-operator-required", f"secret-like read path requires manifest-bound operator approval ({secret})", where))
+    for index, lane in enumerate(normalized.get("secret_access", [])):
+        secret_reads.append((lane["path"], lane["class"], f"secret_access[{index}]"))
+        reasons.append(_gate_issue("secret-access-operator-required", f"declared secret_access lane requires manifest-bound operator approval ({lane['class']})", f"secret_access[{index}]"))
     for index, path in enumerate(normalized["write_paths"]):
         zone = _gate_zone(path); where = f"write_paths[{index}]"
         secret = _gate_secret_class(path)

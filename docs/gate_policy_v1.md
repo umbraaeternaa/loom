@@ -46,6 +46,12 @@ and `python3 loom.py gate manifest.json`. The diagnostics use
 disposition (`approval-required` or `blocked`). They never echo the raw path or
 secret value.
 
+`loom-gate-manifest/v2` adds an explicit closed `secret_access` lane. The lane
+does not grant ambient credential access; it formalizes a protected request that
+must name a secret class, absolute classified path, read mode, and specific
+reason. Policy still requires operator approval for the lane and rejects it when
+combined with outbound or reporting actions as possible `SecretExfil`.
+
 LOOM writes require `syntax`, `citadel`, `docs-parity`, and `git-clean`
 evidence declarations. Writes under `docs/` also require `live-site`. Git push
 requires `git-sync` and `operator-approval`; backup requires `backup`.

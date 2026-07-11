@@ -46,9 +46,9 @@ write receipts. They are not instructions for harvesting secrets.
 - Agents may not self-vouch credential access. AI-generated code, manifests, or
   explanations are not sufficient proof that a secret read is safe.
 
-## Candidate Gate Manifest Extension
+## Gate Manifest v2 Secret Lane
 
-A future `loom-gate-manifest/v2` may add a closed `secret_access` field such as:
+`loom-gate-manifest/v2` adds a closed `secret_access` field such as:
 
 ```json
 {
@@ -63,9 +63,10 @@ A future `loom-gate-manifest/v2` may add a closed `secret_access` field such as:
 }
 ```
 
-Policy should reject unknown classes, relative paths, glob-only declarations,
-and vague reasons. A declaration of ordinary `read_paths` must not implicitly
-grant `secret_access`.
+Policy rejects unknown classes, relative paths, ordinary non-secret paths, class
+mismatches, and vague reasons. A declaration of ordinary `read_paths` must not implicitly grant `secret_access`. A declared `secret_access` lane is only a
+manifest-bound request: it requires operator approval, and combining it with
+outbound/reporting actions is still rejected as possible `SecretExfil`.
 
 ## Candidate Effect Model
 
@@ -99,7 +100,10 @@ blocked, or approved.
 3. Add receipt/evidence wording that proves a secret lane was blocked or
    approved without revealing the secret. Implemented in Gate receipt v1 with
    `secret-lane` evidence and safe detail wording.
-4. Add VS Code/Playground diagnostics that explain why a task touched a
+4. Add explicit `secret_access` declaration in `loom-gate-manifest/v2`.
+   Implemented as a closed, denial-first manifest lane; it describes the
+   requested secret class and reason but does not grant ambient host access.
+5. Add VS Code/Playground diagnostics that explain why a task touched a
    protected lane.
-5. Only after the host boundary exists, consider language-level `Secret` effects
+6. Only after the host boundary exists, consider language-level `Secret` effects
    for source programs.
