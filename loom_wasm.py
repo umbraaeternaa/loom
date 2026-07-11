@@ -516,12 +516,43 @@ def _wasm_string_layout(strings):
         layout[s] = {"obj": obj, "data": data, "bytes": raw, "tagged": obj | 1}
     return layout, hp
 
+
+def _wasm_source_maps(program_src, frontend, defs):
+    node_path_by_id = {}
+    span_by_path = {}
+    def_paths = {}
+
+    def walk_value(node, path):
+        if isinstance(node, list) and path is not None:
+            node_path_by_id[id(node)] = path
+            for i, child in enumerate(node):
+                walk_value(child, path + (i,))
+
+    def walk_span(node, path):
+        span_by_path[path] = node["span"]
+        for i, child in enumerate(node["children"]):
+            walk_span(child, path + (i,))
+
+    for i, node in enumerate(frontend.parse_spans(program_src)):
+        if isinstance(node["value"], list) and len(node["value"]) >= 2 and node["value"][0] == "defx":
+            def_paths[node["value"][1]] = (i,)
+        walk_span(node, (i,))
+    for node in defs:
+        walk_value(node, def_paths.get(node[1]))
+    return node_path_by_id, span_by_path
+
+
+def _wat_at(ctx, path):
+    span = ctx.span_by_path.get(path) if path is not None else None
+    return "" if span is None else " at " + str(span["line"]) + ":" + str(span["column"])
+
+
 class _WasmContext:
     """All program-specific WASM state, isolated per compilation."""
     __slots__ = ("frontend", "defs", "top", "closures", "closure_by_id", "order", "topdefs",
                  "helper_base", "apply_arities", "apply_ids", "apply1_id",
                  "variant_id", "alloc_id", "resource_use_id", "tags", "fields", "resources", "foreigns",
-                 "strings", "string_layout", "hp_init")
+                 "strings", "string_layout", "hp_init", "node_path_by_id", "span_by_path")
 
     def __init__(self, program_src, frontend):
         self.frontend = frontend
@@ -552,6 +583,7 @@ class _WasmContext:
         self.foreigns = _wasm_foreigns(program_src, frontend)
         self.strings = _wasm_strings(program_src, frontend)
         self.string_layout, self.hp_init = _wasm_string_layout(self.strings)
+        self.node_path_by_id, self.span_by_path = _wasm_source_maps(program_src, frontend, self.defs)
 
 def compile_wasm(program_src, frontend):
     """Compile checked LOOM to a real WebAssembly module.
@@ -768,10 +800,14 @@ def emit_wat(program_src, frontend):
     helper_base, apply_arities = ctx.helper_base, ctx.apply_arities
     fmap = {t[1]: i for i, t in enumerate(ds)}; tags, fields = ctx.tags, ctx.fields; uses_heap = [False]; uses_print = [False]
     _OP = {"+": "i32.add", "-": "i32.sub", "*": "i32.mul", "=": "i32.eq", "<": "i32.lt_s", ">": "i32.gt_s"}
-    def w(node, ind, handled_effs=None, with_handlers=None, callable_env=None):
+    def w(node, ind, handled_effs=None, with_handlers=None, callable_env=None, path=None):
         handled_effs = handled_effs or set()
         with_handlers = with_handlers or {}
         callable_env = callable_env or set()
+        if path is None and isinstance(node, list):
+            path = ctx.node_path_by_id.get(id(node))
+        def child_path(i):
+            return path + (i,) if path is not None else None
         def seq(nodes):
             out = []
             for i, child in enumerate(nodes):
@@ -787,16 +823,16 @@ def emit_wat(program_src, frontend):
             return [ind + "local.get $" + node]
         if type(node) is str:
             uses_heap[0] = True
-            return [ind + "i32.const " + str(ctx.string_layout[node]["tagged"]) + "  ;; alloc static string literal"]
+            return [ind + "i32.const " + str(ctx.string_layout[node]["tagged"]) + "  ;; alloc static string literal" + _wat_at(ctx, path)]
         h = node[0]
         if h == "asm":
             error = asm_validation_error(node)
             if error: raise frontend.error(error)
             spec = asm_metadata(node)
-            rhs = w(node[4], ind, handled_effs, with_handlers, callable_env)
+            rhs = w(node[4], ind, handled_effs, with_handlers, callable_env, child_path(4))
             if spec["wasm_rhs"] == "unbox_i31":
                 rhs += [ind + "i32.const 1", ind + "i32.shr_s"]
-            out = (w(node[3], ind, handled_effs, with_handlers, callable_env)
+            out = (w(node[3], ind, handled_effs, with_handlers, callable_env, child_path(3))
                    + rhs + [ind + spec["wat_opcode"] + "  ;; checked asm " + str(node[1]) + " " + str(node[2])])
             if spec["wasm_result"] == "tag_i31":
                 out += [ind + "i32.const 1", ind + "i32.shl"]
@@ -808,23 +844,25 @@ def emit_wat(program_src, frontend):
             rec = [["code", spec["id"]]] + [[f"e{i}", cap] for i, cap in enumerate(spec["captures"])]
             return w(["record"] + rec, ind, handled_effs, with_handlers, callable_env)
         if h in ("+", "*"):
-            o = w(node[1], ind, handled_effs, with_handlers, callable_env)
-            for a in node[2:]:
-                o += w(a, ind, handled_effs, with_handlers, callable_env)
+            o = w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1))
+            for i, a in enumerate(node[2:], 2):
+                o += w(a, ind, handled_effs, with_handlers, callable_env, child_path(i))
                 if h == "*": o += [ind + "i32.const 1", ind + "i32.shr_s"]
                 o += [ind + _OP[h]]
             return o
-        if h == "-": return w(node[1], ind, handled_effs, with_handlers, callable_env) + w(node[2], ind, handled_effs, with_handlers, callable_env) + [ind + _OP[h]]
-        if h in ("=", "<", ">"): return w(node[1], ind, handled_effs, with_handlers, callable_env) + w(node[2], ind, handled_effs, with_handlers, callable_env) + [ind + _OP[h], ind + "i32.const 1", ind + "i32.shl"]
+        if h == "-": return w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + w(node[2], ind, handled_effs, with_handlers, callable_env, child_path(2)) + [ind + _OP[h]]
+        if h in ("=", "<", ">"): return w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + w(node[2], ind, handled_effs, with_handlers, callable_env, child_path(2)) + [ind + _OP[h], ind + "i32.const 1", ind + "i32.shl"]
         if h == "if":
-            return (w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "if (result i32)"] + w(node[2], ind + "  ", handled_effs, with_handlers, callable_env)
-                    + [ind + "else"] + w(node[3], ind + "  ", handled_effs, with_handlers, callable_env) + [ind + "end"])
+            return (w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + [ind + "if (result i32)"] + w(node[2], ind + "  ", handled_effs, with_handlers, callable_env, child_path(2))
+                    + [ind + "else"] + w(node[3], ind + "  ", handled_effs, with_handlers, callable_env, child_path(3)) + [ind + "end"])
         if h == "let":
-            o = w(node[1][1], ind, handled_effs, with_handlers, callable_env) + [ind + "local.set $" + node[1][0]]
+            bind_path = child_path(1)
+            val_path = bind_path + (1,) if bind_path is not None else None
+            o = w(node[1][1], ind, handled_effs, with_handlers, callable_env, val_path) + [ind + "local.set $" + node[1][0]]
             ncall = set(callable_env)
             if _wasm_is_closure_expr(ctx, node[1][1], callable_env):
                 ncall.add(node[1][0])
-            for b in node[2:]: o += w(b, ind, handled_effs, with_handlers, ncall)
+            for i, b in enumerate(node[2:], 2): o += w(b, ind, handled_effs, with_handlers, ncall, child_path(i))
             return o
         if h == "seamN":
             return w(["seam"] + node[2:], ind, handled_effs, with_handlers, callable_env)
@@ -837,40 +875,40 @@ def emit_wat(program_src, frontend):
         if h == "handle":
             nh = set(handled_effs) | {"IO"}
             o = []
-            for b in node[2:]: o += w(b, ind, nh, with_handlers, callable_env)
+            for i, b in enumerate(node[2:], 2): o += w(b, ind, nh, with_handlers, callable_env, child_path(i))
             return o
         if h == "with":
             if node[1] not in frontend.op:
                 raise frontend.error("wat: with currently supports builtin effects only")
             nh = dict(with_handlers); nh[node[1]] = node[2]
             o = []
-            for b in node[3:]: o += w(b, ind, handled_effs, nh, callable_env)
+            for i, b in enumerate(node[3:], 3): o += w(b, ind, handled_effs, nh, callable_env, child_path(i))
             return o
         if h == "print":
             uses_print[0] = True
             if "IO" in with_handlers:
-                return w(with_handlers["IO"], ind, handled_effs, with_handlers, callable_env) + w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "call $apply1"]
+                return w(with_handlers["IO"], ind, handled_effs, with_handlers, callable_env) + w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + [ind + "call $apply1"]
             cap = [ind + "i32.const 0  ;; effect IO", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end"]
             if "IO" in handled_effs:
-                return cap + w(node[1], ind, handled_effs, with_handlers, callable_env)
-            return cap + w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "call $host_print"]
+                return cap + w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1))
+            return cap + w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + [ind + "call $host_print"]
         if h == "net":
             uses_heap[0] = True
             if "Net" in with_handlers:
-                return w(with_handlers["Net"], ind, handled_effs, with_handlers, callable_env) + w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "call $apply1"]
-            return [ind + "i32.const 1  ;; effect Net", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end", ind + "i32.const 1  ;; effect Net"] + w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "call $effbox  ;; alloc effect box from net"]
+                return w(with_handlers["Net"], ind, handled_effs, with_handlers, callable_env) + w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + [ind + "call $apply1"]
+            return [ind + "i32.const 1  ;; effect Net", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end", ind + "i32.const 1  ;; effect Net"] + w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + [ind + "call $effbox  ;; alloc effect box from net" + _wat_at(ctx, path)]
         if h == "rand":
             uses_heap[0] = True
             if "Rand" in with_handlers:
                 return w(with_handlers["Rand"], ind, handled_effs, with_handlers, callable_env) + [ind + "call $apply0"]
-            return [ind + "i32.const 2  ;; effect Rand", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end", ind + "i32.const 2  ;; effect Rand", ind + "i32.const 0"] + [ind + "call $effbox  ;; alloc effect box from rand"]
+            return [ind + "i32.const 2  ;; effect Rand", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end", ind + "i32.const 2  ;; effect Rand", ind + "i32.const 0"] + [ind + "call $effbox  ;; alloc effect box from rand" + _wat_at(ctx, path)]
         if h == "alloc":
             uses_heap[0] = True
             if "Alloc" in with_handlers:
-                return w(with_handlers["Alloc"], ind, handled_effs, with_handlers, callable_env) + w(node[1] if len(node) > 1 else 0, ind, handled_effs, with_handlers, callable_env) + [ind + "call $apply1"]
+                return w(with_handlers["Alloc"], ind, handled_effs, with_handlers, callable_env) + w(node[1] if len(node) > 1 else 0, ind, handled_effs, with_handlers, callable_env, child_path(1) if len(node) > 1 else None) + [ind + "call $apply1"]
             if len(node) == 1:
                 return [ind + "i32.const 3  ;; effect Alloc", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end", ind + "i32.const " + str(_WASM_NIL)]
-            return [ind + "i32.const 3  ;; effect Alloc", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end"] + w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "i32.const 0", ind + "call $alloc  ;; alloc list cells from alloc"]
+            return [ind + "i32.const 3  ;; effect Alloc", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end"] + w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + [ind + "i32.const 0", ind + "call $alloc  ;; alloc list cells from alloc" + _wat_at(ctx, path)]
         transparent_body = _wasm_transparent_body(frontend, node)
         if transparent_body is not None:
             return seq(transparent_body)
@@ -884,30 +922,32 @@ def emit_wat(program_src, frontend):
                        ind + "call $host_ffi"])
         if h == "use":
             uses_heap[0] = True
-            return [ind + "i32.const " + str(ctx.resources[node[1]]) + "  ;; resource " + node[1], ind + "call $resuse  ;; alloc resource-use marker"]
+            return [ind + "i32.const " + str(ctx.resources[node[1]]) + "  ;; resource " + node[1], ind + "call $resuse  ;; alloc resource-use marker" + _wat_at(ctx, path)]
         if h == "record":
             uses_heap[0] = True
             items = [fld for fld in node[1:] if isinstance(fld, list) and len(fld) >= 2]
             out = [ind + "i32.const 0"]
             for fld in reversed(items):
-                out = out + [ind + "i32.const " + str(fields[fld[0]]) + "  ;; field " + str(fld[0])] + w(fld[1], ind, handled_effs, with_handlers, callable_env) + [ind + "call $rec  ;; alloc record field " + str(fld[0])]
+                fld_path = ctx.node_path_by_id.get(id(fld))
+                val_path = fld_path + (1,) if fld_path is not None else None
+                out = out + [ind + "i32.const " + str(fields[fld[0]]) + "  ;; field " + str(fld[0])] + w(fld[1], ind, handled_effs, with_handlers, callable_env, val_path) + [ind + "call $rec  ;; alloc record field " + str(fld[0]) + _wat_at(ctx, fld_path)]
             return out
         if h == "get":
             uses_heap[0] = True
-            return w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "i32.const " + str(fields[node[2]])] + [ind + "call $get"]
+            return w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + [ind + "i32.const " + str(fields[node[2]])] + [ind + "call $get"]
         if h == "list":
             uses_heap[0] = True; o = []
-            for a in node[1:]: o += w(a, ind, handled_effs, with_handlers, callable_env)
-            return o + [ind + "i32.const " + str(_WASM_NIL)] + [ind + "call $cons  ;; alloc list cell" for _ in node[1:]]
-        if h == "cons": uses_heap[0] = True; return w(node[1], ind, handled_effs, with_handlers, callable_env) + w(node[2], ind, handled_effs, with_handlers, callable_env) + [ind + "call $cons  ;; alloc cons cell"]
-        if h == "head": uses_heap[0] = True; return w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "i32.const -2", ind + "i32.and", ind + "i32.load offset=4"]
-        if h == "tail": uses_heap[0] = True; return w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "i32.const -2", ind + "i32.and", ind + "i32.load offset=8"]
-        if h == "empty": return w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "i32.const " + str(_WASM_NIL), ind + "i32.eq", ind + "i32.const 1", ind + "i32.shl"]
+            for i, a in enumerate(node[1:], 1): o += w(a, ind, handled_effs, with_handlers, callable_env, child_path(i))
+            return o + [ind + "i32.const " + str(_WASM_NIL)] + [ind + "call $cons  ;; alloc list cell" + _wat_at(ctx, path) for _ in node[1:]]
+        if h == "cons": uses_heap[0] = True; return w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + w(node[2], ind, handled_effs, with_handlers, callable_env, child_path(2)) + [ind + "call $cons  ;; alloc cons cell" + _wat_at(ctx, path)]
+        if h == "head": uses_heap[0] = True; return w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + [ind + "i32.const -2", ind + "i32.and", ind + "i32.load offset=4"]
+        if h == "tail": uses_heap[0] = True; return w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + [ind + "i32.const -2", ind + "i32.and", ind + "i32.load offset=8"]
+        if h == "empty": return w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + [ind + "i32.const " + str(_WASM_NIL), ind + "i32.eq", ind + "i32.const 1", ind + "i32.shl"]
         if h == "variant":
             uses_heap[0] = True
-            return [ind + "i32.const " + str(tags[node[1]]) + "  ;; tag " + node[1]] + w(node[2], ind, handled_effs, with_handlers, callable_env) + [ind + "call $variant  ;; alloc variant " + node[1]]
+            return [ind + "i32.const " + str(tags[node[1]]) + "  ;; tag " + node[1]] + w(node[2], ind, handled_effs, with_handlers, callable_env, child_path(2)) + [ind + "call $variant  ;; alloc variant " + node[1] + _wat_at(ctx, path)]
         if h == "match":
-            uses_heap[0] = True; o = w(node[1], ind, handled_effs, with_handlers, callable_env) + [ind + "local.set $s"]
+            uses_heap[0] = True; o = w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + [ind + "local.set $s"]
             def arms(a, ii):
                 if not a: return [ii + "unreachable"]
                 pat, body = a[0][0], a[0][1]
@@ -919,21 +959,21 @@ def emit_wat(program_src, frontend):
             arity = len(node[1:])
             if arity not in ctx.apply_ids:
                 raise frontend.error("wat closures currently support this arity only when an apply helper exists")
-            out = w(h, ind, handled_effs, with_handlers, callable_env)
-            for a in node[1:]:
-                out += w(a, ind, handled_effs, with_handlers, callable_env)
+            out = w(h, ind, handled_effs, with_handlers, callable_env, child_path(0))
+            for i, a in enumerate(node[1:], 1):
+                out += w(a, ind, handled_effs, with_handlers, callable_env, child_path(i))
             return out + [ind + "call $apply" + str(arity)]
         if h in callable_env:
             arity = len(node[1:])
             if arity not in ctx.apply_ids:
                 raise frontend.error("wat closures currently support this arity only when an apply helper exists")
             out = [ind + "local.get $" + h]
-            for a in node[1:]:
-                out += w(a, ind, handled_effs, with_handlers, callable_env)
+            for i, a in enumerate(node[1:], 1):
+                out += w(a, ind, handled_effs, with_handlers, callable_env, child_path(i))
             return out + [ind + "call $apply" + str(arity)]
         if h in fmap:
             o = []
-            for a in node[1:]: o += w(a, ind, handled_effs, with_handlers, callable_env)
+            for i, a in enumerate(node[1:], 1): o += w(a, ind, handled_effs, with_handlers, callable_env, child_path(i))
             return o + [ind + "call $" + h]
         raise frontend.error("wat: form not yet in the WASM backend: " + str(h))
     bodies = []

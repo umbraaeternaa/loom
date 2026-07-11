@@ -21,7 +21,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "395-parse-spans-v1")',
+        'bundleUrl.searchParams.set("v", "396-wat-source-locations-v1")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -84,7 +84,7 @@ def _check_playground_loader() -> None:
     if leaked_imports:
         raise SystemExit("docs parity: standalone bundle has host-only top-level imports: " + ", ".join(leaked_imports))
     bundle_text = DOCS_LOOM.read_text()
-    for needle in ("def tokenize_spans", "def parse_spans", '"line"', '"column"', '"offset"', '"end_offset"', '"children"'):
+    for needle in ("def tokenize_spans", "def parse_spans", "def _wat_at", '"line"', '"column"', '"offset"', '"end_offset"', '"children"', " at "):
         if needle not in bundle_text:
             raise SystemExit("docs parity: standalone bundle lost source-span tokenizer marker: " + needle)
 

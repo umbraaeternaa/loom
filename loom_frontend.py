@@ -117,10 +117,11 @@ class CodegenFrontend(BackendFrontend):
 
 
 class WasmFrontend(BackendFrontend):
-    __slots__ = ("platent", "roleclauses")
+    __slots__ = ("parse_spans", "platent", "roleclauses")
 
-    def __init__(self, parse, check, pname, error, op, check_call_literals, platent, roleclauses):
+    def __init__(self, parse, parse_spans, check, pname, error, op, check_call_literals, platent, roleclauses):
         super().__init__(parse, check, pname, error, op, check_call_literals)
+        self.parse_spans = parse_spans
         self.platent = platent
         self.roleclauses = roleclauses
 

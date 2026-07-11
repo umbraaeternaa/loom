@@ -162,7 +162,7 @@ def run_js(program_src, call_src):
 import loom_wasm as _loom_wasm
 
 _WASM_ABI_VERSION = _loom_wasm.WASM_ABI_VERSION
-_WASM_FRONTEND = _loom_wasm.Frontend(parse, check, pname, LoomError, OP, _check_call_literals, platent, _roleclauses)
+_WASM_FRONTEND = _loom_wasm.Frontend(parse, parse_spans, check, pname, LoomError, OP, _check_call_literals, platent, _roleclauses)
 
 def compile_wasm(program_src):
     return _loom_wasm.compile_wasm(program_src, _WASM_FRONTEND)

@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 395 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 396 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 395/395 citadel checks
+PASS — 396/396 citadel checks
 ```
 
 ## The idea in one screen
@@ -225,7 +225,7 @@ and lowers tagged values, closures, structured data, and effects to **WebAssembl
 The binary boundary is versioned and documented in the normative [LOOM WebAssembly ABI v1](docs/wasm_abi_v1.md); generated modules export `loom_abi_version = 1`, and hosts reject unknown versions.
 Runtime quantity mediation is tracked separately in the [LOOM WASM Quantity Mediation Roadmap](docs/wasm_quantity_mediation.md): `seamN` quantities are source-checked today, heap bytes are host-visible, and `memory.grow` stays disabled until growth is explicitly metered.
 WASM diagnostics also expose heap object-family counters (`records`, `lists`, `variants`, `effects`, `resources`) so hosts can explain what reserved heap, not just how many bytes were reserved.
-The WAT assembler view labels allocation sites (`record`, `list`, `variant`, effect boxes, resources, static strings) so humans can see which source-level forms are responsible for heap pressure.
+The WAT assembler view labels allocation sites (`record`, `list`, `variant`, effect boxes, resources, static strings) with source `line:column` locations so humans can see which source-level forms are responsible for heap pressure.
 The parser also exposes `tokenize_spans` and `parse_spans`, a non-semantic diagnostics layer that reports source line/column/offsets without changing the parsed AST.
 Binary and WAT compilation use isolated per-program contexts, so closure, helper, tag, and field layouts cannot leak between concurrent builds.
 

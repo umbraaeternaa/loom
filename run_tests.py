@@ -910,8 +910,19 @@ def main():
             and ";; alloc static string literal" in heap_label_wat
             and ";; alloc static string object" in heap_label_wat
         )
+        heap_label_locations_ok = (
+            ";; alloc record field xs at 1:42" in heap_label_wat
+            and ";; alloc list cell at 1:46" in heap_label_wat
+            and ";; alloc variant Some at 1:61" in heap_label_wat
+            and ";; alloc effect box from net at 1:82" in heap_label_wat
+            and ";; alloc list cells from alloc at 1:94" in heap_label_wat
+            and ";; alloc resource-use marker at 1:127" in heap_label_wat
+            and ";; alloc static string literal at 1:144" in heap_label_wat
+        )
         ok += heap_label_ok
         print(f"  {'ok  ' if heap_label_ok else 'FAIL'} backend(WAT): allocation source labels emitted")
+        ok += heap_label_locations_ok
+        print(f"  {'ok  ' if heap_label_locations_ok else 'FAIL'} backend(WAT): allocation source labels include locations")
     except Exception as e:
         print(f"  FAIL backend(WAT) allocation labels: {e}")
     try:                                               # seamN quantity is a source-checker guarantee in ABI v1; WASM carries cap presence, not a runtime quantum counter
@@ -1975,7 +1986,7 @@ def main():
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "395-parse-spans-v1")' in play
+            and 'bundleUrl.searchParams.set("v", "396-wat-source-locations-v1")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -2066,7 +2077,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 92   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution contracts, cli proof-surface, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/seamN-static backend guards, runtime/cli facades, docs workflow/quantity-roadmap pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 93   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution contracts, cli proof-surface, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/seamN-static backend guards, runtime/cli facades, docs workflow/quantity-roadmap pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1
