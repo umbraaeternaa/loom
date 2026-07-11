@@ -1986,7 +1986,7 @@ def main():
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "396-wat-source-locations-v1")' in play
+            and 'bundleUrl.searchParams.set("v", "397-playground-wat-source-map-v1")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -2007,6 +2007,11 @@ def main():
             and 'globalValue("loom_heap_effects")' in play
             and 'globalValue("loom_heap_resources")' in play
             and "heap objects:" in play
+            and "function watSourceMap(wat)" in play
+            and "function renderWatSourceMap(wat)" in play
+            and ";; allocation source map" in play
+            and "WASM · source map" in play
+            and "alloc ([^\\n]*?) at (\\d+):(\\d+)" in play
             and 'name: "WASM · checked i31.add"' in play
             and "(asm wasm i31.add 20 22)" in play
             and 'name: "WASM · checked i31.sub"' in play
@@ -2050,6 +2055,22 @@ def main():
         print(f"  {'ok  ' if docs_discipline_ok else 'FAIL'} docs: published bundle workflow pinned")
     except Exception as e:
         print(f"  FAIL docs workflow pin: {e}")
+    try:                                               # Playground mirrors the WAT source-location diagnostics for humans
+        play = Path(__file__).with_name("docs").joinpath("play.html").read_text()
+        wat_source_map_ui_ok = (
+            "function watSourceMap(wat)" in play
+            and "function renderWatSourceMap(wat)" in play
+            and ";; allocation source map" in play
+            and "renderWatSourceMap(wat) +" in play
+            and "WASM · source map" in play
+            and "alloc ([^\\n]*?) at (\\d+):(\\d+)" in play
+            and "line:column" in play
+            and "heap pressure" in play
+        )
+        ok += wat_source_map_ui_ok
+        print(f"  {'ok  ' if wat_source_map_ui_ok else 'FAIL'} docs: playground WAT source-map UI pinned")
+    except Exception as e:
+        print(f"  FAIL playground WAT source-map UI pin: {e}")
     try:                                               # runtime quantity mediation needs a design contract before it becomes ABI/runtime code
         qdoc = Path(__file__).with_name("docs").joinpath("wasm_quantity_mediation.md").read_text()
         quantity_doc_ok = (
@@ -2077,7 +2098,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 93   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution contracts, cli proof-surface, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/seamN-static backend guards, runtime/cli facades, docs workflow/quantity-roadmap pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 94   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution contracts, cli proof-surface, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

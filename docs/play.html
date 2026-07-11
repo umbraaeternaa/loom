@@ -38,6 +38,7 @@
   button.act:disabled{opacity:.5;cursor:wait}
   .status{color:var(--dim);font-size:13px;margin-left:auto}
   .v-ok{color:var(--good)} .v-bad{color:var(--bad)} .v-key{color:var(--violet)} .v-eff{color:var(--teal)}
+  .map-line{display:block;margin:.08rem 0}
   footer{margin-top:30px;color:var(--dim);font-size:13px}
   footer a{color:var(--teal);text-decoration:none}
 </style>
@@ -157,6 +158,17 @@ const EXAMPLES = [
 
 (defx main () (fn ()
   (record (xs (list 1 2 3)) (msg "meter"))))` },
+  { name: "WASM · source map", note: "→ alloc sites",
+    src: `; Compile to WAT to see a human source map for heap pressure.
+; Allocation labels name both the object family and source line:column.
+
+(defx main (Net Alloc) (fn (u n)
+  (record
+    (xs (list 1 2))
+    (v (variant Some 5))
+    (e (net u))
+    (a (alloc n))
+    (msg "mapped"))))` },
   { name: "WASM · checked i31.add", note: "→ 42 / WAT / WASM",
     src: `; Low-level operations are not raw text. LOOM accepts only registered
 ; instructions with fixed inputs, result, effects, and backend lowering.
@@ -216,6 +228,34 @@ function fmtValue(v){
   }
   return String(v);
 }
+function watSourceMap(wat){
+  const re = /;; alloc ([^\n]*?) at (\d+):(\d+)/g;
+  const seen = new Set();
+  const rows = [];
+  let m;
+  while ((m = re.exec(wat)) !== null) {
+    const label = m[1].trim();
+    const line = Number(m[2]);
+    const column = Number(m[3]);
+    const key = label + "@" + line + ":" + column;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rows.push({label, line, column});
+  }
+  rows.sort((a, b) => (a.line - b.line) || (a.column - b.column) || a.label.localeCompare(b.label));
+  return rows;
+}
+function renderWatSourceMap(wat){
+  const rows = watSourceMap(wat);
+  if (!rows.length) return "";
+  let s = "<span class='v-eff'>;; allocation source map</span>\n";
+  for (const row of rows.slice(0, 12)) {
+    s += "<span class='map-line'>  " + esc(String(row.line) + ":" + String(row.column)) +
+         "  <span class='v-key'>" + esc(row.label) + "</span></span>\n";
+  }
+  if (rows.length > 12) s += "  … " + esc(String(rows.length - 12)) + " more allocation site(s)\n";
+  return s + "\n";
+}
 
 // render example chips
 EXAMPLES.forEach((ex,i) => {
@@ -233,7 +273,7 @@ async function boot(){
     pyodide = await loadPyodide();
     setStatus("loading LOOM…");
     const bundleUrl = new URL("./loom.py", location.href);
-    bundleUrl.searchParams.set("v", "396-wat-source-locations-v1");
+    bundleUrl.searchParams.set("v", "397-playground-wat-source-map-v1");
     const response = await fetch(bundleUrl, {cache: "no-store"});
     if (!response.ok) throw new Error("LOOM bundle HTTP " + response.status);
     const code = await response.text();
@@ -508,7 +548,7 @@ try: _w = loom.emit_wat(_src)
 except Exception as _e: _w = "; this program is not on the published WASM path yet.\\n; The current backend already covers arithmetic, recursion, integer lists,\\n; records, variants/match, closures, core IO handlers, the FFI boundary,\\n; and transparent trust/provenance wrappers. Try a 'WASM · …' example.\\n; (" + str(_e) + ")"
 _w
 `);
-    show("<span class='v-eff'>;; LOOM → WebAssembly text (WAT) — the live published backend surface</span>\n\n" + esc(wat));
+    show(renderWatSourceMap(wat) + "<span class='v-eff'>;; LOOM → WebAssembly text (WAT) — the live published backend surface</span>\n\n" + esc(wat));
   } catch(e){ show("<span class='v-bad'>error</span>\n" + esc(e)); }
 };
 

@@ -21,7 +21,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "396-wat-source-locations-v1")',
+        'bundleUrl.searchParams.set("v", "397-playground-wat-source-map-v1")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -46,6 +46,12 @@ def _check_playground_loader() -> None:
         'globalValue("loom_heap_effects")',
         'globalValue("loom_heap_resources")',
         "heap objects:",
+        "function watSourceMap(wat)",
+        "function renderWatSourceMap(wat)",
+        ";; allocation source map",
+        "renderWatSourceMap(wat) +",
+        'name: "WASM · source map"',
+        "alloc ([^\\n]*?) at (\\d+):(\\d+)",
         "bytes reserved",
         'name: "WASM · checked i31.add"',
         "(asm wasm i31.add 20 22)",
