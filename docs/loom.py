@@ -255,6 +255,12 @@ def tokenize(s):
     return [span["token"] for span in tokenize_spans(s)]
 
 
+def _atom_value(x):
+    if x.startswith('"'): return x[1:-1]
+    try: return int(x)
+    except ValueError: return Symbol(x)
+
+
 def _read(t):
     if not t:
         raise LoomError("unexpected end of input")
@@ -269,14 +275,54 @@ def _read(t):
             if t[0] == ")":
                 t.pop(0); return l
             l.append(_read(t))
-    if x.startswith('"'): return x[1:-1]
-    try: return int(x)
-    except ValueError: return Symbol(x)
+    return _atom_value(x)
+
+
+def _span_payload(start, end):
+    return {
+        "line": start["line"],
+        "column": start["column"],
+        "offset": start["offset"],
+        "end_offset": end["end_offset"],
+    }
+
+
+def _read_span(spans, index):
+    if index >= len(spans):
+        raise LoomError("unexpected end of input")
+    head = spans[index]
+    x = head["token"]
+    if x == ")":
+        raise LoomError("unexpected ')'")
+    if x == "(":
+        values = []
+        children = []
+        index += 1
+        while True:
+            if index >= len(spans):
+                raise LoomError("unclosed '('")
+            if spans[index]["token"] == ")":
+                close = spans[index]
+                return {"value": values, "span": _span_payload(head, close), "children": children}, index + 1
+            child, index = _read_span(spans, index)
+            values.append(child["value"])
+            children.append(child)
+    return {"value": _atom_value(x), "span": _span_payload(head, head), "children": []}, index + 1
 
 
 def parse(s):
     t = tokenize(s); out = []
     while t: out.append(_read(t))
+    return out
+
+
+def parse_spans(s):
+    spans = tokenize_spans(s)
+    out = []
+    index = 0
+    while index < len(spans):
+        item, index = _read_span(spans, index)
+        out.append(item)
     return out
 
 

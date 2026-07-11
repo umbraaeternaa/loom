@@ -66,6 +66,15 @@ def tokenize(frontend, src):
     return [span["token"] for span in tokenize_spans(frontend, src)]
 
 
+def _atom_value(frontend, token):
+    if token.startswith('"'):
+        return token[1:-1]
+    try:
+        return int(token)
+    except ValueError:
+        return Symbol(token)
+
+
 def _read(frontend, tokens):
     if not tokens:
         raise frontend.error("unexpected end of input")
@@ -81,12 +90,47 @@ def _read(frontend, tokens):
                 tokens.pop(0)
                 return items
             items.append(_read(frontend, tokens))
-    if head.startswith('"'):
-        return head[1:-1]
-    try:
-        return int(head)
-    except ValueError:
-        return Symbol(head)
+    return _atom_value(frontend, head)
+
+
+def _span_payload(start, end):
+    return {
+        "line": start["line"],
+        "column": start["column"],
+        "offset": start["offset"],
+        "end_offset": end["end_offset"],
+    }
+
+
+def _read_span(frontend, spans, index):
+    if index >= len(spans):
+        raise frontend.error("unexpected end of input")
+    head = spans[index]
+    token = head["token"]
+    if token == ")":
+        raise frontend.error("unexpected ')'")
+    if token == "(":
+        items = []
+        children = []
+        index += 1
+        while True:
+            if index >= len(spans):
+                raise frontend.error("unclosed '('")
+            if spans[index]["token"] == ")":
+                close = spans[index]
+                return {
+                    "value": items,
+                    "span": _span_payload(head, close),
+                    "children": children,
+                }, index + 1
+            child, index = _read_span(frontend, spans, index)
+            items.append(child["value"])
+            children.append(child)
+    return {
+        "value": _atom_value(frontend, token),
+        "span": _span_payload(head, head),
+        "children": [],
+    }, index + 1
 
 
 def parse(frontend, src):
@@ -94,4 +138,15 @@ def parse(frontend, src):
     out = []
     while tokens:
         out.append(_read(frontend, tokens))
+    return out
+
+
+def parse_spans(frontend, src):
+    """Return a parallel parse tree with source spans without changing parse()."""
+    spans = tokenize_spans(frontend, src)
+    out = []
+    index = 0
+    while index < len(spans):
+        item, index = _read_span(frontend, spans, index)
+        out.append(item)
     return out

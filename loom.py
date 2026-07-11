@@ -95,6 +95,10 @@ def tokenize_spans(s):
     return _loom_parse.tokenize_spans(_PARSE_FRONTEND, s)
 
 
+def parse_spans(s):
+    return _loom_parse.parse_spans(_PARSE_FRONTEND, s)
+
+
 def _read(t):
     return _loom_parse._read(_PARSE_FRONTEND, t)
 

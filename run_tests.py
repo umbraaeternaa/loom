@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import loom as _loom
 from loom_frontend import ASM_INTRINSICS
-from loom import parse, tokenize, tokenize_spans, check, run_call, compile_py, run_compiled, run_js, compile_js, compile_wasm, run_wasm, emit_wat, LoomError, _WASM_ABI_VERSION
+from loom import parse, parse_spans, tokenize, tokenize_spans, check, run_call, compile_py, run_compiled, run_js, compile_js, compile_wasm, run_wasm, emit_wat, LoomError, _WASM_ABI_VERSION
 
 # (name, source, should_be_accepted)
 CASES = [
@@ -728,6 +728,25 @@ def main():
         print(f"  {'ok  ' if source_spans_ok else 'FAIL'} parser: source token spans preserve parse semantics")
     except Exception as e:
         print(f"  FAIL parser source spans: {e}")
+    try:                                               # form spans are a parallel diagnostics tree, not a new AST
+        form_src = ' (defx f ()\n   (fn () (record (msg "ok"))))\n'
+        forms = parse_spans(form_src)
+        root = forms[0]
+        fn_form = root["children"][3]
+        record_form = fn_form["children"][2]
+        parse_tree_ok = (
+            [form["value"] for form in forms] == parse(form_src)
+            and root["span"]["line"] == 1 and root["span"]["column"] == 2
+            and root["span"]["offset"] == 1 and root["span"]["end_offset"] == len(form_src) - 1
+            and fn_form["span"]["line"] == 2 and fn_form["span"]["column"] == 4
+            and record_form["value"] == ["record", ["msg", "ok"]]
+            and record_form["span"]["line"] == 2 and record_form["span"]["column"] == 11
+            and record_form["children"][1]["children"][1]["span"]["column"] == 24
+        )
+        ok += parse_tree_ok
+        print(f"  {'ok  ' if parse_tree_ok else 'FAIL'} parser: form source spans preserve parse semantics")
+    except Exception as e:
+        print(f"  FAIL parser form spans: {e}")
     try:                                               # every runtime call owns its capability stack
         from concurrent.futures import ThreadPoolExecutor
         runtime_programs = [
@@ -1956,7 +1975,7 @@ def main():
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "394-tokenize-spans-v1")' in play
+            and 'bundleUrl.searchParams.set("v", "395-parse-spans-v1")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -2047,7 +2066,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 91   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution contracts, cli proof-surface, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/seamN-static backend guards, runtime/cli facades, docs workflow/quantity-roadmap pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 92   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution contracts, cli proof-surface, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/seamN-static backend guards, runtime/cli facades, docs workflow/quantity-roadmap pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1
