@@ -39,6 +39,8 @@
   .status{color:var(--dim);font-size:13px;margin-left:auto}
   .v-ok{color:var(--good)} .v-bad{color:var(--bad)} .v-key{color:var(--violet)} .v-eff{color:var(--teal)}
   .map-line{display:block;margin:.08rem 0}
+  .map-source{display:block;color:rgba(231,236,255,.78);margin-left:2ch}
+  .map-caret{display:block;color:var(--teal);margin-left:2ch}
   footer{margin-top:30px;color:var(--dim);font-size:13px}
   footer a{color:var(--teal);text-decoration:none}
 </style>
@@ -245,13 +247,21 @@ function watSourceMap(wat){
   rows.sort((a, b) => (a.line - b.line) || (a.column - b.column) || a.label.localeCompare(b.label));
   return rows;
 }
-function renderWatSourceMap(wat){
+function sourceLinePreview(src, row){
+  const lines = String(src).split(/\r?\n/);
+  const text = lines[row.line - 1] || "";
+  const caret = " ".repeat(Math.max(0, row.column - 1)) + "^";
+  return "<span class='map-source'>    │ " + esc(text) + "</span>\n" +
+         "<span class='map-caret'>    │ " + esc(caret) + "</span>\n";
+}
+function renderWatSourceMap(wat, src){
   const rows = watSourceMap(wat);
   if (!rows.length) return "";
   let s = "<span class='v-eff'>;; allocation source map</span>\n";
   for (const row of rows.slice(0, 12)) {
     s += "<span class='map-line'>  " + esc(String(row.line) + ":" + String(row.column)) +
          "  <span class='v-key'>" + esc(row.label) + "</span></span>\n";
+    s += sourceLinePreview(src, row);
   }
   if (rows.length > 12) s += "  … " + esc(String(rows.length - 12)) + " more allocation site(s)\n";
   return s + "\n";
@@ -273,7 +283,7 @@ async function boot(){
     pyodide = await loadPyodide();
     setStatus("loading LOOM…");
     const bundleUrl = new URL("./loom.py", location.href);
-    bundleUrl.searchParams.set("v", "399-cli-source-map-json-v1");
+    bundleUrl.searchParams.set("v", "400-playground-source-line-preview-v1");
     const response = await fetch(bundleUrl, {cache: "no-store"});
     if (!response.ok) throw new Error("LOOM bundle HTTP " + response.status);
     const code = await response.text();
@@ -548,7 +558,7 @@ try: _w = loom.emit_wat(_src)
 except Exception as _e: _w = "; this program is not on the published WASM path yet.\\n; The current backend already covers arithmetic, recursion, integer lists,\\n; records, variants/match, closures, core IO handlers, the FFI boundary,\\n; and transparent trust/provenance wrappers. Try a 'WASM · …' example.\\n; (" + str(_e) + ")"
 _w
 `);
-    show(renderWatSourceMap(wat) + "<span class='v-eff'>;; LOOM → WebAssembly text (WAT) — the live published backend surface</span>\n\n" + esc(wat));
+    show(renderWatSourceMap(wat, $("src").value) + "<span class='v-eff'>;; LOOM → WebAssembly text (WAT) — the live published backend surface</span>\n\n" + esc(wat));
   } catch(e){ show("<span class='v-bad'>error</span>\n" + esc(e)); }
 };
 

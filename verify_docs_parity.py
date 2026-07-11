@@ -21,7 +21,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "399-cli-source-map-json-v1")',
+        'bundleUrl.searchParams.set("v", "400-playground-source-line-preview-v1")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -47,9 +47,10 @@ def _check_playground_loader() -> None:
         'globalValue("loom_heap_resources")',
         "heap objects:",
         "function watSourceMap(wat)",
-        "function renderWatSourceMap(wat)",
+        "function renderWatSourceMap(wat, src)",
+        "function sourceLinePreview(src, row)",
         ";; allocation source map",
-        "renderWatSourceMap(wat) +",
+        'renderWatSourceMap(wat, $("src").value) +',
         'name: "WASM · source map"',
         "alloc ([^\\n]*?) at (\\d+):(\\d+)",
         "bytes reserved",
