@@ -1533,6 +1533,36 @@ def main():
             print(f"  {'ok  ' if r32 else 'FAIL'} cli source-map: summarizes WAT allocation labels")
     except Exception as e:
         print(f"  FAIL cli source-map: {e}")
+    try:                                               # CLI: source-map JSON is a stable machine contract for agents/dashboards
+        with tempfile.TemporaryDirectory() as td:
+            sample = Path(td) / "heap.loom"
+            sample.write_text("""(defx main () (fn ()
+  (list 1 2 3)))
+""")
+            liar = Path(td) / "liar.loom"
+            liar.write_text('(defx sneaky () (fn (x) (print x)))\n')
+            loom = Path(__file__).with_name("loom.py")
+            smj = subprocess.run([sys.executable, str(loom), "source-map", str(sample), "--format=json"], capture_output=True, text=True)
+            rej = subprocess.run([sys.executable, str(loom), "source-map", str(liar), "--format=json"], capture_output=True, text=True)
+            accepted_map = json.loads(smj.stdout)
+            rejected_map = json.loads(rej.stdout)
+            source_map_json_ok = (
+                smj.returncode == 0
+                and rej.returncode == 1
+                and accepted_map["schema"] == rejected_map["schema"] == "loom-source-map/v1"
+                and accepted_map["verdict"] == "accept"
+                and accepted_map["allocation_count"] == 1
+                and accepted_map["allocations"] == [{"column": 3, "label": "list cell", "line": 2}]
+                and rejected_map["verdict"] == "reject"
+                and rejected_map["allocation_count"] == 0
+                and rejected_map["allocations"] == []
+                and "sneaky" in rejected_map["error"]
+                and accepted_map["source_sha256"] == hashlib.sha256(sample.read_text().encode("utf-8")).hexdigest()
+            )
+            ok += source_map_json_ok
+            print(f"  {'ok  ' if source_map_json_ok else 'FAIL'} cli source-map: stable JSON contract")
+    except Exception as e:
+        print(f"  FAIL cli source-map JSON: {e}")
     try:                                               # Gate v1: one deterministic JSON verdict across API, check, and audit
         with tempfile.TemporaryDirectory() as td:
             clean_src = '(defx fetch (Net) (fn (u) (net u)))\n'
@@ -2004,7 +2034,7 @@ def main():
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "398-cli-source-map-v1")' in play
+            and 'bundleUrl.searchParams.set("v", "399-cli-source-map-json-v1")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -2029,6 +2059,8 @@ def main():
             and "function renderWatSourceMap(wat)" in play
             and ";; allocation source map" in play
             and "allocation_source_map_lines" in Path(__file__).with_name("docs").joinpath("loom.py").read_text()
+            and "build_source_map_verdict" in Path(__file__).with_name("docs").joinpath("loom.py").read_text()
+            and "loom-source-map/v1" in Path(__file__).with_name("docs").joinpath("loom.py").read_text()
             and "source-map" in Path(__file__).with_name("docs").joinpath("loom.py").read_text()
             and "WASM · source map" in play
             and "alloc ([^\\n]*?) at (\\d+):(\\d+)" in play
@@ -2118,7 +2150,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 95   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution contracts, cli proof-surface/source-map, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 96   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution contracts, cli proof-surface/source-map/json contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

@@ -96,6 +96,36 @@ def allocation_source_map_lines(wat):
     return ["allocation source map"] + [f"  {line}:{column}  {label}" for line, column, label in rows]
 
 
+def allocation_source_map_entries(wat):
+    rows = sorted({
+        (int(line), int(column), label.strip())
+        for label, line, column in re.findall(r";; alloc ([^\n]*?) at (\d+):(\d+)", wat)
+    })
+    return [{"line": line, "column": column, "label": label} for line, column, label in rows]
+
+
+def build_source_map_verdict(frontend, src):
+    """Return the deterministic JSON-safe WAT allocation source-map verdict."""
+    try:
+        allocations = allocation_source_map_entries(frontend.emit_wat(src))
+    except frontend.error as err:
+        return {
+            "schema": "loom-source-map/v1",
+            "verdict": "reject",
+            "source_sha256": hashlib.sha256(src.encode("utf-8")).hexdigest(),
+            "allocation_count": 0,
+            "allocations": [],
+            "error": str(err),
+        }
+    return {
+        "schema": "loom-source-map/v1",
+        "verdict": "accept",
+        "source_sha256": hashlib.sha256(src.encode("utf-8")).hexdigest(),
+        "allocation_count": len(allocations),
+        "allocations": allocations,
+    }
+
+
 def _audit(frontend, src, output_format="text"):
     verdict = build_verdict(frontend, src)
     if output_format == "json":
@@ -186,6 +216,10 @@ def cli(argv, frontend):
             return 1
         return 0
     if cmd == "source-map":
+        if output_format == "json":
+            verdict = build_source_map_verdict(frontend, src)
+            _emit_json(verdict)
+            return 1 if verdict["verdict"] == "reject" else 0
         try:
             lines = allocation_source_map_lines(frontend.emit_wat(src))
         except frontend.error as err:

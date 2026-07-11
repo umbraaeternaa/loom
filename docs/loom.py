@@ -3334,6 +3334,35 @@ def allocation_source_map_lines(wat):
     return ["allocation source map"] + [f"  {line}:{column}  {label}" for line, column, label in rows]
 
 
+def allocation_source_map_entries(wat):
+    rows = sorted({
+        (int(line), int(column), label.strip())
+        for label, line, column in re.findall(r";; alloc ([^\n]*?) at (\d+):(\d+)", wat)
+    })
+    return [{"line": line, "column": column, "label": label} for line, column, label in rows]
+
+
+def build_source_map_verdict(src):
+    try:
+        allocations = allocation_source_map_entries(emit_wat(src))
+    except LoomError as error:
+        return {
+            "schema": "loom-source-map/v1",
+            "verdict": "reject",
+            "source_sha256": hashlib.sha256(src.encode("utf-8")).hexdigest(),
+            "allocation_count": 0,
+            "allocations": [],
+            "error": str(error),
+        }
+    return {
+        "schema": "loom-source-map/v1",
+        "verdict": "accept",
+        "source_sha256": hashlib.sha256(src.encode("utf-8")).hexdigest(),
+        "allocation_count": len(allocations),
+        "allocations": allocations,
+    }
+
+
 def _cli(argv):
 
     flags, pos, i = {}, [], 0
@@ -3379,6 +3408,9 @@ def _cli(argv):
         except LoomError as e: print("REJECTED: " + str(e)); return 1
         return 0
     if cmd == "source-map":
+        if output_format == "json":
+            verdict = build_source_map_verdict(src)
+            _emit_verdict_json(verdict); return 1 if verdict["verdict"] == "reject" else 0
         try: lines = allocation_source_map_lines(emit_wat(src))
         except LoomError as e: print("REJECTED: " + str(e)); return 1
         for line in lines: print(line)
