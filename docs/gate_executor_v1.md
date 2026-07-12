@@ -61,6 +61,13 @@ Evidence items must use the existing closed LOOM Gate evidence taxonomy; unknown
 kinds are rejected before finalization. `loom.finish_process_attempt(...)`
 validates this object and then finalizes the process-only receipt.
 
+The host-attempt schema can be checked from the CLI without executing or
+finalizing anything:
+
+```console
+python3 loom.py gate-attempt attempt.json --format json
+```
+
 This shim closes a practical integration gap without giving an agent ambient
 authority. The agent may request and inspect a plan; the trusted host remains
 responsible for keeping underlying credentials, filesystem writes, network, and

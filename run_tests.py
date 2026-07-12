@@ -2336,7 +2336,17 @@ def main():
                         approval_file = td / "approval.json"; approval_file.write_text(json.dumps(executor_approval))
                         actions_file = td / "actions.json"; actions_file.write_text(json.dumps(["process"]))
                         evidence_file = td / "evidence.json"; evidence_file.write_text(json.dumps([]))
+                        attempt_file = td / "attempt.json"; attempt_file.write_text(json.dumps({"schema": "loom-gate-host-attempt/v1", "result": "completed", "evidence": []}))
+                        bad_attempt_file = td / "bad-attempt.json"; bad_attempt_file.write_text(json.dumps({"schema": "loom-gate-host-attempt/v1", "result": "completed", "evidence": [{"kind": "process-example", "status": "pass", "detail": "not in closed taxonomy"}]}))
                         import contextlib, io
+                        attempt_out = io.StringIO()
+                        with contextlib.redirect_stdout(attempt_out):
+                            cli_attempt_code = cli_impl.cli(["gate-attempt", str(attempt_file), "--format=json"], _loom._CLI_FRONTEND)
+                        cli_attempt = json.loads(attempt_out.getvalue()) if attempt_out.getvalue().strip() else {}
+                        bad_attempt_out = io.StringIO()
+                        with contextlib.redirect_stdout(bad_attempt_out):
+                            cli_bad_attempt_code = cli_impl.cli(["gate-attempt", str(bad_attempt_file), "--format=json"], _loom._CLI_FRONTEND)
+                        cli_bad_attempt = json.loads(bad_attempt_out.getvalue()) if bad_attempt_out.getvalue().strip() else {}
                         claim_out = io.StringIO()
                         with contextlib.redirect_stdout(claim_out):
                             cli_claim_code = cli_impl.cli(["gate-claim", str(manifest_file), str(challenge_file), str(approval_file), "--format=json"], _loom._CLI_FRONTEND)
@@ -2356,7 +2366,10 @@ def main():
                             cli_repeat_code = cli_impl.cli(["gate-exec-finish", str(manifest_file), str(challenge_file), str(approval_file), str(claim_file), str(plan_file), "completed", str(actions_file), str(evidence_file), "--format=json"], _loom._CLI_FRONTEND)
                         cli_repeat = json.loads(repeat_out.getvalue()) if repeat_out.getvalue().strip() else {}
                     cli_executor_ok = (
-                        cli_claim_code == 0 and cli_claim["valid"]
+                        cli_attempt_code == 0 and cli_attempt["valid"] and cli_attempt["attempt"]["result"] == "completed"
+                        and cli_bad_attempt_code == 1 and not cli_bad_attempt["valid"]
+                        and any(x["code"] == "unknown-evidence" for x in cli_bad_attempt["findings"])
+                        and cli_claim_code == 0 and cli_claim["valid"]
                         and cli_plan_code == 0 and cli_plan["valid"] and cli_plan["plan"]["actions_allowed"] == ["process"]
                         and cli_finish_code == 0 and cli_finish["valid"] and cli_finish["receipt"]["result"] == "completed"
                         and cli_repeat_code == 1 and not cli_repeat["valid"]

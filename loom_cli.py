@@ -188,6 +188,10 @@ def _emit_validation_result(result, success_key, title, output_format):
         print("claim_sha256: " + body["claim_sha256"])
         print("executor_boundary: " + body["executor_boundary"])
         print("actions_allowed: " + ", ".join(body["actions_allowed"]))
+    elif success_key == "attempt":
+        print("schema: " + body["schema"])
+        print("result: " + body["result"])
+        print("evidence_count: " + str(len(body["evidence"])))
     else:
         print("receipt_sha256: " + body["receipt_sha256"])
         print("policy_decision: " + body["policy_decision"])
@@ -267,6 +271,17 @@ def _gate_exec_finish(frontend, paths, output_format="text"):
     if error: print(error); return 2
     result = _loom_executor.finish_claimed_execution(manifest, challenge, approval, claim, plan, paths[5], actions_observed, evidence)
     return _emit_validation_result(result, "receipt", "LOOM GATE EXEC FINISH - bounded execution finalized", output_format)
+
+
+def _gate_attempt(frontend, paths, output_format="text"):
+    del frontend
+    if len(paths) != 1:
+        print("usage: python3 loom.py gate-attempt ATTEMPT_JSON [--format text|json]")
+        return 2
+    attempt, error = _load_json_file(paths[0], "Gate host attempt")
+    if error: print(error); return 2
+    result = _loom_executor.validate_host_attempt(attempt)
+    return _emit_validation_result(result, "attempt", "LOOM GATE ATTEMPT - host attempt dry-run validated", output_format)
 
 
 def allocation_source_map_lines(wat):
@@ -365,7 +380,7 @@ def _check(frontend, src, output_format="text"):
 def cli(argv, frontend):
     flags, pos = _parse_flags(argv)
     if len(pos) < 2:
-        print("usage: python3 loom.py <check|run|build|audit|source-map|gate|gate-request|gate-claim|gate-finish|gate-plan|gate-exec-finish> FILE... [call] [--target py|js|wat] [--format text|json] [--nonce HEX64]")
+        print("usage: python3 loom.py <check|run|build|audit|source-map|gate|gate-request|gate-claim|gate-finish|gate-plan|gate-exec-finish|gate-attempt> FILE... [call] [--target py|js|wat] [--format text|json] [--nonce HEX64]")
         return 2
     cmd = pos[0]
     output_format = flags.get("format", "text")
@@ -380,6 +395,8 @@ def cli(argv, frontend):
         return _gate_plan(frontend, pos[1:], output_format)
     if cmd == "gate-exec-finish":
         return _gate_exec_finish(frontend, pos[1:], output_format)
+    if cmd == "gate-attempt":
+        return _gate_attempt(frontend, pos[1:], output_format)
     path = pos[1]
     call = pos[2] if len(pos) > 2 else "(main)"
     try:
