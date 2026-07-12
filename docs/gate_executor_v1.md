@@ -34,6 +34,19 @@ python3 loom.py gate-exec-finish manifest.json challenge.json approval.json clai
 commands still do not run the action; they only bind the plan and finalize the
 receipt around facts supplied or collected by the trusted host.
 
+Trusted hosts that only need the common `process` action can use the narrower
+Python wrapper:
+
+```python
+plan_result = loom.plan_process_execution(manifest, challenge, approval, claim)
+receipt_result = loom.finish_process_execution(
+    manifest, challenge, approval, claim, plan_result["plan"], "completed"
+)
+```
+
+This wrapper deliberately does not accept a caller-supplied action list. It is
+still a contract wrapper, not a command runner.
+
 This shim closes a practical integration gap without giving an agent ambient
 authority. The agent may request and inspect a plan; the trusted host remains
 responsible for keeping underlying credentials, filesystem writes, network, and

@@ -2302,6 +2302,13 @@ def main():
                     executor_tampered_finish = _loom.finish_claimed_execution(executor_manifest, executor_challenge, executor_approval, executor_claim["claim"], executor_tampered_plan, "completed", ["process"], [])
                     executor_finish = _loom.finish_claimed_execution(executor_manifest, executor_challenge, executor_approval, executor_claim["claim"], executor_plan["plan"], "completed", ["process"], [])
                     executor_repeat = _loom.finish_claimed_execution(executor_manifest, executor_challenge, executor_approval, executor_claim["claim"], executor_plan["plan"], "completed", ["process"], [])
+                    process_challenge = _loom.build_approval_challenge(executor_manifest, "4" * 64)["challenge"]
+                    process_approval_body = {"schema": "loom-gate-operator-approval/v1", "challenge_sha256": process_challenge["challenge_sha256"], "manifest_sha256": process_challenge["manifest_sha256"], "approver": "operator", "decision": "approve", "key_sha256": key_hash}
+                    process_approval = sign_approval(process_approval_body)
+                    process_claim = _loom.claim_operator_approval(executor_manifest, process_challenge, process_approval)
+                    process_plan = _loom.plan_process_execution(executor_manifest, process_challenge, process_approval, process_claim["claim"])
+                    process_finish = _loom.finish_process_execution(executor_manifest, process_challenge, process_approval, process_claim["claim"], process_plan["plan"], "completed")
+                    process_repeat = _loom.finish_process_execution(executor_manifest, process_challenge, process_approval, process_claim["claim"], process_plan["plan"], "completed")
                 cli_executor_ok = True
                 cli_impl = getattr(_loom, "_loom_cli", None)
                 if cli_impl is not None:
@@ -2349,6 +2356,9 @@ def main():
                     and executor_finish["valid"] and executor_finish["receipt"]["result"] == "completed"
                     and any(x["kind"] == "operator-approval" for x in executor_finish["receipt"]["evidence"])
                     and not executor_repeat["valid"] and any(x["code"] == "approval-finalize-failed" for x in executor_repeat["findings"])
+                    and process_claim["valid"] and process_plan["valid"] and process_plan["plan"]["actions_allowed"] == ["process"]
+                    and process_finish["valid"] and process_finish["receipt"]["result"] == "completed"
+                    and not process_repeat["valid"] and any(x["code"] == "approval-finalize-failed" for x in process_repeat["findings"])
                     and cli_executor_ok
                 )
             finally:

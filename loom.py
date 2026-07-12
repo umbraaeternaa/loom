@@ -259,6 +259,16 @@ def finish_claimed_execution(manifest, challenge, approval, claim, plan, result,
     return _loom_executor.finish_claimed_execution(manifest, challenge, approval, claim, plan, result, actions_observed, evidence)
 
 
+def plan_process_execution(manifest, challenge, approval, claim):
+    """Build the narrow process-only trusted host plan."""
+    return _loom_executor.plan_process_execution(manifest, challenge, approval, claim)
+
+
+def finish_process_execution(manifest, challenge, approval, claim, plan, result, evidence=None):
+    """Finalize a process-only trusted host plan."""
+    return _loom_executor.finish_process_execution(manifest, challenge, approval, claim, plan, result, evidence)
+
+
 def build_consumed_receipt(manifest, observation, challenge, approval):
     """Build a receipt after atomically consuming its signed operator approval."""
     return _loom_approval.build_consumed_receipt(manifest, observation, challenge, approval)

@@ -15,6 +15,7 @@ import loom_observer
 
 PLAN_SCHEMA = "loom-gate-execution-plan/v1"
 PLAN_VALIDATION_SCHEMA = "loom-gate-execution-plan-validation/v1"
+PROCESS_ACTION = "process"
 
 
 def _finding(path, code, message):
@@ -142,3 +143,22 @@ def finish_claimed_execution(manifest, challenge, approval, claim, plan, result,
     if not collection["valid"]:
         return loom_gate._receipt_validation(None, collection["findings"])
     return loom_approval.finish_claimed_receipt(manifest, collection["observation"], challenge, approval, claim)
+
+
+def plan_process_execution(manifest, challenge, approval, claim):
+    """Build the narrow process-only trusted host plan."""
+    return plan_claimed_execution(manifest, challenge, approval, claim, [PROCESS_ACTION])
+
+
+def finish_process_execution(manifest, challenge, approval, claim, plan, result, evidence=None):
+    """Finalize a process-only trusted host plan without accepting arbitrary actions."""
+    return finish_claimed_execution(
+        manifest,
+        challenge,
+        approval,
+        claim,
+        plan,
+        result,
+        [PROCESS_ACTION],
+        [] if evidence is None else evidence,
+    )

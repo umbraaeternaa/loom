@@ -241,6 +241,9 @@ shell commands; it builds a bounded plan, verifies claimed approval binding,
 collects read-only observation facts, and finalizes the claimed receipt. See
 [`docs/gate_executor_v1.md`](docs/gate_executor_v1.md).
 The same shim is available from the CLI as `gate-plan` and `gate-exec-finish`.
+Trusted hosts that only need the narrow `process` action can use
+`loom.plan_process_execution(...)` and `loom.finish_process_execution(...)`;
+those wrappers do not accept arbitrary action lists.
 
 Secret and credential handling is denial-first by design. The defensive
 [LOOM Secret and Credential Safety Policy](docs/secret_credential_policy.md)
