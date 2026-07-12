@@ -156,6 +156,73 @@ def _gate_request(frontend, src, nonce, output_format="text"):
     return 0
 
 
+def _load_json_file(path, label):
+    try:
+        return json.loads(Path(path).read_text()), None
+    except OSError as err:
+        return None, f"cannot read {label}: {err}"
+    except json.JSONDecodeError as err:
+        return None, f"invalid {label} JSON: {err}"
+
+
+def _emit_validation_result(result, success_key, title, output_format):
+    if output_format == "json":
+        _emit_json(result)
+        return 0 if result["valid"] else 1
+    if not result["valid"]:
+        print(title + " - refused")
+        for item in result["findings"]:
+            print(f"  [{item['code']}] {item['path']}: {item['message']}")
+        return 1
+    body = result[success_key]
+    print(title)
+    if success_key == "claim":
+        print("claim_sha256: " + body["claim_sha256"])
+        print("approval_sha256: " + body["approval_sha256"])
+        print("manifest_sha256: " + body["manifest_sha256"])
+        print("challenge_sha256: " + body["challenge_sha256"])
+        print("status: " + body["status"])
+    else:
+        print("receipt_sha256: " + body["receipt_sha256"])
+        print("policy_decision: " + body["policy_decision"])
+        print("result: " + body["result"])
+    return 0
+
+
+def _gate_claim(frontend, paths, output_format="text"):
+    del frontend
+    if len(paths) != 3:
+        print("usage: python3 loom.py gate-claim MANIFEST CHALLENGE APPROVAL [--format text|json]")
+        return 2
+    manifest, error = _load_json_file(paths[0], "Gate manifest")
+    if error: print(error); return 2
+    challenge, error = _load_json_file(paths[1], "Gate challenge")
+    if error: print(error); return 2
+    approval, error = _load_json_file(paths[2], "operator approval")
+    if error: print(error); return 2
+    result = _loom_approval.claim_operator_approval(manifest, challenge, approval)
+    return _emit_validation_result(result, "claim", "LOOM GATE CLAIM - approval claimed for execution", output_format)
+
+
+def _gate_finish(frontend, paths, output_format="text"):
+    del frontend
+    if len(paths) != 5:
+        print("usage: python3 loom.py gate-finish MANIFEST OBSERVATION CHALLENGE APPROVAL CLAIM [--format text|json]")
+        return 2
+    manifest, error = _load_json_file(paths[0], "Gate manifest")
+    if error: print(error); return 2
+    observation, error = _load_json_file(paths[1], "Gate observation")
+    if error: print(error); return 2
+    challenge, error = _load_json_file(paths[2], "Gate challenge")
+    if error: print(error); return 2
+    approval, error = _load_json_file(paths[3], "operator approval")
+    if error: print(error); return 2
+    claim, error = _load_json_file(paths[4], "Gate claim")
+    if error: print(error); return 2
+    result = _loom_approval.finish_claimed_receipt(manifest, observation, challenge, approval, claim)
+    return _emit_validation_result(result, "receipt", "LOOM GATE FINISH - claimed execution finalized", output_format)
+
+
 def allocation_source_map_lines(wat):
     rows = sorted({
         (int(line), int(column), label.strip())
@@ -252,18 +319,23 @@ def _check(frontend, src, output_format="text"):
 def cli(argv, frontend):
     flags, pos = _parse_flags(argv)
     if len(pos) < 2:
-        print("usage: python3 loom.py <check|run|build|audit|source-map|gate|gate-request> FILE [call] [--target py|js|wat] [--format text|json] [--nonce HEX64]")
+        print("usage: python3 loom.py <check|run|build|audit|source-map|gate|gate-request|gate-claim|gate-finish> FILE... [call] [--target py|js|wat] [--format text|json] [--nonce HEX64]")
         return 2
-    cmd, path = pos[0], pos[1]
+    cmd = pos[0]
+    output_format = flags.get("format", "text")
+    if output_format not in ("text", "json"):
+        print("unsupported format: " + output_format)
+        return 2
+    if cmd == "gate-claim":
+        return _gate_claim(frontend, pos[1:], output_format)
+    if cmd == "gate-finish":
+        return _gate_finish(frontend, pos[1:], output_format)
+    path = pos[1]
     call = pos[2] if len(pos) > 2 else "(main)"
     try:
         src = Path(path).read_text()
     except OSError as err:
         print("cannot read file: " + str(err))
-        return 2
-    output_format = flags.get("format", "text")
-    if output_format not in ("text", "json"):
-        print("unsupported format: " + output_format)
         return 2
     if cmd == "check":
         return _check(frontend, src, output_format)

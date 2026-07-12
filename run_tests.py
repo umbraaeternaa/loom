@@ -2210,6 +2210,46 @@ def main():
             secret_repeat_finish = finish_fn(secret_claim_manifest, secret_observation, secret_challenge, secret_approval, secret_claimed["claim"], test_key, secret_ledger)
             with sqlite3.connect(secret_ledger) as connection:
                 secret_completed_status = connection.execute("SELECT status FROM claims WHERE approval_sha256=?", (secret_claimed["claim"]["approval_sha256"],)).fetchone()
+        cli_impl = getattr(_loom, "_loom_cli", None)
+        is_browser_bundle = Path(_loom.__file__).parent.name == "docs"
+        if is_browser_bundle:
+            claimed_cli_ok = True
+        elif cli_impl is None:
+            claimed_cli_ok = False
+        else:
+            import contextlib, io
+            old_key_path, old_ledger_path = approval_impl._KEY_PATH, approval_impl._LEDGER_PATH
+            try:
+                with tempfile.TemporaryDirectory() as td:
+                    td = Path(td)
+                    approval_impl._KEY_PATH = td / "operator_public_key.json"
+                    approval_impl._LEDGER_PATH = td / "operator_approvals.sqlite3"
+                    approval_impl._KEY_PATH.write_text(json.dumps(test_key))
+                    manifest_file = td / "manifest.json"; manifest_file.write_text(json.dumps(approval_manifest))
+                    challenge_file = td / "challenge.json"; challenge_file.write_text(json.dumps(challenge))
+                    approval_file = td / "approval.json"; approval_file.write_text(json.dumps(approval))
+                    observation_file = td / "observation.json"; observation_file.write_text(json.dumps(integrated_observation))
+                    claim_out = io.StringIO()
+                    with contextlib.redirect_stdout(claim_out):
+                        claim_code = cli_impl.cli(["gate-claim", str(manifest_file), str(challenge_file), str(approval_file), "--format=json"], _loom._CLI_FRONTEND)
+                    cli_claim = json.loads(claim_out.getvalue()) if claim_out.getvalue().strip() else {}
+                    claim_file = td / "claim.json"; claim_file.write_text(json.dumps(cli_claim.get("claim")))
+                    finish_out = io.StringIO()
+                    with contextlib.redirect_stdout(finish_out):
+                        finish_code = cli_impl.cli(["gate-finish", str(manifest_file), str(observation_file), str(challenge_file), str(approval_file), str(claim_file), "--format=json"], _loom._CLI_FRONTEND)
+                    cli_finish = json.loads(finish_out.getvalue()) if finish_out.getvalue().strip() else {}
+                    repeat_out = io.StringIO()
+                    with contextlib.redirect_stdout(repeat_out):
+                        repeat_code = cli_impl.cli(["gate-finish", str(manifest_file), str(observation_file), str(challenge_file), str(approval_file), str(claim_file), "--format=json"], _loom._CLI_FRONTEND)
+                    cli_repeat = json.loads(repeat_out.getvalue()) if repeat_out.getvalue().strip() else {}
+                claimed_cli_ok = (
+                    claim_code == 0 and cli_claim["valid"] and cli_claim["claim"]["status"] == "claimed"
+                    and finish_code == 0 and cli_finish["valid"] and cli_finish["receipt"]["result"] == "completed"
+                    and repeat_code == 1 and not cli_repeat["valid"]
+                    and any(x["code"] == "approval-finalize-failed" for x in cli_repeat["findings"])
+                )
+            finally:
+                approval_impl._KEY_PATH, approval_impl._LEDGER_PATH = old_key_path, old_ledger_path
         claimed_execution_ok = (
             claimed["valid"] and claimed["advisory"] is False and claimed["claim"]["status"] == "claimed"
             and len(claimed["claim"]["claim_sha256"]) == 64
@@ -2221,6 +2261,7 @@ def main():
             and failed_finish["valid"] and failed_finish["receipt"]["result"] == "failed" and failed_status == ("failed",)
             and not repeated_failed["valid"] and any(x["code"] == "approval-finalize-failed" for x in repeated_failed["findings"])
             and not claim_after_consume["valid"] and any(x["code"] == "approval-claim-failed" for x in claim_after_consume["findings"])
+            and claimed_cli_ok
         )
         ok += claimed_execution_ok
         print(f"  {'ok  ' if claimed_execution_ok else 'FAIL'} gate: claimed execution lifecycle v1")

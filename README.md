@@ -157,6 +157,8 @@ python3 loom.py source-map examples/demo.loom       # summarize WAT heap allocat
 python3 loom.py source-map examples/demo.loom --format json  # stable machine source-map contract
 python3 loom.py gate manifest.json             # redacted Gate manifest diagnostics
 python3 loom.py gate-request manifest.json --nonce <64-hex> --format json  # operator approval request
+python3 loom.py gate-claim manifest.json challenge.json approval.json --format json  # reserve signed approval before execution
+python3 loom.py gate-finish manifest.json observation.json challenge.json approval.json claim.json --format json  # finalize claimed execution
 python3 loom.py audit examples/demo.loom            # show declared-vs-performed capability surface
 python3 loom.py check examples/demo.loom --format json  # stable machine verdict for Gate clients
 ```
@@ -227,6 +229,9 @@ path: `loom.claim_operator_approval(...)` atomically claims the signed token,
 then `loom.finish_claimed_receipt(...)` closes that exact claim once as
 `completed` or `failed`. A claim cannot be consumed through the older path,
 replayed, rebound to another manifest, or finalized twice.
+The same two phases are available from the CLI as `gate-claim` and
+`gate-finish`; they still use the pinned operator public key and fixed local
+ledger rather than caller-selected trust material.
 
 Secret and credential handling is denial-first by design. The defensive
 [LOOM Secret and Credential Safety Policy](docs/secret_credential_policy.md)

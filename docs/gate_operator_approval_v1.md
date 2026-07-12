@@ -83,6 +83,17 @@ host that must stop an action before execution uses two phases:
 3. `loom.finish_claimed_receipt(...)` preflights the terminal observation and
    atomically changes the same row to exactly `completed` or `failed`.
 
+The same two phases are exposed to trusted host scripts as CLI adapter steps:
+
+```console
+python3 loom.py gate-claim manifest.json challenge.json approval.json --format json
+python3 loom.py gate-finish manifest.json observation.json challenge.json approval.json claim.json --format json
+```
+
+These commands do not accept caller-selected public keys or ledgers. They use
+the same pinned operator public key and fixed local SQLite ledger as the Python
+API, so a CLI host cannot silently move the trust root.
+
 The claim has a canonical SHA-256 identity. A forged or rebound claim, an
 approval already spent through the compatibility path, a second claim, and a
 second finalization all fail closed. `blocked` is not a valid terminal state
