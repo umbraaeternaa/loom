@@ -20,6 +20,19 @@ HOST_ATTEMPT_VALIDATION_SCHEMA = "loom-gate-host-attempt-validation/v1"
 PROCESS_ACTION = "process"
 _HOST_ATTEMPT_KEYS = frozenset({"schema", "result", "evidence"})
 _HOST_RESULTS = frozenset({"completed", "failed", "blocked"})
+_PLAN_KEYS = frozenset({
+    "schema",
+    "manifest_sha256",
+    "challenge_sha256",
+    "approval_sha256",
+    "claim_sha256",
+    "executor_boundary",
+    "actions_allowed",
+    "read_paths",
+    "write_paths",
+    "secret_lanes",
+    "plan_sha256",
+})
 
 
 def _finding(path, code, message):
@@ -126,6 +139,50 @@ def validate_host_attempt(attempt):
     findings.extend(evidence_findings)
     normalized = {"schema": schema, "result": result, "evidence": evidence}
     return _host_attempt_result(normalized, findings)
+
+
+def _validate_process_plan_surface(plan):
+    findings = []
+    if not isinstance(plan, dict):
+        return None, [_finding("plan", "expected-object", "execution plan must be an object")]
+    for key in sorted(set(plan) - _PLAN_KEYS):
+        findings.append(_finding("plan." + key, "unknown-field", f"unknown execution plan field '{key}'"))
+    for key in sorted(_PLAN_KEYS - set(plan)):
+        findings.append(_finding("plan." + key, "missing-field", f"missing execution plan field '{key}'"))
+    if findings:
+        return None, findings
+    if plan["schema"] != PLAN_SCHEMA:
+        findings.append(_finding("plan.schema", "unsupported-schema", f"expected '{PLAN_SCHEMA}'"))
+    if plan["executor_boundary"] != "no-shell/no-network-by-default":
+        findings.append(_finding("plan.executor_boundary", "executor-boundary-mismatch", "process plan must keep the no-shell/no-network boundary"))
+    if plan["actions_allowed"] != [PROCESS_ACTION]:
+        findings.append(_finding("plan.actions_allowed", "process-only-required", "process attempt dry-run requires actions_allowed to be exactly ['process']"))
+    for key in ("manifest_sha256", "challenge_sha256", "approval_sha256", "claim_sha256", "plan_sha256"):
+        value = plan.get(key)
+        if not isinstance(value, str) or len(value) != 64:
+            findings.append(_finding("plan." + key, "expected-sha256", f"{key} must be a 64-character SHA-256 hex string"))
+    for key in ("read_paths", "write_paths", "secret_lanes"):
+        if not isinstance(plan.get(key), list):
+            findings.append(_finding("plan." + key, "expected-array", f"{key} must be an array"))
+    if not findings:
+        unsigned = {key: plan[key] for key in sorted(_PLAN_KEYS - {"plan_sha256"})}
+        expected = hashlib.sha256(_canonical(unsigned).encode("utf-8")).hexdigest()
+        if plan["plan_sha256"] != expected:
+            findings.append(_finding("plan.plan_sha256", "plan-sha256-mismatch", "plan_sha256 does not match the process execution plan body"))
+    normalized = {key: plan.get(key) for key in sorted(_PLAN_KEYS)}
+    return normalized, findings
+
+
+def validate_process_attempt(plan, attempt):
+    """Dry-run validate a host attempt against a process-only plan."""
+    normalized_plan, plan_findings = _validate_process_plan_surface(plan)
+    checked = validate_host_attempt(attempt)
+    findings = list(plan_findings) + list(checked["findings"])
+    body = checked["attempt"] if checked["valid"] else None
+    if normalized_plan is not None and body is not None:
+        body = dict(body)
+        body["plan_sha256"] = normalized_plan["plan_sha256"]
+    return _host_attempt_result(body, findings)
 
 
 def _redacted_secret_lanes(manifest):
@@ -239,7 +296,7 @@ def finish_process_execution(manifest, challenge, approval, claim, plan, result,
 
 def finish_process_attempt(manifest, challenge, approval, claim, plan, attempt):
     """Validate a host attempt object and finalize the process-only plan."""
-    checked = validate_host_attempt(attempt)
+    checked = validate_process_attempt(plan, attempt)
     if not checked["valid"]:
         return loom_gate._receipt_validation(None, checked["findings"])
     body = checked["attempt"]

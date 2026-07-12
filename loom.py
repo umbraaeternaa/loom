@@ -274,6 +274,11 @@ def validate_host_attempt(attempt):
     return _loom_executor.validate_host_attempt(attempt)
 
 
+def validate_process_attempt(plan, attempt):
+    """Dry-run validate a host attempt against a process-only plan."""
+    return _loom_executor.validate_process_attempt(plan, attempt)
+
+
 def finish_process_attempt(manifest, challenge, approval, claim, plan, attempt):
     """Finalize a process-only plan from a validated host attempt object."""
     return _loom_executor.finish_process_attempt(manifest, challenge, approval, claim, plan, attempt)

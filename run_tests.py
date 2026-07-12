@@ -2311,6 +2311,9 @@ def main():
                     process_repeat = _loom.finish_process_execution(executor_manifest, process_challenge, process_approval, process_claim["claim"], process_plan["plan"], "completed")
                     valid_attempt = _loom.validate_host_attempt({"schema": "loom-gate-host-attempt/v1", "result": "completed", "evidence": []})
                     bad_attempt = _loom.validate_host_attempt({"schema": "loom-gate-host-attempt/v1", "result": "completed", "evidence": [{"kind": "process-example", "status": "pass", "detail": "not in closed taxonomy"}]})
+                    process_attempt = _loom.validate_process_attempt(process_plan["plan"], {"schema": "loom-gate-host-attempt/v1", "result": "blocked", "evidence": []})
+                    tampered_process_plan = json.loads(json.dumps(process_plan["plan"])); tampered_process_plan["actions_allowed"] = ["read", "process"]
+                    bad_process_attempt = _loom.validate_process_attempt(tampered_process_plan, {"schema": "loom-gate-host-attempt/v1", "result": "completed", "evidence": []})
                     example_challenge = _loom.build_approval_challenge(executor_manifest, "5" * 64)["challenge"]
                     example_approval_body = {"schema": "loom-gate-operator-approval/v1", "challenge_sha256": example_challenge["challenge_sha256"], "manifest_sha256": example_challenge["manifest_sha256"], "approver": "operator", "decision": "approve", "key_sha256": key_hash}
                     example_approval = sign_approval(example_approval_body)
@@ -2357,6 +2360,10 @@ def main():
                             cli_plan_code = cli_impl.cli(["gate-plan", str(manifest_file), str(challenge_file), str(approval_file), str(claim_file), "process", "--format=json"], _loom._CLI_FRONTEND)
                         cli_plan = json.loads(plan_out.getvalue()) if plan_out.getvalue().strip() else {}
                         plan_file = td / "plan.json"; plan_file.write_text(json.dumps(cli_plan.get("plan")))
+                        process_attempt_out = io.StringIO()
+                        with contextlib.redirect_stdout(process_attempt_out):
+                            cli_process_attempt_code = cli_impl.cli(["gate-process-attempt", str(plan_file), str(attempt_file), "--format=json"], _loom._CLI_FRONTEND)
+                        cli_process_attempt = json.loads(process_attempt_out.getvalue()) if process_attempt_out.getvalue().strip() else {}
                         finish_out = io.StringIO()
                         with contextlib.redirect_stdout(finish_out):
                             cli_finish_code = cli_impl.cli(["gate-exec-finish", str(manifest_file), str(challenge_file), str(approval_file), str(claim_file), str(plan_file), "completed", str(actions_file), str(evidence_file), "--format=json"], _loom._CLI_FRONTEND)
@@ -2371,6 +2378,7 @@ def main():
                         and any(x["code"] == "unknown-evidence" for x in cli_bad_attempt["findings"])
                         and cli_claim_code == 0 and cli_claim["valid"]
                         and cli_plan_code == 0 and cli_plan["valid"] and cli_plan["plan"]["actions_allowed"] == ["process"]
+                        and cli_process_attempt_code == 0 and cli_process_attempt["valid"] and cli_process_attempt["attempt"]["plan_sha256"] == cli_plan["plan"]["plan_sha256"]
                         and cli_finish_code == 0 and cli_finish["valid"] and cli_finish["receipt"]["result"] == "completed"
                         and cli_repeat_code == 1 and not cli_repeat["valid"]
                         and any(x["code"] == "approval-finalize-failed" for x in cli_repeat["findings"])
@@ -2388,6 +2396,8 @@ def main():
                     and not process_repeat["valid"] and any(x["code"] == "approval-finalize-failed" for x in process_repeat["findings"])
                     and valid_attempt["valid"] and valid_attempt["attempt"]["result"] == "completed"
                     and not bad_attempt["valid"] and any(x["code"] == "unknown-evidence" for x in bad_attempt["findings"])
+                    and process_attempt["valid"] and process_attempt["attempt"]["result"] == "blocked" and process_attempt["attempt"]["plan_sha256"] == process_plan["plan"]["plan_sha256"]
+                    and not bad_process_attempt["valid"] and any(x["code"] == "process-only-required" for x in bad_process_attempt["findings"])
                     and example_seen == {"actions_allowed": ["process"]}
                     and example_finish["valid"] and example_finish["receipt"]["result"] == "completed"
                     and cli_executor_ok

@@ -68,6 +68,17 @@ finalizing anything:
 python3 loom.py gate-attempt attempt.json --format json
 ```
 
+To dry-run the attempt against the concrete process-only plan before any
+receipt finalization, use:
+
+```console
+python3 loom.py gate-process-attempt plan.json attempt.json --format json
+```
+
+This verifies the plan surface, the process-only action binding, the plan hash,
+and the host-attempt envelope. It still does not execute the action or finalize
+a receipt.
+
 This shim closes a practical integration gap without giving an agent ambient
 authority. The agent may request and inspect a plan; the trusted host remains
 responsible for keeping underlying credentials, filesystem writes, network, and

@@ -162,6 +162,7 @@ python3 loom.py gate-finish manifest.json observation.json challenge.json approv
 python3 loom.py gate-plan manifest.json challenge.json approval.json claim.json process --format json  # bounded host execution plan
 python3 loom.py gate-exec-finish manifest.json challenge.json approval.json claim.json plan.json completed actions.json evidence.json --format json  # finalize bounded plan
 python3 loom.py gate-attempt attempt.json --format json  # dry-run validate a host-attempt envelope
+python3 loom.py gate-process-attempt plan.json attempt.json --format json  # dry-run check attempt against a process-only plan
 python3 loom.py audit examples/demo.loom            # show declared-vs-performed capability surface
 python3 loom.py check examples/demo.loom --format json  # stable machine verdict for Gate clients
 ```
@@ -251,6 +252,9 @@ becoming a shell runner.
 Trusted host callbacks return a closed `loom-gate-host-attempt/v1` object,
 validated by `loom.validate_host_attempt(...)`, before the receipt is finalized.
 The same dry-run schema check is available from the CLI as `gate-attempt`.
+`gate-process-attempt` adds the next dry-run layer: it checks that the plan is
+still process-only and that the host attempt fits that plan, without executing
+or finalizing anything.
 
 Secret and credential handling is denial-first by design. The defensive
 [LOOM Secret and Credential Safety Policy](docs/secret_credential_policy.md)
