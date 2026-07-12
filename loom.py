@@ -69,6 +69,7 @@ import loom_gate as _loom_gate
 import loom_observer as _loom_observer
 import loom_evidence as _loom_evidence
 import loom_approval as _loom_approval
+import loom_executor as _loom_executor
 
 _PARSE_FRONTEND = _loom_parse.Frontend(LoomError)
 
@@ -246,6 +247,16 @@ def claim_operator_approval(manifest, challenge, approval):
 def finish_claimed_receipt(manifest, observation, challenge, approval, claim):
     """Finalize a claimed action exactly once as completed or failed."""
     return _loom_approval.finish_claimed_receipt(manifest, observation, challenge, approval, claim)
+
+
+def plan_claimed_execution(manifest, challenge, approval, claim, actions):
+    """Build a bounded host execution plan for an already claimed approval."""
+    return _loom_executor.plan_claimed_execution(manifest, challenge, approval, claim, actions)
+
+
+def finish_claimed_execution(manifest, challenge, approval, claim, plan, result, actions_observed, evidence):
+    """Collect observation facts and finalize a claimed execution plan."""
+    return _loom_executor.finish_claimed_execution(manifest, challenge, approval, claim, plan, result, actions_observed, evidence)
 
 
 def build_consumed_receipt(manifest, observation, challenge, approval):

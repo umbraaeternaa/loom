@@ -2277,6 +2277,44 @@ def main():
         )
         ok += secret_claimed_execution_ok
         print(f"  {'ok  ' if secret_claimed_execution_ok else 'FAIL'} gate: secret_access claimed execution lifecycle v1")
+        executor_impl = getattr(_loom, "_loom_executor", None)
+        is_browser_bundle = Path(_loom.__file__).parent.name == "docs"
+        if is_browser_bundle:
+            executor_shim_ok = True
+        elif executor_impl is None:
+            executor_shim_ok = False
+        else:
+            executor_manifest = gate_manifest("codex", "code", ["/Users/macbook/Projects/loom"], [], ["read", "process"], [], [])
+            executor_challenge = _loom.build_approval_challenge(executor_manifest, "3" * 64)["challenge"]
+            executor_approval_body = {"schema": "loom-gate-operator-approval/v1", "challenge_sha256": executor_challenge["challenge_sha256"], "manifest_sha256": executor_challenge["manifest_sha256"], "approver": "operator", "decision": "approve", "key_sha256": key_hash}
+            executor_approval = sign_approval(executor_approval_body)
+            old_key_path, old_ledger_path = approval_impl._KEY_PATH, approval_impl._LEDGER_PATH
+            try:
+                with tempfile.TemporaryDirectory() as td:
+                    td = Path(td)
+                    approval_impl._KEY_PATH = td / "operator_public_key.json"
+                    approval_impl._LEDGER_PATH = td / "operator_approvals.sqlite3"
+                    approval_impl._KEY_PATH.write_text(json.dumps(test_key))
+                    executor_claim = _loom.claim_operator_approval(executor_manifest, executor_challenge, executor_approval)
+                    executor_plan = _loom.plan_claimed_execution(executor_manifest, executor_challenge, executor_approval, executor_claim["claim"], ["process"])
+                    executor_undeclared = _loom.plan_claimed_execution(executor_manifest, executor_challenge, executor_approval, executor_claim["claim"], ["network"])
+                    executor_tampered_plan = json.loads(json.dumps(executor_plan["plan"])); executor_tampered_plan["actions_allowed"] = ["read", "process"]
+                    executor_tampered_finish = _loom.finish_claimed_execution(executor_manifest, executor_challenge, executor_approval, executor_claim["claim"], executor_tampered_plan, "completed", ["process"], [])
+                    executor_finish = _loom.finish_claimed_execution(executor_manifest, executor_challenge, executor_approval, executor_claim["claim"], executor_plan["plan"], "completed", ["process"], [])
+                    executor_repeat = _loom.finish_claimed_execution(executor_manifest, executor_challenge, executor_approval, executor_claim["claim"], executor_plan["plan"], "completed", ["process"], [])
+                executor_shim_ok = (
+                    executor_claim["valid"] and executor_plan["valid"] and executor_plan["plan"]["executor_boundary"] == "no-shell/no-network-by-default"
+                    and executor_plan["plan"]["actions_allowed"] == ["process"] and executor_plan["plan"]["secret_lanes"] == []
+                    and not executor_undeclared["valid"] and any(x["code"] == "undeclared-action" for x in executor_undeclared["findings"])
+                    and not executor_tampered_finish["valid"] and any(x["code"] == "plan-mismatch" for x in executor_tampered_finish["findings"])
+                    and executor_finish["valid"] and executor_finish["receipt"]["result"] == "completed"
+                    and any(x["kind"] == "operator-approval" for x in executor_finish["receipt"]["evidence"])
+                    and not executor_repeat["valid"] and any(x["code"] == "approval-finalize-failed" for x in executor_repeat["findings"])
+                )
+            finally:
+                approval_impl._KEY_PATH, approval_impl._LEDGER_PATH = old_key_path, old_ledger_path
+        ok += executor_shim_ok
+        print(f"  {'ok  ' if executor_shim_ok else 'FAIL'} gate: claimed host executor shim v1")
     except Exception as e:
         print(f"  FAIL Gate operator approval v1 contract: {e}")
     try:                                               # CLI lives behind a stable facade in development builds
@@ -2495,7 +2533,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 104   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap/secret-policy pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 105   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap/secret-policy pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1

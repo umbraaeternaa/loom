@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 407 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 408 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 407/407 citadel checks
+PASS — 408/408 citadel checks
 ```
 
 ## The idea in one screen
@@ -232,6 +232,12 @@ replayed, rebound to another manifest, or finalized twice.
 The same two phases are available from the CLI as `gate-claim` and
 `gate-finish`; they still use the pinned operator public key and fixed local
 ledger rather than caller-selected trust material.
+
+`loom.plan_claimed_execution(...)` and `loom.finish_claimed_execution(...)`
+add the first host executor shim around that lifecycle. The shim does not run
+shell commands; it builds a bounded plan, verifies claimed approval binding,
+collects read-only observation facts, and finalizes the claimed receipt. See
+[`docs/gate_executor_v1.md`](docs/gate_executor_v1.md).
 
 Secret and credential handling is denial-first by design. The defensive
 [LOOM Secret and Credential Safety Policy](docs/secret_credential_policy.md)
