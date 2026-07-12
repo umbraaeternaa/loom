@@ -49,6 +49,18 @@ still a contract wrapper, not a command runner.
 See `examples/process_lifecycle_host.py` for the full trusted-host callback
 recipe.
 
+Trusted host callbacks return a closed attempt object:
+
+```json
+{"schema": "loom-gate-host-attempt/v1", "result": "completed", "evidence": []}
+```
+
+`loom.validate_host_attempt(...)` accepts only the fields `schema`, `result`,
+and `evidence`. Results are limited to `completed`, `failed`, or `blocked`.
+Evidence items must use the existing closed LOOM Gate evidence taxonomy; unknown
+kinds are rejected before finalization. `loom.finish_process_attempt(...)`
+validates this object and then finalizes the process-only receipt.
+
 This shim closes a practical integration gap without giving an agent ambient
 authority. The agent may request and inspect a plan; the trusted host remains
 responsible for keeping underlying credentials, filesystem writes, network, and

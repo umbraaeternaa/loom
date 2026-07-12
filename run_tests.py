@@ -2309,6 +2309,8 @@ def main():
                     process_plan = _loom.plan_process_execution(executor_manifest, process_challenge, process_approval, process_claim["claim"])
                     process_finish = _loom.finish_process_execution(executor_manifest, process_challenge, process_approval, process_claim["claim"], process_plan["plan"], "completed")
                     process_repeat = _loom.finish_process_execution(executor_manifest, process_challenge, process_approval, process_claim["claim"], process_plan["plan"], "completed")
+                    valid_attempt = _loom.validate_host_attempt({"schema": "loom-gate-host-attempt/v1", "result": "completed", "evidence": []})
+                    bad_attempt = _loom.validate_host_attempt({"schema": "loom-gate-host-attempt/v1", "result": "completed", "evidence": [{"kind": "process-example", "status": "pass", "detail": "not in closed taxonomy"}]})
                     example_challenge = _loom.build_approval_challenge(executor_manifest, "5" * 64)["challenge"]
                     example_approval_body = {"schema": "loom-gate-operator-approval/v1", "challenge_sha256": example_challenge["challenge_sha256"], "manifest_sha256": example_challenge["manifest_sha256"], "approver": "operator", "decision": "approve", "key_sha256": key_hash}
                     example_approval = sign_approval(example_approval_body)
@@ -2319,7 +2321,7 @@ def main():
                     example_seen = {}
                     def fake_process_host(plan):
                         example_seen["actions_allowed"] = plan["actions_allowed"]
-                        return "completed", []
+                        return {"schema": "loom-gate-host-attempt/v1", "result": "completed", "evidence": []}
                     example_finish = process_example.run_process_lifecycle(executor_manifest, example_challenge, example_approval, fake_process_host)
                 cli_executor_ok = True
                 cli_impl = getattr(_loom, "_loom_cli", None)
@@ -2371,6 +2373,8 @@ def main():
                     and process_claim["valid"] and process_plan["valid"] and process_plan["plan"]["actions_allowed"] == ["process"]
                     and process_finish["valid"] and process_finish["receipt"]["result"] == "completed"
                     and not process_repeat["valid"] and any(x["code"] == "approval-finalize-failed" for x in process_repeat["findings"])
+                    and valid_attempt["valid"] and valid_attempt["attempt"]["result"] == "completed"
+                    and not bad_attempt["valid"] and any(x["code"] == "unknown-evidence" for x in bad_attempt["findings"])
                     and example_seen == {"actions_allowed": ["process"]}
                     and example_finish["valid"] and example_finish["receipt"]["result"] == "completed"
                     and cli_executor_ok

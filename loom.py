@@ -269,6 +269,16 @@ def finish_process_execution(manifest, challenge, approval, claim, plan, result,
     return _loom_executor.finish_process_execution(manifest, challenge, approval, claim, plan, result, evidence)
 
 
+def validate_host_attempt(attempt):
+    """Validate the closed trusted-host attempt result contract."""
+    return _loom_executor.validate_host_attempt(attempt)
+
+
+def finish_process_attempt(manifest, challenge, approval, claim, plan, attempt):
+    """Finalize a process-only plan from a validated host attempt object."""
+    return _loom_executor.finish_process_attempt(manifest, challenge, approval, claim, plan, attempt)
+
+
 def build_consumed_receipt(manifest, observation, challenge, approval):
     """Build a receipt after atomically consuming its signed operator approval."""
     return _loom_approval.build_consumed_receipt(manifest, observation, challenge, approval)

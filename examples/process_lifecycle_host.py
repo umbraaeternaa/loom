@@ -12,9 +12,10 @@ import loom
 def run_process_lifecycle(manifest, challenge, approval, host_attempt):
     """Claim approval, build a process-only plan, and finalize the host result.
 
-    `host_attempt(plan)` is controlled by the trusted host. It should return a
-    pair `(result, evidence)`, where result is usually `"completed"` or
-    `"failed"` and evidence is a JSON-safe list of receipt evidence items.
+    `host_attempt(plan)` is controlled by the trusted host. It must return a
+    `loom-gate-host-attempt/v1` object:
+
+    {"schema": "loom-gate-host-attempt/v1", "result": "completed", "evidence": []}
     """
     claim_result = loom.claim_operator_approval(manifest, challenge, approval)
     if not claim_result["valid"]:
@@ -29,13 +30,12 @@ def run_process_lifecycle(manifest, challenge, approval, host_attempt):
     if not plan_result["valid"]:
         return plan_result
 
-    result, evidence = host_attempt(plan_result["plan"])
-    return loom.finish_process_execution(
+    attempt = host_attempt(plan_result["plan"])
+    return loom.finish_process_attempt(
         manifest,
         challenge,
         approval,
         claim_result["claim"],
         plan_result["plan"],
-        result,
-        evidence,
+        attempt,
     )

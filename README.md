@@ -247,6 +247,8 @@ those wrappers do not accept arbitrary action lists.
 [`examples/process_lifecycle_host.py`](examples/process_lifecycle_host.py)
 shows the end-to-end process-only recipe for a trusted host callback, without
 becoming a shell runner.
+Trusted host callbacks return a closed `loom-gate-host-attempt/v1` object,
+validated by `loom.validate_host_attempt(...)`, before the receipt is finalized.
 
 Secret and credential handling is denial-first by design. The defensive
 [LOOM Secret and Credential Safety Policy](docs/secret_credential_policy.md)

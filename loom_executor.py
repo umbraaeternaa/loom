@@ -15,7 +15,11 @@ import loom_observer
 
 PLAN_SCHEMA = "loom-gate-execution-plan/v1"
 PLAN_VALIDATION_SCHEMA = "loom-gate-execution-plan-validation/v1"
+HOST_ATTEMPT_SCHEMA = "loom-gate-host-attempt/v1"
+HOST_ATTEMPT_VALIDATION_SCHEMA = "loom-gate-host-attempt-validation/v1"
 PROCESS_ACTION = "process"
+_HOST_ATTEMPT_KEYS = frozenset({"schema", "result", "evidence"})
+_HOST_RESULTS = frozenset({"completed", "failed", "blocked"})
 
 
 def _finding(path, code, message):
@@ -32,6 +36,16 @@ def _plan_result(plan, findings):
         "valid": not findings,
         "advisory": False,
         "plan": plan if not findings else None,
+        "findings": loom_gate._unique_issues(findings),
+    }
+
+
+def _host_attempt_result(attempt, findings):
+    return {
+        "schema": HOST_ATTEMPT_VALIDATION_SCHEMA,
+        "valid": not findings,
+        "advisory": False,
+        "attempt": attempt if not findings else None,
         "findings": loom_gate._unique_issues(findings),
     }
 
@@ -53,6 +67,65 @@ def _validate_actions(actions, declared):
     for action in sorted(set(normalized) - set(declared)):
         findings.append(_finding("actions", "undeclared-action", f"action '{action}' was not declared by the manifest"))
     return sorted(set(normalized)), findings
+
+
+def _validate_evidence(evidence):
+    findings = []
+    if not isinstance(evidence, list):
+        return None, [_finding("evidence", "expected-array", "evidence must be an array")]
+    normalized = []
+    for index, item in enumerate(evidence):
+        base = f"evidence[{index}]"
+        if not isinstance(item, dict):
+            findings.append(_finding(base, "expected-object", "evidence item must be an object"))
+            continue
+        for key in sorted(set(item) - {"kind", "status", "detail"}):
+            findings.append(_finding(base + "." + key, "unknown-field", f"unknown evidence field '{key}'"))
+        for key in sorted({"kind", "status", "detail"} - set(item)):
+            findings.append(_finding(base + "." + key, "missing-field", f"missing evidence field '{key}'"))
+        kind = item.get("kind")
+        status = item.get("status")
+        detail = item.get("detail")
+        if not isinstance(kind, str) or not kind:
+            findings.append(_finding(base + ".kind", "expected-string", "evidence kind must be a non-empty string"))
+        elif kind not in loom_gate.EVIDENCE:
+            findings.append(_finding(base + ".kind", "unknown-evidence", f"unknown evidence '{kind}'"))
+        if not isinstance(status, str) or not status:
+            findings.append(_finding(base + ".status", "expected-string", "evidence status must be a non-empty string"))
+        elif status not in {"pass", "fail", "not-run"}:
+            findings.append(_finding(base + ".status", "unknown-evidence-status", f"unknown evidence status '{status}'"))
+        if not isinstance(detail, str) or not detail:
+            findings.append(_finding(base + ".detail", "expected-string", "evidence detail must be a non-empty string"))
+        normalized.append({"kind": kind, "status": status, "detail": detail})
+    kinds = [item["kind"] for item in normalized if isinstance(item["kind"], str)]
+    for kind in sorted({kind for kind in kinds if kinds.count(kind) > 1}):
+        findings.append(_finding("evidence", "duplicate-evidence", f"duplicate evidence '{kind}'"))
+    return sorted(normalized, key=lambda item: item["kind"] or ""), findings
+
+
+def validate_host_attempt(attempt):
+    """Validate the closed trusted-host attempt result contract."""
+    findings = []
+    if not isinstance(attempt, dict):
+        return _host_attempt_result(None, [_finding("attempt", "expected-object", "host attempt must be an object")])
+    for key in sorted(set(attempt) - _HOST_ATTEMPT_KEYS):
+        findings.append(_finding(key, "unknown-field", f"unknown host attempt field '{key}'"))
+    for key in sorted(_HOST_ATTEMPT_KEYS - set(attempt)):
+        findings.append(_finding(key, "missing-field", f"missing host attempt field '{key}'"))
+    schema = attempt.get("schema")
+    if not isinstance(schema, str):
+        findings.append(_finding("schema", "expected-string", "schema must be a string"))
+    elif schema != HOST_ATTEMPT_SCHEMA:
+        findings.append(_finding("schema", "unsupported-schema", f"expected '{HOST_ATTEMPT_SCHEMA}'"))
+    result = attempt.get("result")
+    if not isinstance(result, str):
+        findings.append(_finding("result", "expected-string", "result must be a string"))
+    elif result not in _HOST_RESULTS:
+        findings.append(_finding("result", "unknown-result", f"unknown result '{result}'"))
+    evidence, evidence_findings = _validate_evidence(attempt.get("evidence"))
+    findings.extend(evidence_findings)
+    normalized = {"schema": schema, "result": result, "evidence": evidence}
+    return _host_attempt_result(normalized, findings)
 
 
 def _redacted_secret_lanes(manifest):
@@ -162,3 +235,12 @@ def finish_process_execution(manifest, challenge, approval, claim, plan, result,
         [PROCESS_ACTION],
         [] if evidence is None else evidence,
     )
+
+
+def finish_process_attempt(manifest, challenge, approval, claim, plan, attempt):
+    """Validate a host attempt object and finalize the process-only plan."""
+    checked = validate_host_attempt(attempt)
+    if not checked["valid"]:
+        return loom_gate._receipt_validation(None, checked["findings"])
+    body = checked["attempt"]
+    return finish_process_execution(manifest, challenge, approval, claim, plan, body["result"], body["evidence"])
