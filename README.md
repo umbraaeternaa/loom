@@ -156,6 +156,7 @@ python3 loom.py build examples/demo.loom --target js   # compile the checked pro
 python3 loom.py source-map examples/demo.loom       # summarize WAT heap allocation source locations
 python3 loom.py source-map examples/demo.loom --format json  # stable machine source-map contract
 python3 loom.py gate manifest.json             # redacted Gate manifest diagnostics
+python3 loom.py gate-request manifest.json --nonce <64-hex> --format json  # operator approval request
 python3 loom.py audit examples/demo.loom            # show declared-vs-performed capability surface
 python3 loom.py check examples/demo.loom --format json  # stable machine verdict for Gate clients
 ```
@@ -214,6 +215,8 @@ private signing key. See
 it carries the normalized manifest, exact challenge, policy reasons, and a
 SHA-256 over the complete review envelope. It signs nothing and holds no key.
 The issuer validates the envelope again before displaying or signing it.
+The same bridge is available from the CLI:
+`python3 loom.py gate-request manifest.json --nonce <64-hex> --format json`.
 
 `loom.build_consumed_receipt(...)` is the closed approval-to-receipt path: it
 rejects hand-written approval evidence, preflights every receipt requirement,

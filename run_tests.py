@@ -2066,6 +2066,13 @@ def main():
         invalid_request = _loom.validate_approval_request(tampered_request)
         extra_request = json.loads(json.dumps(approval_request["request"])); extra_request["approval"] = "+"
         invalid_extra_request = _loom.validate_approval_request(extra_request)
+        with tempfile.TemporaryDirectory() as td:
+            request_manifest_file = Path(td) / "approval-manifest.json"
+            request_manifest_file.write_text(json.dumps(approval_manifest))
+            request_cli = subprocess.run([sys.executable, str(Path(__file__).with_name("loom.py")), "gate-request", str(request_manifest_file), "--nonce", "1" * 64, "--format=json"], capture_output=True, text=True)
+            request_cli_text = subprocess.run([sys.executable, str(Path(__file__).with_name("loom.py")), "gate-request", str(request_manifest_file), "--nonce", "1" * 64], capture_output=True, text=True)
+            request_cli_missing_nonce = subprocess.run([sys.executable, str(Path(__file__).with_name("loom.py")), "gate-request", str(request_manifest_file)], capture_output=True, text=True)
+            request_cli_json = json.loads(request_cli.stdout) if request_cli.stdout.strip() else {}
         request_contract_ok = (
             approval_request["valid"] is True and approval_request == reordered_request
             and validated_request == approval_request
@@ -2079,6 +2086,10 @@ def main():
             and unnecessary_request["valid"] is False and unnecessary_request["request"] is None
             and invalid_request["valid"] is False and any(item["code"] == "request-mismatch" for item in invalid_request["findings"])
             and invalid_extra_request["valid"] is False and any(item["code"] == "unknown-field" for item in invalid_extra_request["findings"])
+            and request_cli.returncode == 0 and request_cli_json == approval_request
+            and request_cli_text.returncode == 0 and approval_request["request"]["request_sha256"] in request_cli_text.stdout
+            and approval_request["request"]["challenge"]["challenge_sha256"] in request_cli_text.stdout
+            and request_cli_missing_nonce.returncode == 2 and "requires --nonce" in request_cli_missing_nonce.stdout
         )
         ok += request_contract_ok
         print(f"  {'ok  ' if request_contract_ok else 'FAIL'} gate: operator approval request v1")

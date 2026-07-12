@@ -17,6 +17,15 @@ path, action, repository head, nonce, challenge hash, or policy reason cannot
 silently preserve its identity. Invalid, rejected, or approval-free manifests
 receive no request.
 
+The same request bridge is exposed as a CLI adapter step:
+
+```console
+python3 loom.py gate-request manifest.json --nonce <64-hex> --format json
+```
+
+This command constructs only the challenge/request envelope. It does not sign,
+claim, execute, read secrets, or consume an approval token.
+
 The issuer must display the request fields from this envelope before asking for
 operator confirmation. The request is not an approval and carries no signing
 authority; agents may construct it without gaining the ability to approve it.

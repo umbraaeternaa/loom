@@ -6,6 +6,7 @@ import json
 import re
 from pathlib import Path
 
+import loom_approval as _loom_approval
 import loom_gate as _loom_gate
 from loom_frontend import CliFrontend as _CliFrontend
 
@@ -29,6 +30,12 @@ def _parse_flags(argv):
             index += 2
         elif arg.startswith("--format="):
             flags["format"] = arg.split("=", 1)[1]
+            index += 1
+        elif arg == "--nonce" and index + 1 < len(argv):
+            flags["nonce"] = argv[index + 1]
+            index += 2
+        elif arg.startswith("--nonce="):
+            flags["nonce"] = arg.split("=", 1)[1]
             index += 1
         else:
             pos.append(arg)
@@ -107,6 +114,46 @@ def _gate(frontend, src, output_format="text"):
     else:
         print("secret lanes: none")
     return 1 if diagnostics["decision"] == "reject" else 0
+
+
+def _gate_request(frontend, src, nonce, output_format="text"):
+    del frontend
+    if not nonce:
+        print("gate-request requires --nonce 64 lowercase hex characters")
+        return 2
+    try:
+        manifest = json.loads(src)
+    except json.JSONDecodeError as err:
+        print("invalid Gate manifest JSON: " + str(err))
+        return 2
+    challenge = _loom_approval.build_approval_challenge(manifest, nonce)
+    if not challenge["valid"]:
+        if output_format == "json":
+            _emit_json(challenge)
+        else:
+            print("LOOM GATE REQUEST - challenge refused")
+            for item in challenge["findings"]:
+                print(f"  [{item['code']}] {item['path']}: {item['message']}")
+        return 1
+    request = _loom_approval.build_approval_request(manifest, challenge["challenge"])
+    if output_format == "json":
+        _emit_json(request)
+        return 0 if request["valid"] else 1
+    if not request["valid"]:
+        print("LOOM GATE REQUEST - refused")
+        for item in request["findings"]:
+            print(f"  [{item['code']}] {item['path']}: {item['message']}")
+        return 1
+    body = request["request"]
+    print("LOOM GATE REQUEST - operator approval envelope")
+    print("request_sha256: " + body["request_sha256"])
+    print("challenge_sha256: " + body["challenge"]["challenge_sha256"])
+    print("manifest_sha256: " + body["challenge"]["manifest_sha256"])
+    print("policy_decision: " + body["challenge"]["policy_decision"])
+    print("policy_reasons:")
+    for item in body["policy_reasons"]:
+        print(f"  [{item['code']}] {item['path']}: {item['message']}")
+    return 0
 
 
 def allocation_source_map_lines(wat):
@@ -205,7 +252,7 @@ def _check(frontend, src, output_format="text"):
 def cli(argv, frontend):
     flags, pos = _parse_flags(argv)
     if len(pos) < 2:
-        print("usage: python3 loom.py <check|run|build|audit|source-map|gate> FILE [call] [--target py|js|wat] [--format text|json]")
+        print("usage: python3 loom.py <check|run|build|audit|source-map|gate|gate-request> FILE [call] [--target py|js|wat] [--format text|json] [--nonce HEX64]")
         return 2
     cmd, path = pos[0], pos[1]
     call = pos[2] if len(pos) > 2 else "(main)"
@@ -222,6 +269,8 @@ def cli(argv, frontend):
         return _check(frontend, src, output_format)
     if cmd == "gate":
         return _gate(frontend, src, output_format)
+    if cmd == "gate-request":
+        return _gate_request(frontend, src, flags.get("nonce"), output_format)
     if cmd == "run":
         try:
             value, out = frontend.run_call(src, call)
