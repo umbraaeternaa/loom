@@ -2302,6 +2302,45 @@ def main():
                     executor_tampered_finish = _loom.finish_claimed_execution(executor_manifest, executor_challenge, executor_approval, executor_claim["claim"], executor_tampered_plan, "completed", ["process"], [])
                     executor_finish = _loom.finish_claimed_execution(executor_manifest, executor_challenge, executor_approval, executor_claim["claim"], executor_plan["plan"], "completed", ["process"], [])
                     executor_repeat = _loom.finish_claimed_execution(executor_manifest, executor_challenge, executor_approval, executor_claim["claim"], executor_plan["plan"], "completed", ["process"], [])
+                cli_executor_ok = True
+                cli_impl = getattr(_loom, "_loom_cli", None)
+                if cli_impl is not None:
+                    with tempfile.TemporaryDirectory() as td:
+                        td = Path(td)
+                        approval_impl._KEY_PATH = td / "operator_public_key.json"
+                        approval_impl._LEDGER_PATH = td / "operator_approvals.sqlite3"
+                        approval_impl._KEY_PATH.write_text(json.dumps(test_key))
+                        manifest_file = td / "manifest.json"; manifest_file.write_text(json.dumps(executor_manifest))
+                        challenge_file = td / "challenge.json"; challenge_file.write_text(json.dumps(executor_challenge))
+                        approval_file = td / "approval.json"; approval_file.write_text(json.dumps(executor_approval))
+                        actions_file = td / "actions.json"; actions_file.write_text(json.dumps(["process"]))
+                        evidence_file = td / "evidence.json"; evidence_file.write_text(json.dumps([]))
+                        import contextlib, io
+                        claim_out = io.StringIO()
+                        with contextlib.redirect_stdout(claim_out):
+                            cli_claim_code = cli_impl.cli(["gate-claim", str(manifest_file), str(challenge_file), str(approval_file), "--format=json"], _loom._CLI_FRONTEND)
+                        cli_claim = json.loads(claim_out.getvalue()) if claim_out.getvalue().strip() else {}
+                        claim_file = td / "claim.json"; claim_file.write_text(json.dumps(cli_claim.get("claim")))
+                        plan_out = io.StringIO()
+                        with contextlib.redirect_stdout(plan_out):
+                            cli_plan_code = cli_impl.cli(["gate-plan", str(manifest_file), str(challenge_file), str(approval_file), str(claim_file), "process", "--format=json"], _loom._CLI_FRONTEND)
+                        cli_plan = json.loads(plan_out.getvalue()) if plan_out.getvalue().strip() else {}
+                        plan_file = td / "plan.json"; plan_file.write_text(json.dumps(cli_plan.get("plan")))
+                        finish_out = io.StringIO()
+                        with contextlib.redirect_stdout(finish_out):
+                            cli_finish_code = cli_impl.cli(["gate-exec-finish", str(manifest_file), str(challenge_file), str(approval_file), str(claim_file), str(plan_file), "completed", str(actions_file), str(evidence_file), "--format=json"], _loom._CLI_FRONTEND)
+                        cli_finish = json.loads(finish_out.getvalue()) if finish_out.getvalue().strip() else {}
+                        repeat_out = io.StringIO()
+                        with contextlib.redirect_stdout(repeat_out):
+                            cli_repeat_code = cli_impl.cli(["gate-exec-finish", str(manifest_file), str(challenge_file), str(approval_file), str(claim_file), str(plan_file), "completed", str(actions_file), str(evidence_file), "--format=json"], _loom._CLI_FRONTEND)
+                        cli_repeat = json.loads(repeat_out.getvalue()) if repeat_out.getvalue().strip() else {}
+                    cli_executor_ok = (
+                        cli_claim_code == 0 and cli_claim["valid"]
+                        and cli_plan_code == 0 and cli_plan["valid"] and cli_plan["plan"]["actions_allowed"] == ["process"]
+                        and cli_finish_code == 0 and cli_finish["valid"] and cli_finish["receipt"]["result"] == "completed"
+                        and cli_repeat_code == 1 and not cli_repeat["valid"]
+                        and any(x["code"] == "approval-finalize-failed" for x in cli_repeat["findings"])
+                    )
                 executor_shim_ok = (
                     executor_claim["valid"] and executor_plan["valid"] and executor_plan["plan"]["executor_boundary"] == "no-shell/no-network-by-default"
                     and executor_plan["plan"]["actions_allowed"] == ["process"] and executor_plan["plan"]["secret_lanes"] == []
@@ -2310,6 +2349,7 @@ def main():
                     and executor_finish["valid"] and executor_finish["receipt"]["result"] == "completed"
                     and any(x["kind"] == "operator-approval" for x in executor_finish["receipt"]["evidence"])
                     and not executor_repeat["valid"] and any(x["code"] == "approval-finalize-failed" for x in executor_repeat["findings"])
+                    and cli_executor_ok
                 )
             finally:
                 approval_impl._KEY_PATH, approval_impl._LEDGER_PATH = old_key_path, old_ledger_path

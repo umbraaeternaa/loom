@@ -22,6 +22,18 @@ host has attempted the bounded action. It collects read-only observation facts,
 validates that observed actions are within the plan, and finalizes the already
 claimed approval through `loom.finish_claimed_receipt(...)`.
 
+The same contract is exposed to trusted host scripts through CLI adapter steps:
+
+```console
+python3 loom.py gate-plan manifest.json challenge.json approval.json claim.json process --format json
+python3 loom.py gate-exec-finish manifest.json challenge.json approval.json claim.json plan.json completed actions.json evidence.json --format json
+```
+
+`actions.json` is a JSON array of observed actions, for example
+`["process"]`. `evidence.json` is a JSON array of receipt evidence items. These
+commands still do not run the action; they only bind the plan and finalize the
+receipt around facts supplied or collected by the trusted host.
+
 This shim closes a practical integration gap without giving an agent ambient
 authority. The agent may request and inspect a plan; the trusted host remains
 responsible for keeping underlying credentials, filesystem writes, network, and

@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 import loom_approval as _loom_approval
+import loom_executor as _loom_executor
 import loom_gate as _loom_gate
 from loom_frontend import CliFrontend as _CliFrontend
 
@@ -182,6 +183,11 @@ def _emit_validation_result(result, success_key, title, output_format):
         print("manifest_sha256: " + body["manifest_sha256"])
         print("challenge_sha256: " + body["challenge_sha256"])
         print("status: " + body["status"])
+    elif success_key == "plan":
+        print("plan_sha256: " + body["plan_sha256"])
+        print("claim_sha256: " + body["claim_sha256"])
+        print("executor_boundary: " + body["executor_boundary"])
+        print("actions_allowed: " + ", ".join(body["actions_allowed"]))
     else:
         print("receipt_sha256: " + body["receipt_sha256"])
         print("policy_decision: " + body["policy_decision"])
@@ -221,6 +227,46 @@ def _gate_finish(frontend, paths, output_format="text"):
     if error: print(error); return 2
     result = _loom_approval.finish_claimed_receipt(manifest, observation, challenge, approval, claim)
     return _emit_validation_result(result, "receipt", "LOOM GATE FINISH - claimed execution finalized", output_format)
+
+
+def _gate_plan(frontend, paths, output_format="text"):
+    del frontend
+    if len(paths) < 5:
+        print("usage: python3 loom.py gate-plan MANIFEST CHALLENGE APPROVAL CLAIM ACTION... [--format text|json]")
+        return 2
+    manifest, error = _load_json_file(paths[0], "Gate manifest")
+    if error: print(error); return 2
+    challenge, error = _load_json_file(paths[1], "Gate challenge")
+    if error: print(error); return 2
+    approval, error = _load_json_file(paths[2], "operator approval")
+    if error: print(error); return 2
+    claim, error = _load_json_file(paths[3], "Gate claim")
+    if error: print(error); return 2
+    result = _loom_executor.plan_claimed_execution(manifest, challenge, approval, claim, paths[4:])
+    return _emit_validation_result(result, "plan", "LOOM GATE PLAN - bounded execution plan", output_format)
+
+
+def _gate_exec_finish(frontend, paths, output_format="text"):
+    del frontend
+    if len(paths) != 8:
+        print("usage: python3 loom.py gate-exec-finish MANIFEST CHALLENGE APPROVAL CLAIM PLAN RESULT ACTIONS_JSON EVIDENCE_JSON [--format text|json]")
+        return 2
+    manifest, error = _load_json_file(paths[0], "Gate manifest")
+    if error: print(error); return 2
+    challenge, error = _load_json_file(paths[1], "Gate challenge")
+    if error: print(error); return 2
+    approval, error = _load_json_file(paths[2], "operator approval")
+    if error: print(error); return 2
+    claim, error = _load_json_file(paths[3], "Gate claim")
+    if error: print(error); return 2
+    plan, error = _load_json_file(paths[4], "Gate execution plan")
+    if error: print(error); return 2
+    actions_observed, error = _load_json_file(paths[6], "observed actions")
+    if error: print(error); return 2
+    evidence, error = _load_json_file(paths[7], "Gate evidence")
+    if error: print(error); return 2
+    result = _loom_executor.finish_claimed_execution(manifest, challenge, approval, claim, plan, paths[5], actions_observed, evidence)
+    return _emit_validation_result(result, "receipt", "LOOM GATE EXEC FINISH - bounded execution finalized", output_format)
 
 
 def allocation_source_map_lines(wat):
@@ -319,7 +365,7 @@ def _check(frontend, src, output_format="text"):
 def cli(argv, frontend):
     flags, pos = _parse_flags(argv)
     if len(pos) < 2:
-        print("usage: python3 loom.py <check|run|build|audit|source-map|gate|gate-request|gate-claim|gate-finish> FILE... [call] [--target py|js|wat] [--format text|json] [--nonce HEX64]")
+        print("usage: python3 loom.py <check|run|build|audit|source-map|gate|gate-request|gate-claim|gate-finish|gate-plan|gate-exec-finish> FILE... [call] [--target py|js|wat] [--format text|json] [--nonce HEX64]")
         return 2
     cmd = pos[0]
     output_format = flags.get("format", "text")
@@ -330,6 +376,10 @@ def cli(argv, frontend):
         return _gate_claim(frontend, pos[1:], output_format)
     if cmd == "gate-finish":
         return _gate_finish(frontend, pos[1:], output_format)
+    if cmd == "gate-plan":
+        return _gate_plan(frontend, pos[1:], output_format)
+    if cmd == "gate-exec-finish":
+        return _gate_exec_finish(frontend, pos[1:], output_format)
     path = pos[1]
     call = pos[2] if len(pos) > 2 else "(main)"
     try:

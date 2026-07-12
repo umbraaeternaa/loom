@@ -159,6 +159,8 @@ python3 loom.py gate manifest.json             # redacted Gate manifest diagnost
 python3 loom.py gate-request manifest.json --nonce <64-hex> --format json  # operator approval request
 python3 loom.py gate-claim manifest.json challenge.json approval.json --format json  # reserve signed approval before execution
 python3 loom.py gate-finish manifest.json observation.json challenge.json approval.json claim.json --format json  # finalize claimed execution
+python3 loom.py gate-plan manifest.json challenge.json approval.json claim.json process --format json  # bounded host execution plan
+python3 loom.py gate-exec-finish manifest.json challenge.json approval.json claim.json plan.json completed actions.json evidence.json --format json  # finalize bounded plan
 python3 loom.py audit examples/demo.loom            # show declared-vs-performed capability surface
 python3 loom.py check examples/demo.loom --format json  # stable machine verdict for Gate clients
 ```
@@ -238,6 +240,7 @@ add the first host executor shim around that lifecycle. The shim does not run
 shell commands; it builds a bounded plan, verifies claimed approval binding,
 collects read-only observation facts, and finalizes the claimed receipt. See
 [`docs/gate_executor_v1.md`](docs/gate_executor_v1.md).
+The same shim is available from the CLI as `gate-plan` and `gate-exec-finish`.
 
 Secret and credential handling is denial-first by design. The defensive
 [LOOM Secret and Credential Safety Policy](docs/secret_credential_policy.md)
