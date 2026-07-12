@@ -2084,10 +2084,14 @@ def main():
         print(f"  {'ok  ' if request_contract_ok else 'FAIL'} gate: operator approval request v1")
         key_hash = hashlib.sha256(canonical(test_key).encode()).hexdigest()
         approval = {"schema": "loom-gate-operator-approval/v1", "challenge_sha256": challenge["challenge_sha256"], "manifest_sha256": challenge["manifest_sha256"], "approver": "operator", "decision": "approve", "key_sha256": key_hash}
-        message = canonical(approval).encode(); digest_info = bytes.fromhex("3031300d060960864801650304020105000420") + hashlib.sha256(message).digest()
         modulus = int(test_n_hex, 16); size = (modulus.bit_length() + 7) // 8
-        encoded = b"\x00\x01" + b"\xff" * (size - len(digest_info) - 3) + b"\x00" + digest_info
-        approval["signature"] = pow(int.from_bytes(encoded, "big"), test_d, modulus).to_bytes(size, "big").hex()
+        def sign_approval(body):
+            message = canonical(body).encode(); digest_info = bytes.fromhex("3031300d060960864801650304020105000420") + hashlib.sha256(message).digest()
+            encoded = b"\x00\x01" + b"\xff" * (size - len(digest_info) - 3) + b"\x00" + digest_info
+            signed = dict(body)
+            signed["signature"] = pow(int.from_bytes(encoded, "big"), test_d, modulus).to_bytes(size, "big").hex()
+            return signed
+        approval = sign_approval(approval)
         verify_fn = getattr(approval_impl, "_verify", getattr(_loom, "_gate_verify_approval", None))
         verified = verify_fn(approval_manifest, challenge, approval, test_key)
         tampered = json.loads(json.dumps(approval)); tampered["manifest_sha256"] = "0" * 64
@@ -2167,6 +2171,34 @@ def main():
             spent_ledger = Path(td) / "spent.sqlite3"
             consume_fn(verified["approval_sha256"], spent_ledger)
             claim_after_consume = claim_fn(approval_manifest, challenge, approval, test_key, spent_ledger)
+        secret_claim_manifest = gate_manifest("codex", "code", ["/Users/macbook/Projects/loom/.env"], [], ["read", "process"], [], [])
+        secret_claim_manifest["schema"] = "loom-gate-manifest/v2"
+        secret_claim_manifest["secret_access"] = [{
+            "class": "CredentialAccess",
+            "path": "/Users/macbook/Projects/loom/.env",
+            "mode": "read",
+            "reason": "Read the project-local deployment credential only after operator approval to verify executor secret-lane gating",
+        }]
+        secret_challenge = _loom.build_approval_challenge(secret_claim_manifest, "2" * 64)["challenge"]
+        secret_approval_body = {"schema": "loom-gate-operator-approval/v1", "challenge_sha256": secret_challenge["challenge_sha256"], "manifest_sha256": secret_challenge["manifest_sha256"], "approver": "operator", "decision": "approve", "key_sha256": key_hash}
+        secret_approval = sign_approval(secret_approval_body)
+        secret_observation = {
+            "schema": "loom-gate-observation/v1", "result": "completed",
+            "repositories": [],
+            "files_changed": [], "actions_observed": ["read", "process"],
+            "evidence": [{"kind": "secret-lane", "status": "pass", "detail": "secret lane approved: CredentialAccess secret_access[0]"}],
+        }
+        with tempfile.TemporaryDirectory() as td:
+            secret_ledger = Path(td) / "spent.sqlite3"
+            secret_claimed = claim_fn(secret_claim_manifest, secret_challenge, secret_approval, test_key, secret_ledger)
+            secret_missing = json.loads(json.dumps(secret_observation)); secret_missing["evidence"] = []
+            secret_missing_finish = finish_fn(secret_claim_manifest, secret_missing, secret_challenge, secret_approval, secret_claimed["claim"], test_key, secret_ledger)
+            with sqlite3.connect(secret_ledger) as connection:
+                secret_after_missing = connection.execute("SELECT status FROM claims WHERE approval_sha256=?", (secret_claimed["claim"]["approval_sha256"],)).fetchone()
+            secret_finish = finish_fn(secret_claim_manifest, secret_observation, secret_challenge, secret_approval, secret_claimed["claim"], test_key, secret_ledger)
+            secret_repeat_finish = finish_fn(secret_claim_manifest, secret_observation, secret_challenge, secret_approval, secret_claimed["claim"], test_key, secret_ledger)
+            with sqlite3.connect(secret_ledger) as connection:
+                secret_completed_status = connection.execute("SELECT status FROM claims WHERE approval_sha256=?", (secret_claimed["claim"]["approval_sha256"],)).fetchone()
         claimed_execution_ok = (
             claimed["valid"] and claimed["advisory"] is False and claimed["claim"]["status"] == "claimed"
             and len(claimed["claim"]["claim_sha256"]) == 64
@@ -2181,6 +2213,18 @@ def main():
         )
         ok += claimed_execution_ok
         print(f"  {'ok  ' if claimed_execution_ok else 'FAIL'} gate: claimed execution lifecycle v1")
+        secret_claimed_execution_ok = (
+            secret_claimed["valid"] and secret_claimed["claim"]["status"] == "claimed"
+            and not secret_missing_finish["valid"] and any(x["code"] == "missing-evidence" for x in secret_missing_finish["findings"])
+            and secret_after_missing == ("claimed",)
+            and secret_finish["valid"] and secret_finish["receipt"]["policy_decision"] == "operator-required"
+            and secret_finish["receipt"]["result"] == "completed"
+            and any(item["kind"] == "secret-lane" and "secret_access[0]" in item["detail"] and "/" not in item["detail"] and "=" not in item["detail"] for item in secret_finish["receipt"]["evidence"])
+            and secret_completed_status == ("completed",)
+            and not secret_repeat_finish["valid"] and any(x["code"] == "approval-finalize-failed" for x in secret_repeat_finish["findings"])
+        )
+        ok += secret_claimed_execution_ok
+        print(f"  {'ok  ' if secret_claimed_execution_ok else 'FAIL'} gate: secret_access claimed execution lifecycle v1")
     except Exception as e:
         print(f"  FAIL Gate operator approval v1 contract: {e}")
     try:                                               # CLI lives behind a stable facade in development builds
@@ -2399,7 +2443,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 103   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap/secret-policy pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 104   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap/secret-policy pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1
