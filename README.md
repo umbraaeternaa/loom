@@ -244,6 +244,9 @@ The same shim is available from the CLI as `gate-plan` and `gate-exec-finish`.
 Trusted hosts that only need the narrow `process` action can use
 `loom.plan_process_execution(...)` and `loom.finish_process_execution(...)`;
 those wrappers do not accept arbitrary action lists.
+[`examples/process_lifecycle_host.py`](examples/process_lifecycle_host.py)
+shows the end-to-end process-only recipe for a trusted host callback, without
+becoming a shell runner.
 
 Secret and credential handling is denial-first by design. The defensive
 [LOOM Secret and Credential Safety Policy](docs/secret_credential_policy.md)

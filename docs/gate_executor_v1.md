@@ -46,6 +46,8 @@ receipt_result = loom.finish_process_execution(
 
 This wrapper deliberately does not accept a caller-supplied action list. It is
 still a contract wrapper, not a command runner.
+See `examples/process_lifecycle_host.py` for the full trusted-host callback
+recipe.
 
 This shim closes a practical integration gap without giving an agent ambient
 authority. The agent may request and inspect a plan; the trusted host remains
