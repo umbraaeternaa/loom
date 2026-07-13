@@ -163,6 +163,7 @@ python3 loom.py gate-plan manifest.json challenge.json approval.json claim.json 
 python3 loom.py gate-exec-finish manifest.json challenge.json approval.json claim.json plan.json completed actions.json evidence.json --format json  # finalize bounded plan
 python3 loom.py gate-attempt attempt.json --format json  # dry-run validate a host-attempt envelope
 python3 loom.py gate-process-attempt plan.json attempt.json --format json  # dry-run check attempt against a process-only plan
+python3 loom.py gate-process-finish manifest.json challenge.json approval.json claim.json plan.json attempt.json --format json  # finalize process-only attempt
 python3 loom.py audit examples/demo.loom            # show declared-vs-performed capability surface
 python3 loom.py check examples/demo.loom --format json  # stable machine verdict for Gate clients
 ```
@@ -255,6 +256,8 @@ The same dry-run schema check is available from the CLI as `gate-attempt`.
 `gate-process-attempt` adds the next dry-run layer: it checks that the plan is
 still process-only and that the host attempt fits that plan, without executing
 or finalizing anything.
+`gate-process-finish` then finalizes that process-only attempt through the same
+claimed approval lifecycle; it still does not execute the action.
 
 Secret and credential handling is denial-first by design. The defensive
 [LOOM Secret and Credential Safety Policy](docs/secret_credential_policy.md)

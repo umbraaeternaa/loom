@@ -2377,6 +2377,10 @@ def main():
                         with contextlib.redirect_stdout(process_attempt_out):
                             cli_process_attempt_code = cli_impl.cli(["gate-process-attempt", str(plan_file), str(attempt_file), "--format=json"], _loom._CLI_FRONTEND)
                         cli_process_attempt = json.loads(process_attempt_out.getvalue()) if process_attempt_out.getvalue().strip() else {}
+                        process_finish_out = io.StringIO()
+                        with contextlib.redirect_stdout(process_finish_out):
+                            cli_process_finish_code = cli_impl.cli(["gate-process-finish", str(manifest_file), str(challenge_file), str(approval_file), str(claim_file), str(plan_file), str(attempt_file), "--format=json"], _loom._CLI_FRONTEND)
+                        cli_process_finish = json.loads(process_finish_out.getvalue()) if process_finish_out.getvalue().strip() else {}
                         finish_out = io.StringIO()
                         with contextlib.redirect_stdout(finish_out):
                             cli_finish_code = cli_impl.cli(["gate-exec-finish", str(manifest_file), str(challenge_file), str(approval_file), str(claim_file), str(plan_file), "completed", str(actions_file), str(evidence_file), "--format=json"], _loom._CLI_FRONTEND)
@@ -2392,9 +2396,10 @@ def main():
                         and cli_claim_code == 0 and cli_claim["valid"]
                         and cli_plan_code == 0 and cli_plan["valid"] and cli_plan["plan"]["actions_allowed"] == ["process"]
                         and cli_process_attempt_code == 0 and cli_process_attempt["valid"] and cli_process_attempt["attempt"]["plan_sha256"] == cli_plan["plan"]["plan_sha256"]
-                        and cli_finish_code == 0 and cli_finish["valid"] and cli_finish["receipt"]["result"] == "completed"
+                        and cli_process_finish_code == 0 and cli_process_finish["valid"] and cli_process_finish["receipt"]["result"] == "completed"
+                        and cli_finish_code == 1 and not cli_finish["valid"]
                         and cli_repeat_code == 1 and not cli_repeat["valid"]
-                        and any(x["code"] == "approval-finalize-failed" for x in cli_repeat["findings"])
+                        and any(x["code"] == "approval-finalize-failed" for x in cli_finish["findings"] + cli_repeat["findings"])
                     )
                 executor_shim_ok = (
                     executor_claim["valid"] and executor_plan["valid"] and executor_plan["plan"]["executor_boundary"] == "no-shell/no-network-by-default"

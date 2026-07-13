@@ -79,6 +79,16 @@ This verifies the plan surface, the process-only action binding, the plan hash,
 and the host-attempt envelope. It still does not execute the action or finalize
 a receipt.
 
+To finalize a trusted host's already-completed process attempt, use:
+
+```console
+python3 loom.py gate-process-finish manifest.json challenge.json approval.json claim.json plan.json attempt.json --format json
+```
+
+This consumes the claimed approval through `loom.finish_process_attempt(...)`.
+It still does not run the action; the trusted host supplies the closed attempt
+object after doing its own bounded work.
+
 This shim closes a practical integration gap without giving an agent ambient
 authority. The agent may request and inspect a plan; the trusted host remains
 responsible for keeping underlying credentials, filesystem writes, network, and

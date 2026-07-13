@@ -297,6 +297,27 @@ def _gate_process_attempt(frontend, paths, output_format="text"):
     return _emit_validation_result(result, "attempt", "LOOM GATE PROCESS ATTEMPT - plan/attempt dry-run validated", output_format)
 
 
+def _gate_process_finish(frontend, paths, output_format="text"):
+    del frontend
+    if len(paths) != 6:
+        print("usage: python3 loom.py gate-process-finish MANIFEST CHALLENGE APPROVAL CLAIM PLAN ATTEMPT [--format text|json]")
+        return 2
+    manifest, error = _load_json_file(paths[0], "Gate manifest")
+    if error: print(error); return 2
+    challenge, error = _load_json_file(paths[1], "Gate challenge")
+    if error: print(error); return 2
+    approval, error = _load_json_file(paths[2], "operator approval")
+    if error: print(error); return 2
+    claim, error = _load_json_file(paths[3], "Gate claim")
+    if error: print(error); return 2
+    plan, error = _load_json_file(paths[4], "Gate execution plan")
+    if error: print(error); return 2
+    attempt, error = _load_json_file(paths[5], "Gate host attempt")
+    if error: print(error); return 2
+    result = _loom_executor.finish_process_attempt(manifest, challenge, approval, claim, plan, attempt)
+    return _emit_validation_result(result, "receipt", "LOOM GATE PROCESS FINISH - process attempt finalized", output_format)
+
+
 def allocation_source_map_lines(wat):
     rows = sorted({
         (int(line), int(column), label.strip())
@@ -393,7 +414,7 @@ def _check(frontend, src, output_format="text"):
 def cli(argv, frontend):
     flags, pos = _parse_flags(argv)
     if len(pos) < 2:
-        print("usage: python3 loom.py <check|run|build|audit|source-map|gate|gate-request|gate-claim|gate-finish|gate-plan|gate-exec-finish|gate-attempt|gate-process-attempt> FILE... [call] [--target py|js|wat] [--format text|json] [--nonce HEX64]")
+        print("usage: python3 loom.py <check|run|build|audit|source-map|gate|gate-request|gate-claim|gate-finish|gate-plan|gate-exec-finish|gate-attempt|gate-process-attempt|gate-process-finish> FILE... [call] [--target py|js|wat] [--format text|json] [--nonce HEX64]")
         return 2
     cmd = pos[0]
     output_format = flags.get("format", "text")
@@ -412,6 +433,8 @@ def cli(argv, frontend):
         return _gate_attempt(frontend, pos[1:], output_format)
     if cmd == "gate-process-attempt":
         return _gate_process_attempt(frontend, pos[1:], output_format)
+    if cmd == "gate-process-finish":
+        return _gate_process_finish(frontend, pos[1:], output_format)
     path = pos[1]
     call = pos[2] if len(pos) > 2 else "(main)"
     try:
