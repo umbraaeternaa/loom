@@ -64,8 +64,11 @@ Every binary module imports these functions from module `env`:
 
 The capability imports represent source-checked capability presence only. They
 do not encode the numeric `seamN K` quantum as a runtime counter in ABI v1.
-The foreign ID passed to `host_ffi` is module-local metadata and must not be
-persisted or compared across separately compiled modules.
+The foreign ID passed to `host_ffi` is module-local metadata assigned by first
+occurrence of the foreign component name inside one compiled module. Repeated
+uses of the same foreign name in one module use the same raw ID; distinct names
+receive distinct raw IDs. Foreign IDs must not be persisted or compared across
+separately compiled modules.
 
 Effect IDs are stable in ABI v1:
 

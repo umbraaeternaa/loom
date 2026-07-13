@@ -1188,6 +1188,7 @@ def main(argv=None):
         wat_io = emit_wat('(defx t (IO) (fn () (print 7)))')
         wat_ffi = emit_wat('(defx t (IO) (fn (x) (seam (IO) (ffi "logger" x))))')
         wat_lib_ffi = emit_wat('(defx t () (fn (x) (seam (Pure) (ffi "lib" x))))')
+        wat_foreign_ids = emit_wat('(defx a () (fn (x) (seam (Pure) (ffi "lib" x)))) (defx b () (fn (x) (seam (Pure) (ffi "lib" x)))) (defx c () (fn (x) (seam (Pure) (ffi "other" x))))')
         wat_with = emit_wat('(defx h () (fn (x) (* x 2))) (defx t () (fn () (with IO h (print 5))))')
         wat_with_local = emit_wat('(defx t () (fn () (let (h (fn (x) (* x 2))) (with IO h (print 5)))))')
         wat_closure = emit_wat('(defx ap (e) (fn ((f e) x) (f x))) (defx u () (fn (x) (ap (fn (y) (* y y)) x)))')
@@ -1203,6 +1204,7 @@ def main(argv=None):
         for import_name in ("push_handler", "pop_handler", "current_handler", "host_print", "push_caps", "pop_caps", "has_cap", "host_ffi"):
             assert f'import "env" "{import_name}"' in wat_ffi                         # WAT mirrors the full ABI v1 env import surface
         assert 'call $host_ffi' in wat_lib_ffi and 'foreign lib' in wat_lib_ffi   # opaque lib component lowers through the same WASM foreign boundary
+        assert wat_foreign_ids.count("i32.const 0  ;; foreign lib") == 2 and "i32.const 1  ;; foreign other" in wat_foreign_ids   # repeated foreign names share a module-local ID; distinct names split
         assert "call $apply1" in wat_with and "func $h" in wat_with   # WAT mirrors top-level with IO handler dispatch via closure apply
         assert "call $apply1" in wat_with_local and "func $lam0" in wat_with_local   # WAT mirrors local closure-valued handler dispatch
         assert "call $apply1" in wat_closure and "func $lam0" in wat_closure   # WAT mirrors closure literals + dispatcher
@@ -2749,7 +2751,9 @@ def main(argv=None):
             and "`has_cap`" in abi_doc
             and "`host_ffi`" in abi_doc
             and "source-checked capability presence only" in abi_doc
-            and "must not be\npersisted or compared across separately compiled modules" in abi_doc
+            and "assigned by first\noccurrence of the foreign component name inside one compiled module" in abi_doc
+            and "Repeated\nuses of the same foreign name in one module use the same raw ID" in abi_doc
+            and "must not be persisted or compared across\nseparately compiled modules" in abi_doc
             and "i31\ndomain/wraparound/host-decoding rule changes" in abi_doc
             and "[`i31_semantics.md`](i31_semantics.md)" in asm_doc
         )
