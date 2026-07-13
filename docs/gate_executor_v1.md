@@ -88,7 +88,8 @@ python3 loom.py gate-process-finish manifest.json challenge.json approval.json c
 This consumes the claimed approval through `loom.finish_process_attempt(...)`.
 It still does not run the action; the trusted host supplies the closed attempt
 object after doing its own bounded work.
-See `examples/process_lifecycle_cli.py` for the complete CLI handoff recipe.
+See `examples/process_lifecycle_cli.py` for the complete CLI handoff recipe and
+`docs/gate_process_cli_lifecycle.md` for a transcript-style walkthrough.
 
 This shim closes a practical integration gap without giving an agent ambient
 authority. The agent may request and inspect a plan; the trusted host remains

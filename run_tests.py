@@ -2648,6 +2648,19 @@ def main():
         print(f"  {'ok  ' if secret_policy_doc_ok else 'FAIL'} docs: secret credential safety policy pinned")
     except Exception as e:
         print(f"  FAIL secret credential safety policy pin: {e}")
+    try:                                               # process-only CLI lifecycle should remain teachable as a host transcript
+        pdoc = Path(__file__).with_name("docs").joinpath("gate_process_cli_lifecycle.md").read_text()
+        process_cli_doc_ok = (
+            "claim -> plan -> trusted host attempt -> dry-run attempt -> finish" in pdoc
+            and "gate-process-attempt plan.json attempt.json --format json" in pdoc
+            and "gate-process-finish manifest.json challenge.json approval.json claim.json plan.json attempt.json --format json" in pdoc
+            and "After `gate-process-finish` succeeds, the same claim cannot be finalized again." in pdoc
+            and "examples/process_lifecycle_cli.py" in pdoc
+        )
+        ok += process_cli_doc_ok
+        print(f"  {'ok  ' if process_cli_doc_ok else 'FAIL'} docs: process CLI lifecycle pinned")
+    except Exception as e:
+        print(f"  FAIL process CLI lifecycle pin: {e}")
     try:                                               # deterministic property fuzz is part of the citadel, not an optional side script
         fuzz = Path(__file__).with_name("fuzz_tests.py")
         fr = subprocess.run([sys.executable, str(fuzz), "--cases", "64", "--seed", "0xC17ADE1"], capture_output=True, text=True)
@@ -2656,7 +2669,7 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 105   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap/secret-policy pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 106   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     passed = (ok == total)
     print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
     return 0 if passed else 1
