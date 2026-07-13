@@ -2314,6 +2314,19 @@ def main():
                     process_attempt = _loom.validate_process_attempt(process_plan["plan"], {"schema": "loom-gate-host-attempt/v1", "result": "blocked", "evidence": []})
                     tampered_process_plan = json.loads(json.dumps(process_plan["plan"])); tampered_process_plan["actions_allowed"] = ["read", "process"]
                     bad_process_attempt = _loom.validate_process_attempt(tampered_process_plan, {"schema": "loom-gate-host-attempt/v1", "result": "completed", "evidence": []})
+                    tampered_plan_cases = [
+                        ("unknown-field", lambda plan: plan.update({"ambient_shell": True})),
+                        ("missing-field", lambda plan: plan.pop("claim_sha256")),
+                        ("executor-boundary-mismatch", lambda plan: plan.update({"executor_boundary": "shell/network"})),
+                        ("expected-sha256", lambda plan: plan.update({"approval_sha256": "not-a-sha"})),
+                        ("plan-sha256-mismatch", lambda plan: plan.update({"read_paths": plan["read_paths"] + ["/tmp/outside-plan"]})),
+                    ]
+                    tampered_plan_results = []
+                    for expected_code, mutate in tampered_plan_cases:
+                        candidate = json.loads(json.dumps(process_plan["plan"]))
+                        mutate(candidate)
+                        result = _loom.validate_process_attempt(candidate, {"schema": "loom-gate-host-attempt/v1", "result": "completed", "evidence": []})
+                        tampered_plan_results.append((expected_code, result))
                     example_challenge = _loom.build_approval_challenge(executor_manifest, "5" * 64)["challenge"]
                     example_approval_body = {"schema": "loom-gate-operator-approval/v1", "challenge_sha256": example_challenge["challenge_sha256"], "manifest_sha256": example_challenge["manifest_sha256"], "approver": "operator", "decision": "approve", "key_sha256": key_hash}
                     example_approval = sign_approval(example_approval_body)
@@ -2398,6 +2411,7 @@ def main():
                     and not bad_attempt["valid"] and any(x["code"] == "unknown-evidence" for x in bad_attempt["findings"])
                     and process_attempt["valid"] and process_attempt["attempt"]["result"] == "blocked" and process_attempt["attempt"]["plan_sha256"] == process_plan["plan"]["plan_sha256"]
                     and not bad_process_attempt["valid"] and any(x["code"] == "process-only-required" for x in bad_process_attempt["findings"])
+                    and all((not result["valid"]) and any(x["code"] == expected_code for x in result["findings"]) for expected_code, result in tampered_plan_results)
                     and example_seen == {"actions_allowed": ["process"]}
                     and example_finish["valid"] and example_finish["receipt"]["result"] == "completed"
                     and cli_executor_ok
