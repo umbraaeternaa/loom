@@ -1659,6 +1659,57 @@ def main(argv=None):
         print(f"  {'ok  ' if manifest_contract_ok else 'FAIL'} gate: deterministic fail-closed task manifest v1")
     except Exception as e:
         print(f"  FAIL Gate manifest v1 contract: {e}")
+    try:                                               # Gate must stay behind the extracted loom_gate module boundary
+        gate_impl = getattr(_loom, "_loom_gate", None)
+        loom_file = Path(getattr(_loom, "__file__", ""))
+        gate_boundary_manifest = {
+            "schema": "loom-gate-manifest/v1",
+            "agent": {"id": "codex", "role": "code"},
+            "task": {"summary": "Gate boundary probe", "intent": "Pin loom.py facade to loom_gate.py"},
+            "repositories": [{"root": "/Users/macbook/Projects/loom", "expected_head": "714f35e", "require_clean": True}],
+            "read_paths": ["/Users/macbook/Projects/loom"],
+            "write_paths": [],
+            "actions": ["read", "test"],
+            "evidence_required": ["citadel"],
+        }
+        gate_boundary_observation = {
+            "schema": "loom-gate-observation/v1",
+            "result": "completed",
+            "repositories": [{"root": "/Users/macbook/Projects/loom", "before_head": "714f35e", "after_head": "714f35e"}],
+            "files_changed": [],
+            "actions_observed": ["read", "test"],
+            "evidence": [{"kind": "citadel", "status": "pass", "detail": "PASS — boundary probe"}],
+        }
+        facade_validation = _loom.validate_manifest(gate_boundary_manifest)
+        facade_decision = _loom.evaluate_manifest(gate_boundary_manifest)
+        facade_diagnostics = _loom.build_gate_diagnostics(gate_boundary_manifest)
+        facade_receipt = _loom.build_receipt(gate_boundary_manifest, gate_boundary_observation)
+        gate_module_boundary_ok = (
+            gate_impl is not None
+            and gate_impl.__name__ == "loom_gate"
+            and _loom.validate_manifest(gate_boundary_manifest) == gate_impl.validate_manifest(gate_boundary_manifest)
+            and _loom.evaluate_manifest(gate_boundary_manifest) == gate_impl.evaluate_manifest(gate_boundary_manifest)
+            and _loom.build_gate_diagnostics(gate_boundary_manifest) == gate_impl.build_gate_diagnostics(gate_boundary_manifest)
+            and _loom.build_receipt(gate_boundary_manifest, gate_boundary_observation) == gate_impl.build_receipt(gate_boundary_manifest, gate_boundary_observation)
+        )
+        gate_standalone_boundary_ok = (
+            gate_impl is None
+            and loom_file.name == "loom.py"
+            and loom_file.parent.name == "docs"
+        )
+        gate_boundary_ok = (
+            (gate_module_boundary_ok or gate_standalone_boundary_ok)
+            and facade_validation["schema"] == "loom-gate-manifest-validation/v1"
+            and facade_decision["schema"] == "loom-gate-decision/v1"
+            and facade_diagnostics["schema"] == "loom-gate-diagnostics/v1"
+            and facade_receipt["schema"] == "loom-gate-receipt-validation/v1"
+            and facade_receipt["valid"] is True
+            and facade_receipt["receipt"]["schema"] == "loom-gate-receipt/v1"
+        )
+        ok += gate_boundary_ok
+        print(f"  {'ok  ' if gate_boundary_ok else 'FAIL'} gate: stable module facade")
+    except Exception as e:
+        print(f"  FAIL Gate module facade: {e}")
     try:                                               # Gate policy v1: role/path ownership and evidence classify deterministically
         def gate_manifest(agent, role, read_paths, write_paths, actions, evidence, repositories=None):
             return {
@@ -2698,6 +2749,26 @@ def main(argv=None):
         print(f"  {'ok  ' if i31_doc_ok else 'FAIL'} docs: i31 semantics pinned")
     except Exception as e:
         print(f"  FAIL i31 semantics doc pin: {e}")
+    try:                                               # module boundaries keep loom.py a facade instead of a re-growing monolith
+        mbdoc = Path(__file__).with_name("docs").joinpath("module_boundaries.md").read_text()
+        module_boundary_doc_ok = (
+            "Status: production-readiness contract" in mbdoc
+            and "`loom.py` remains the compatibility surface" in mbdoc
+            and "`loom_gate.py` | Gate manifest, policy, diagnostics, and advisory receipt logic" in mbdoc
+            and "Gate behavior must have one implementation truth in `loom_gate.py`" in mbdoc
+            and "`validate_manifest`" in mbdoc
+            and "`evaluate_manifest`" in mbdoc
+            and "`build_gate_diagnostics`" in mbdoc
+            and "`build_receipt`" in mbdoc
+            and "loom-gate-manifest-validation/v1" in mbdoc
+            and "standalone browser bundle" in mbdoc
+            and "without importing development-only modules" in mbdoc
+            and "direct module" in mbdoc
+        )
+        ok += module_boundary_doc_ok
+        print(f"  {'ok  ' if module_boundary_doc_ok else 'FAIL'} docs: module boundaries pinned")
+    except Exception as e:
+        print(f"  FAIL module boundaries doc pin: {e}")
     try:                                               # logical FAIL must hard-fail the process, not only print red text
         runner_fail_closed = subprocess.run(
             [sys.executable, str(Path(__file__)), "--self-test-logical-fail-exit"],
@@ -2720,7 +2791,7 @@ def main(argv=None):
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 108   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 110   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 
