@@ -201,10 +201,14 @@ builds, with no closure/layout state inherited across modules.
   increment `loom_heap_used` by `size`, then the allocating helper increments
   its object-family diagnostic counter. Exhausting the exported memory traps
   before any object-family counter, object header, or payload store changes.
-- The current direct host-call interface accepts integer arguments only.
+- Direct `host_ffi` calls receive a tagged argument list using the same v1 value
+  encoding as LOOM function parameters and results. Integer, list, record,
+  variant, effect/resource marker, and immutable string literal values may cross
+  that host boundary as tagged values, but the foreign result remains an opaque
+  boundary for trust/provenance unless it is re-vouched above the call.
 - String literals are supported at the value boundary as immutable static
-  kind-6 heap objects. General runtime string allocation and string
-  operations are not part of ABI v1.
+  kind-6 heap objects. General runtime string allocation and string operations
+  are not part of ABI v1.
 
 ## Compatibility policy
 

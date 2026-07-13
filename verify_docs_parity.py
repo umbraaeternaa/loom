@@ -142,8 +142,10 @@ def _check_wasm_abi_doc() -> None:
         "hp + size <= loom_heap_limit",
         "object-family diagnostic counter",
         "memory.size() << 16",
-        "General runtime string allocation and string",
-        "operations are not part of ABI v1.",
+        "Direct `host_ffi` calls receive a tagged argument list",
+        "foreign result remains an opaque\n  boundary for trust/provenance",
+        "General runtime string allocation and string operations",
+        "are not part of ABI v1.",
         "Compiler state isolation",
         "per-module products of a single compilation",
         "must not be stored in mutable module-global compiler tables",
@@ -154,6 +156,7 @@ def _check_wasm_abi_doc() -> None:
     forbidden = (
         "Strings do not yet have a v1 heap kind",
         "not supported by the WASM\n  value boundary",
+        "The current direct host-call interface accepts integer arguments only.",
     )
     stale = [needle for needle in forbidden if needle in text]
     if missing or stale:

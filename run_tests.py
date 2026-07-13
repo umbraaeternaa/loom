@@ -1187,6 +1187,7 @@ def main(argv=None):
         assert "tag Some" in emit_wat(wpairs[8][0]) and "call $variant" in emit_wat(wpairs[8][0])  # explicit variant helper in WAT
         wat_io = emit_wat('(defx t (IO) (fn () (print 7)))')
         wat_ffi = emit_wat('(defx t (IO) (fn (x) (seam (IO) (ffi "logger" x))))')
+        wat_ffi_string = emit_wat('(defx t (IO) (fn () (seam (IO) (ffi "logger" "hi"))))')
         wat_lib_ffi = emit_wat('(defx t () (fn (x) (seam (Pure) (ffi "lib" x))))')
         wat_foreign_ids = emit_wat('(defx a () (fn (x) (seam (Pure) (ffi "lib" x)))) (defx b () (fn (x) (seam (Pure) (ffi "lib" x)))) (defx c () (fn (x) (seam (Pure) (ffi "other" x))))')
         wat_with = emit_wat('(defx h () (fn (x) (* x 2))) (defx t () (fn () (with IO h (print 5))))')
@@ -1201,6 +1202,7 @@ def main(argv=None):
         wat_topdef_value = emit_wat('(defx inc () (fn (x) (+ x 1))) (defx ap () (fn ((f) x) (f x))) (defx t () (fn () (ap inc 4)))')
         assert 'import "env" "host_print"' in wat_io and "call $host_print" in wat_io   # WAT mirrors host-print import for IO
         assert 'import "env" "host_ffi"' in wat_ffi and "call $host_ffi" in wat_ffi   # WAT mirrors the foreign boundary import too
+        assert 'call $host_ffi' in wat_ffi_string and '(data (i32.const ' in wat_ffi_string   # FFI receives tagged values, including static string literals
         for import_name in ("push_handler", "pop_handler", "current_handler", "host_print", "push_caps", "pop_caps", "has_cap", "host_ffi"):
             assert f'import "env" "{import_name}"' in wat_ffi                         # WAT mirrors the full ABI v1 env import surface
         assert 'call $host_ffi' in wat_lib_ffi and 'foreign lib' in wat_lib_ffi   # opaque lib component lowers through the same WASM foreign boundary
@@ -1375,25 +1377,28 @@ def main(argv=None):
         p_handled = '(defx fh () (fn (x) (handle (IO) (seam (IO) (ffi "logger" x)))))'
         p_lib = '(defx fv () (fn (x) (seam (Pure) (ffi "lib" x))))'
         p_metered_lib = '(defx fm () (fn (x) (seamN 2 (Pure) (ffi "lib" x))))'
+        p_string = '(defx fs (IO) (fn () (seam (IO) (ffi "logger" "hi"))))'
         w37, o37 = run_wasm(p_io, "(fa 7)")
         w38, o38 = run_wasm(p_pure, "(fb 7)")
         w39, o39 = run_wasm(p_handled, "(fh 7)")
         w40, o40 = run_wasm(p_lib, "(fv 7)")
         w41, o41 = run_wasm(p_metered_lib, "(fm 7)")
+        w42, o42 = run_wasm(p_string, "(fs)")
         r37, i37 = run_call(p_io, "(fa 7)")
         r38, i38 = run_call(p_pure, "(fb 7)")
         r39, i39 = run_call(p_handled, "(fh 7)")
         r40, i40 = run_call(p_lib, "(fv 7)")
         r41, i41 = run_call(p_metered_lib, "(fm 7)")
+        r42, i42 = run_call(p_string, "(fs)")
         denied_unknown = False
         try:
             run_wasm('(defx fu (IO) (fn (x) (seam (IO) (ffi "ghost" x))))', "(fu 7)")
         except LoomError:
             denied_unknown = True
         ffi_wasm_ok = ((w37, o37) == (r37, i37) and (w38, o38) == (r38, i38) and (w39, o39) == (r39, i39)
-                       and (w40, o40) == (r40, i40) and (w41, o41) == (r41, i41) and denied_unknown)
+                       and (w40, o40) == (r40, i40) and (w41, o41) == (r41, i41) and (w42, o42) == (r42, i42) and denied_unknown)
         ok += ffi_wasm_ok
-        print(f"  {'ok  ' if ffi_wasm_ok else 'FAIL'} backend(WASM): ffi logger/lib parity => ({w37}, {o37}) / ({w38}, {o38}) / handled {o39} / lib {w40} / metered-lib {w41}")
+        print(f"  {'ok  ' if ffi_wasm_ok else 'FAIL'} backend(WASM): ffi logger/lib parity => ({w37}, {o37}) / ({w38}, {o38}) / handled {o39} / lib {w40} / metered-lib {w41} / string {w42}")
     except Exception as e:
         print(f"  FAIL backend(WASM) ffi: {e}")
     try:                                               # runtime: variant + match extracts the payload / picks the arm
