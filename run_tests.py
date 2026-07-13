@@ -2764,6 +2764,11 @@ def main(argv=None):
             and "standalone browser bundle" in mbdoc
             and "without importing development-only modules" in mbdoc
             and "direct module" in mbdoc
+            and "WASM compiler state boundary" in mbdoc
+            and "fresh per-compilation context" in mbdoc
+            and "must not own mutable `_WASM_*` compiler tables" in mbdoc
+            and "parallel builds" in mbdoc
+            and "legacy module-global `_WASM_*` compiler tables do not return" in mbdoc
         )
         ok += module_boundary_doc_ok
         print(f"  {'ok  ' if module_boundary_doc_ok else 'FAIL'} docs: module boundaries pinned")

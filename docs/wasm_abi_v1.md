@@ -157,6 +157,19 @@ A conforming host decoder must:
 Hosts need the compiler-produced field-ID and variant-tag maps to recover
 source names. Those maps describe one module and are not stable ABI IDs.
 
+## Compiler state isolation
+
+ABI v1 metadata IDs are per-module products of a single compilation. Closure
+code IDs, helper indexes, apply-dispatch indexes, field IDs, variant-tag IDs,
+resource IDs, foreign IDs, string-layout addresses, heap offsets, and source-span
+maps must not be stored in mutable module-global compiler tables and reused by a
+later compilation.
+
+A conforming compiler may expose a stable frontend adapter, but every call to
+`compile_wasm` or `emit_wat` must build a fresh program context. Parallel builds
+of unrelated programs must produce the same bytes and WAT as isolated sequential
+builds, with no closure/layout state inherited across modules.
+
 ## Failure and resource behavior
 
 - Unsupported LOOM forms fail during compilation with `LoomError`.

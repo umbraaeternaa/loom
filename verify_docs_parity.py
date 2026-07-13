@@ -132,6 +132,11 @@ def _check_wasm_abi_doc() -> None:
         "memory.size() << 16",
         "General runtime string allocation and string",
         "operations are not part of ABI v1.",
+        "Compiler state isolation",
+        "per-module products of a single compilation",
+        "must not be stored in mutable module-global compiler tables",
+        "every call to\n`compile_wasm` or `emit_wat` must build a fresh program context",
+        "Parallel builds\nof unrelated programs must produce the same bytes and WAT",
     )
     missing = [needle for needle in required if needle not in text]
     forbidden = (

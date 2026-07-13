@@ -53,10 +53,29 @@ facade so it can run without development-only module imports in Pyodide.
 A future migration may split Gate further, but it must keep the public facade
 stable and pin the new boundary before deleting the old one.
 
+## WASM compiler state boundary
+
+The WebAssembly backend must keep all program-specific compiler state inside a
+fresh per-compilation context. Closure tables, top-level function maps, helper
+function indexes, apply-dispatch indexes, tag IDs, field IDs, resource IDs,
+foreign IDs, string layouts, heap offsets, and source-span maps are local to one
+compiled module.
+
+Development `loom.py` may keep one stable frontend adapter for calls into
+`loom_wasm.py`, but it must not own mutable `_WASM_*` compiler tables. The
+standalone browser bundle in `docs/loom.py` may inline the same implementation,
+but it must preserve the same per-compilation isolation rule.
+
+This boundary is part of production-readiness: separate builds, parallel builds,
+and repeated browser playground runs must not inherit closure/layout state from
+an earlier program.
+
 ## Citadel pin
 
 The citadel pins this contract by checking that development `loom.py` is backed
 by the extracted `loom_gate` module and that facade calls match direct module
 calls for manifest validation, policy evaluation, redacted diagnostics, and
 receipt building. It also checks that the standalone browser bundle preserves
-the same public schemas without importing development-only modules.
+the same public schemas without importing development-only modules. The WASM
+pin also checks that compiler contexts remain isolated across parallel builds
+and that legacy module-global `_WASM_*` compiler tables do not return.
