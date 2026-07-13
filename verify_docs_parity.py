@@ -12,6 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 DOCS_LOOM = ROOT / "docs" / "loom.py"
+INDEX_HTML = ROOT / "docs" / "index.html"
 PLAY_HTML = ROOT / "docs" / "play.html"
 WASM_ABI_DOC = ROOT / "docs" / "wasm_abi_v1.md"
 QUANTITY_DOC = ROOT / "docs" / "wasm_quantity_mediation.md"
@@ -107,6 +108,27 @@ def _check_playground_loader() -> None:
     for needle in ("_gate_secret_class", "secret-read-operator-required", "secret-exfil-forbidden", "secret-write-forbidden", "secret-lane", "unsafe-secret-evidence", "loom-gate-diagnostics/v1", "build_gate_diagnostics"):
         if needle not in bundle_text:
             raise SystemExit("docs parity: standalone bundle lost secret path policy marker: " + needle)
+
+
+def _check_landing_page_count() -> None:
+    text = INDEX_HTML.read_text()
+    required = (
+        "413 self-verifying checks",
+        ">413</div>",
+    )
+    forbidden = (
+        "408 self-verifying checks",
+        ">408</div>",
+    )
+    missing = [needle for needle in required if needle not in text]
+    stale = [needle for needle in forbidden if needle in text]
+    if missing or stale:
+        details = []
+        if missing:
+            details.append("missing: " + ", ".join(missing))
+        if stale:
+            details.append("stale: " + ", ".join(stale))
+        raise SystemExit("docs parity: landing page check-count drift: " + "; ".join(details))
 
 
 def _check_wasm_abi_doc() -> None:
@@ -252,6 +274,7 @@ def _check_pyodide_import_boundary() -> None:
 
 def main() -> int:
     _check_playground_loader()
+    _check_landing_page_count()
     _check_wasm_abi_doc()
     _check_quantity_mediation_doc()
     _check_secret_credential_policy_doc()
