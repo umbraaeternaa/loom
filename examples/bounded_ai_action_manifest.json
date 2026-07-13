@@ -1,0 +1,21 @@
+{
+  "schema": "loom-gate-manifest/v1",
+  "agent": {
+    "id": "codex",
+    "role": "code"
+  },
+  "task": {
+    "summary": "Review and plan a bounded LOOM code change",
+    "intent": "Let an AI coding agent inspect the LOOM repo and prepare a process-only implementation plan without executing host actions"
+  },
+  "repositories": [],
+  "read_paths": [
+    "/Users/macbook/Projects/loom"
+  ],
+  "write_paths": [],
+  "actions": [
+    "read",
+    "process"
+  ],
+  "evidence_required": []
+}

@@ -2551,7 +2551,7 @@ def main(argv=None):
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 415
+            and about_json["citadel_checks"] == 416
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
@@ -2593,6 +2593,31 @@ def main(argv=None):
         print(f"  {'ok  ' if workflow_ok else 'FAIL'} cli/api: Gate workflow route v1")
     except Exception as e:
         print(f"  FAIL Gate workflow route: {e}")
+    try:                                               # Gate workflow example is a real checked fixture, not only an inline test value
+        import io, contextlib
+        example_path = Path(__file__).with_name("examples").joinpath("bounded_ai_action_manifest.json")
+        example_manifest = json.loads(example_path.read_text())
+        example_workflow = _loom.build_gate_workflow(example_manifest)
+        cli_out = io.StringIO()
+        with contextlib.redirect_stdout(cli_out):
+            cli_code = _loom._cli(["gate-workflow", str(example_path), "--format=json"])
+        cli_workflow = json.loads(cli_out.getvalue())
+        example_workflow_ok = (
+            cli_code == 0
+            and cli_workflow == example_workflow
+            and example_workflow["schema"] == "loom-gate-workflow/v1"
+            and example_workflow["valid"] is True
+            and example_workflow["task_summary"] == "Review and plan a bounded LOOM code change"
+            and example_workflow["agent"] == {"id": "codex", "role": "code"}
+            and example_workflow["actions"] == ["process", "read"]
+            and example_workflow["decision"] == "operator-required"
+            and [step["id"] for step in example_workflow["steps"]] == ["approval-request", "claim", "plan", "attempt-dry-run", "finish"]
+            and all("command" in step for step in example_workflow["steps"])
+        )
+        ok += example_workflow_ok
+        print(f"  {'ok  ' if example_workflow_ok else 'FAIL'} examples: bounded AI action Gate workflow fixture")
+    except Exception as e:
+        print(f"  FAIL bounded AI action workflow fixture: {e}")
     try:                                               # published browser bundle discipline is explicit, not tribal knowledge
         play = Path(__file__).with_name("docs").joinpath("play.html").read_text()
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
@@ -2871,7 +2896,7 @@ def main(argv=None):
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 112   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 113   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 
