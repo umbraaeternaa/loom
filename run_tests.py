@@ -2339,6 +2339,17 @@ def main():
                         example_seen["actions_allowed"] = plan["actions_allowed"]
                         return {"schema": "loom-gate-host-attempt/v1", "result": "completed", "evidence": []}
                     example_finish = process_example.run_process_lifecycle(executor_manifest, example_challenge, example_approval, fake_process_host)
+                    cli_example_challenge = _loom.build_approval_challenge(executor_manifest, "6" * 64)["challenge"]
+                    cli_example_approval_body = {"schema": "loom-gate-operator-approval/v1", "challenge_sha256": cli_example_challenge["challenge_sha256"], "manifest_sha256": cli_example_challenge["manifest_sha256"], "approver": "operator", "decision": "approve", "key_sha256": key_hash}
+                    cli_example_approval = sign_approval(cli_example_approval_body)
+                    cli_example_path = Path(__file__).with_name("examples").joinpath("process_lifecycle_cli.py")
+                    cli_example_spec = importlib.util.spec_from_file_location("loom_process_lifecycle_cli_example", cli_example_path)
+                    cli_process_example = importlib.util.module_from_spec(cli_example_spec); cli_example_spec.loader.exec_module(cli_process_example)
+                    cli_example_seen = {}
+                    def fake_process_cli_host(plan):
+                        cli_example_seen["actions_allowed"] = plan["actions_allowed"]
+                        return {"schema": "loom-gate-host-attempt/v1", "result": "completed", "evidence": []}
+                    cli_example_finish = cli_process_example.run_process_cli_lifecycle(td / "cli-example", executor_manifest, cli_example_challenge, cli_example_approval, fake_process_cli_host)
                 cli_executor_ok = True
                 cli_impl = getattr(_loom, "_loom_cli", None)
                 if cli_impl is not None:
@@ -2419,6 +2430,8 @@ def main():
                     and all((not result["valid"]) and any(x["code"] == expected_code for x in result["findings"]) for expected_code, result in tampered_plan_results)
                     and example_seen == {"actions_allowed": ["process"]}
                     and example_finish["valid"] and example_finish["receipt"]["result"] == "completed"
+                    and cli_example_seen == {"actions_allowed": ["process"]}
+                    and cli_example_finish["valid"] and cli_example_finish["receipt"]["result"] == "completed"
                     and cli_executor_ok
                 )
             finally:

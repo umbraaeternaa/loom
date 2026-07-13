@@ -258,6 +258,8 @@ still process-only and that the host attempt fits that plan, without executing
 or finalizing anything.
 `gate-process-finish` then finalizes that process-only attempt through the same
 claimed approval lifecycle; it still does not execute the action.
+See [`examples/process_lifecycle_cli.py`](examples/process_lifecycle_cli.py) for
+the full CLI handoff recipe.
 
 Secret and credential handling is denial-first by design. The defensive
 [LOOM Secret and Credential Safety Policy](docs/secret_credential_policy.md)
