@@ -1200,6 +1200,8 @@ def main(argv=None):
         wat_topdef_value = emit_wat('(defx inc () (fn (x) (+ x 1))) (defx ap () (fn ((f) x) (f x))) (defx t () (fn () (ap inc 4)))')
         assert 'import "env" "host_print"' in wat_io and "call $host_print" in wat_io   # WAT mirrors host-print import for IO
         assert 'import "env" "host_ffi"' in wat_ffi and "call $host_ffi" in wat_ffi   # WAT mirrors the foreign boundary import too
+        for import_name in ("push_handler", "pop_handler", "current_handler", "host_print", "push_caps", "pop_caps", "has_cap", "host_ffi"):
+            assert f'import "env" "{import_name}"' in wat_ffi                         # WAT mirrors the full ABI v1 env import surface
         assert 'call $host_ffi' in wat_lib_ffi and 'foreign lib' in wat_lib_ffi   # opaque lib component lowers through the same WASM foreign boundary
         assert "call $apply1" in wat_with and "func $h" in wat_with   # WAT mirrors top-level with IO handler dispatch via closure apply
         assert "call $apply1" in wat_with_local and "func $lam0" in wat_with_local   # WAT mirrors local closure-valued handler dispatch
@@ -2742,6 +2744,12 @@ def main(argv=None):
             and "Changing any of the domain, literal rejection rule, wraparound equation," in i31doc
             and '{"add": -1073741824, "sub": 1073741823, "mul": -2, "wide": 1}' in i31doc
             and "[`i31_semantics.md`](i31_semantics.md)" in abi_doc
+            and "`push_caps`" in abi_doc
+            and "`pop_caps`" in abi_doc
+            and "`has_cap`" in abi_doc
+            and "`host_ffi`" in abi_doc
+            and "source-checked capability presence only" in abi_doc
+            and "must not be\npersisted or compared across separately compiled modules" in abi_doc
             and "i31\ndomain/wraparound/host-decoding rule changes" in abi_doc
             and "[`i31_semantics.md`](i31_semantics.md)" in asm_doc
         )

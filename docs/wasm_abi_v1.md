@@ -57,6 +57,15 @@ Every binary module imports these functions from module `env`:
 | `pop_handler` | `(raw_effect_id) -> i32` | Pop handler; return value is ignored |
 | `current_handler` | `(raw_effect_id) -> tagged_handler_or_0` | Return current closure or raw sentinel `0` |
 | `host_print` | `(tagged_value) -> tagged_value` | Emit decoded value and return the original tagged value |
+| `push_caps` | `(raw_capability_mask) -> i32` | Push a scoped source-checked capability-presence mask; return value is ignored |
+| `pop_caps` | `() -> i32` | Pop the current capability-presence mask; return value is ignored |
+| `has_cap` | `(raw_effect_id) -> i32` | Return `1` if the current scope permits the effect, otherwise `0` |
+| `host_ffi` | `(raw_foreign_id, tagged_arg_list, raw_silent) -> tagged_value` | Host foreign-function boundary; receives module-local foreign ID, tagged argument list, and a raw silence flag |
+
+The capability imports represent source-checked capability presence only. They
+do not encode the numeric `seamN K` quantum as a runtime counter in ABI v1.
+The foreign ID passed to `host_ffi` is module-local metadata and must not be
+persisted or compared across separately compiled modules.
 
 Effect IDs are stable in ABI v1:
 
