@@ -143,6 +143,116 @@ def _gate(frontend, src, output_format="text"):
     return 1 if diagnostics["decision"] == "reject" else 0
 
 
+def build_gate_workflow(manifest):
+    validation = _loom_gate.validate_manifest(manifest)
+    workflow = {
+        "schema": "loom-gate-workflow/v1",
+        "valid": validation["valid"],
+        "advisory": False,
+        "manifest_sha256": validation.get("manifest_sha256"),
+        "decision": None,
+        "task_summary": None,
+        "agent": None,
+        "actions": [],
+        "steps": [],
+        "findings": list(validation["findings"]),
+    }
+    if not validation["valid"]:
+        workflow["steps"] = [{
+            "id": "fix-manifest",
+            "kind": "operator",
+            "description": "Fix the manifest until LOOM Gate validation accepts it.",
+        }]
+        return workflow
+    normalized = validation["normalized_manifest"]
+    decision = _loom_gate.evaluate_manifest(normalized)
+    diagnostics = _loom_gate.build_gate_diagnostics(normalized)
+    workflow.update({
+        "decision": decision["decision"],
+        "task_summary": normalized["task"]["summary"],
+        "agent": normalized["agent"],
+        "actions": list(normalized["actions"]),
+        "findings": list(decision["violations"]),
+    })
+    if decision["decision"] == "reject":
+        workflow["steps"] = [{
+            "id": "fix-policy",
+            "kind": "operator",
+            "description": "Resolve policy violations before requesting approval or execution.",
+        }]
+        return workflow
+    if decision["decision"] == "accept":
+        workflow["steps"] = [{
+            "id": "collect-observation",
+            "kind": "trusted-host",
+            "description": "Run only the manifest-declared action, then collect observation evidence.",
+        }]
+        return workflow
+    workflow["steps"] = [
+        {
+            "id": "approval-request",
+            "kind": "operator",
+            "description": "Build a nonce-bound approval request for the operator issuer.",
+            "command": "python3 loom.py gate-request manifest.json --nonce <64-hex> --format json",
+        },
+        {
+            "id": "claim",
+            "kind": "trusted-host",
+            "description": "Claim the signed approval before any bounded host action starts.",
+            "command": "python3 loom.py gate-claim manifest.json challenge.json approval.json --format json",
+        },
+        {
+            "id": "plan",
+            "kind": "trusted-host",
+            "description": "Build the bounded execution plan for the declared process action.",
+            "command": "python3 loom.py gate-plan manifest.json challenge.json approval.json claim.json process --format json",
+        },
+        {
+            "id": "attempt-dry-run",
+            "kind": "trusted-host",
+            "description": "Validate the trusted host attempt envelope against the plan without finalizing.",
+            "command": "python3 loom.py gate-process-attempt plan.json attempt.json --format json",
+        },
+        {
+            "id": "finish",
+            "kind": "trusted-host",
+            "description": "Finalize the claimed approval exactly once from the validated process attempt.",
+            "command": "python3 loom.py gate-process-finish manifest.json challenge.json approval.json claim.json plan.json attempt.json --format json",
+        },
+    ]
+    if diagnostics["secret_lanes"]:
+        workflow["steps"].insert(1, {
+            "id": "secret-lane-review",
+            "kind": "operator",
+            "description": "Review redacted secret-lane diagnostics; raw secret paths or values must stay hidden.",
+        })
+    return workflow
+
+
+def _gate_workflow(frontend, src, output_format="text"):
+    del frontend
+    try:
+        manifest = json.loads(src)
+    except json.JSONDecodeError as err:
+        print("invalid Gate manifest JSON: " + str(err))
+        return 2
+    workflow = build_gate_workflow(manifest)
+    if output_format == "json":
+        _emit_json(workflow)
+        return 0 if workflow["valid"] and workflow["decision"] != "reject" else 1
+    print("LOOM GATE WORKFLOW - bounded AI action route")
+    print("decision: " + str(workflow["decision"]))
+    if workflow["task_summary"]:
+        print("task: " + workflow["task_summary"])
+    if workflow["actions"]:
+        print("actions: " + ", ".join(workflow["actions"]))
+    for step in workflow["steps"]:
+        print(f"  {step['id']}: {step['description']}")
+        if "command" in step:
+            print("    " + step["command"])
+    return 0 if workflow["valid"] and workflow["decision"] != "reject" else 1
+
+
 def _gate_request(frontend, src, nonce, output_format="text"):
     del frontend
     if not nonce:
@@ -440,7 +550,7 @@ def _check(frontend, src, output_format="text"):
 def cli(argv, frontend):
     flags, pos = _parse_flags(argv)
     if len(pos) < 1:
-        print("usage: python3 loom.py <about|check|run|build|audit|source-map|gate|gate-request|gate-claim|gate-finish|gate-plan|gate-exec-finish|gate-attempt|gate-process-attempt|gate-process-finish> FILE... [call] [--target py|js|wat] [--format text|json] [--nonce HEX64]")
+        print("usage: python3 loom.py <about|check|run|build|audit|source-map|gate|gate-workflow|gate-request|gate-claim|gate-finish|gate-plan|gate-exec-finish|gate-attempt|gate-process-attempt|gate-process-finish> FILE... [call] [--target py|js|wat] [--format text|json] [--nonce HEX64]")
         return 2
     cmd = pos[0]
     output_format = flags.get("format", "text")
@@ -450,7 +560,7 @@ def cli(argv, frontend):
     if cmd == "about":
         return _about(frontend, output_format)
     if len(pos) < 2:
-        print("usage: python3 loom.py <about|check|run|build|audit|source-map|gate|gate-request|gate-claim|gate-finish|gate-plan|gate-exec-finish|gate-attempt|gate-process-attempt|gate-process-finish> FILE... [call] [--target py|js|wat] [--format text|json] [--nonce HEX64]")
+        print("usage: python3 loom.py <about|check|run|build|audit|source-map|gate|gate-workflow|gate-request|gate-claim|gate-finish|gate-plan|gate-exec-finish|gate-attempt|gate-process-attempt|gate-process-finish> FILE... [call] [--target py|js|wat] [--format text|json] [--nonce HEX64]")
         return 2
     if cmd == "gate-claim":
         return _gate_claim(frontend, pos[1:], output_format)
@@ -477,6 +587,8 @@ def cli(argv, frontend):
         return _check(frontend, src, output_format)
     if cmd == "gate":
         return _gate(frontend, src, output_format)
+    if cmd == "gate-workflow":
+        return _gate_workflow(frontend, src, output_format)
     if cmd == "gate-request":
         return _gate_request(frontend, src, flags.get("nonce"), output_format)
     if cmd == "run":

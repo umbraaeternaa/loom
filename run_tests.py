@@ -2551,16 +2551,48 @@ def main(argv=None):
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 414
+            and about_json["citadel_checks"] == 415
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
             and "about" in about_json["commands"]
+            and "gate-workflow" in about_json["commands"]
         )
         ok += about_contract_ok
         print(f"  {'ok  ' if about_contract_ok else 'FAIL'} cli/api: machine-readable about contract v1")
     except Exception as e:
         print(f"  FAIL cli/api about contract: {e}")
+    try:                                               # Gate workflow gives AI/operator a safe route without executing host actions
+        import io, contextlib
+        workflow_manifest = gate_manifest("codex", "code", ["/Users/macbook/Projects/loom"], [], ["read", "process"], [], [])
+        workflow_out = io.StringIO()
+        with contextlib.redirect_stdout(workflow_out):
+            workflow_code = _loom._cli(["gate-workflow", "-", "--format=json"])
+        bad_dash_rejected = workflow_code == 2          # gate-workflow is file-based; '-' must not mean stdin/ambient input
+        workflow = _loom.build_gate_workflow(workflow_manifest)
+        with tempfile.TemporaryDirectory() as td:
+            manifest_file = Path(td) / "manifest.json"
+            manifest_file.write_text(json.dumps(workflow_manifest))
+            cli_out = io.StringIO()
+            with contextlib.redirect_stdout(cli_out):
+                cli_workflow_code = _loom._cli(["gate-workflow", str(manifest_file), "--format=json"])
+            cli_workflow = json.loads(cli_out.getvalue())
+        workflow_ok = (
+            bad_dash_rejected
+            and cli_workflow_code == 0
+            and cli_workflow == workflow
+            and workflow["schema"] == "loom-gate-workflow/v1"
+            and workflow["valid"] is True
+            and workflow["decision"] == "operator-required"
+            and workflow["actions"] == ["process", "read"]
+            and [step["id"] for step in workflow["steps"]] == ["approval-request", "claim", "plan", "attempt-dry-run", "finish"]
+            and all("command" in step for step in workflow["steps"])
+            and "gate-process-finish" in workflow["steps"][-1]["command"]
+        )
+        ok += workflow_ok
+        print(f"  {'ok  ' if workflow_ok else 'FAIL'} cli/api: Gate workflow route v1")
+    except Exception as e:
+        print(f"  FAIL Gate workflow route: {e}")
     try:                                               # published browser bundle discipline is explicit, not tribal knowledge
         play = Path(__file__).with_name("docs").joinpath("play.html").read_text()
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
@@ -2839,7 +2871,7 @@ def main(argv=None):
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 111   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 112   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

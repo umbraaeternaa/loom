@@ -185,7 +185,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
     emit_wat,
     LoomError,
     metadata={
-        "citadel_checks": 414,
+        "citadel_checks": 415,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "i31_bits": INT_BITS,
         "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],
@@ -197,6 +197,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
             "audit",
             "source-map",
             "gate",
+            "gate-workflow",
             "gate-request",
             "gate-claim",
             "gate-finish",
@@ -218,6 +219,11 @@ def build_verdict(program_src):
 def build_about():
     """Return the stable JSON-safe LOOM implementation capability summary."""
     return _loom_cli.build_about(_CLI_FRONTEND)
+
+
+def build_gate_workflow(manifest):
+    """Return a stable JSON-safe route for a bounded Gate action lifecycle."""
+    return _loom_cli.build_gate_workflow(manifest)
 
 
 def validate_manifest(manifest):

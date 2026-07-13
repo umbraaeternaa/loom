@@ -3429,11 +3429,11 @@ def build_about():
     return {
         "schema": "loom-about/v1",
         "language": "LOOM",
-        "citadel_checks": 414,
+        "citadel_checks": 415,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "i31_bits": INT_BITS,
         "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],
-        "commands": ["about", "check", "run", "build", "audit", "source-map", "gate"],
+        "commands": ["about", "check", "run", "build", "audit", "source-map", "gate", "gate-workflow"],
     }
 
 
@@ -3448,6 +3448,51 @@ def _about(output_format="text"):
     print(f"i31: {about['i31_bits']} bit signed wraparound")
     print("backends: " + ", ".join(about["backends"]))
     return 0
+
+
+def build_gate_workflow(manifest):
+    validation = validate_manifest(manifest)
+    workflow = {
+        "schema": "loom-gate-workflow/v1",
+        "valid": validation["valid"],
+        "advisory": False,
+        "manifest_sha256": validation.get("manifest_sha256"),
+        "decision": None,
+        "task_summary": None,
+        "agent": None,
+        "actions": [],
+        "steps": [],
+        "findings": list(validation["findings"]),
+    }
+    if not validation["valid"]:
+        workflow["steps"] = [{"id": "fix-manifest", "kind": "operator", "description": "Fix the manifest until LOOM Gate validation accepts it."}]
+        return workflow
+    normalized = validation["normalized_manifest"]
+    decision = evaluate_manifest(normalized)
+    diagnostics = build_gate_diagnostics(normalized)
+    workflow.update({
+        "decision": decision["decision"],
+        "task_summary": normalized["task"]["summary"],
+        "agent": normalized["agent"],
+        "actions": list(normalized["actions"]),
+        "findings": list(decision["violations"]),
+    })
+    if decision["decision"] == "reject":
+        workflow["steps"] = [{"id": "fix-policy", "kind": "operator", "description": "Resolve policy violations before requesting approval or execution."}]
+        return workflow
+    if decision["decision"] == "accept":
+        workflow["steps"] = [{"id": "collect-observation", "kind": "trusted-host", "description": "Run only the manifest-declared action, then collect observation evidence."}]
+        return workflow
+    workflow["steps"] = [
+        {"id": "approval-request", "kind": "operator", "description": "Build a nonce-bound approval request for the operator issuer.", "command": "python3 loom.py gate-request manifest.json --nonce <64-hex> --format json"},
+        {"id": "claim", "kind": "trusted-host", "description": "Claim the signed approval before any bounded host action starts.", "command": "python3 loom.py gate-claim manifest.json challenge.json approval.json --format json"},
+        {"id": "plan", "kind": "trusted-host", "description": "Build the bounded execution plan for the declared process action.", "command": "python3 loom.py gate-plan manifest.json challenge.json approval.json claim.json process --format json"},
+        {"id": "attempt-dry-run", "kind": "trusted-host", "description": "Validate the trusted host attempt envelope against the plan without finalizing.", "command": "python3 loom.py gate-process-attempt plan.json attempt.json --format json"},
+        {"id": "finish", "kind": "trusted-host", "description": "Finalize the claimed approval exactly once from the validated process attempt.", "command": "python3 loom.py gate-process-finish manifest.json challenge.json approval.json claim.json plan.json attempt.json --format json"},
+    ]
+    if diagnostics["secret_lanes"]:
+        workflow["steps"].insert(1, {"id": "secret-lane-review", "kind": "operator", "description": "Review redacted secret-lane diagnostics; raw secret paths or values must stay hidden."})
+    return workflow
 
 
 def allocation_source_map_lines(wat):
@@ -3500,7 +3545,7 @@ def _cli(argv):
         elif a.startswith("--format="): flags["format"] = a.split("=", 1)[1]; i += 1
         else: pos.append(a); i += 1
     if len(pos) < 1:
-        print("usage: python3 loom.py <about|check|run|build|audit|source-map|gate> FILE [call] [--target py|js|wat] [--format text|json]"); return 2
+        print("usage: python3 loom.py <about|check|run|build|audit|source-map|gate|gate-workflow> FILE [call] [--target py|js|wat] [--format text|json]"); return 2
     cmd = pos[0]
     output_format = flags.get("format", "text")
     if output_format not in ("text", "json"):
@@ -3508,7 +3553,7 @@ def _cli(argv):
     if cmd == "about":
         return _about(output_format)
     if len(pos) < 2:
-        print("usage: python3 loom.py <about|check|run|build|audit|source-map|gate> FILE [call] [--target py|js|wat] [--format text|json]"); return 2
+        print("usage: python3 loom.py <about|check|run|build|audit|source-map|gate|gate-workflow> FILE [call] [--target py|js|wat] [--format text|json]"); return 2
     path = pos[1]; call = pos[2] if len(pos) > 2 else "(main)"
     try: src = open(path).read()
     except OSError as e: print("cannot read file: " + str(e)); return 2
@@ -3541,6 +3586,20 @@ def _cli(argv):
             for item in diagnostics["secret_lanes"]: print(f"  [{item['disposition']}] {item['class']} at {item['field']} ({item['code']})")
         else: print("secret lanes: none")
         return 1 if diagnostics["decision"] == "reject" else 0
+    if cmd == "gate-workflow":
+        try: manifest = json.loads(src)
+        except json.JSONDecodeError as e: print("invalid Gate manifest JSON: " + str(e)); return 2
+        workflow = build_gate_workflow(manifest)
+        if output_format == "json":
+            _emit_verdict_json(workflow); return 0 if workflow["valid"] and workflow["decision"] != "reject" else 1
+        print("LOOM GATE WORKFLOW - bounded AI action route")
+        print("decision: " + str(workflow["decision"]))
+        if workflow["task_summary"]: print("task: " + workflow["task_summary"])
+        if workflow["actions"]: print("actions: " + ", ".join(workflow["actions"]))
+        for step in workflow["steps"]:
+            print(f"  {step['id']}: {step['description']}")
+            if "command" in step: print("    " + step["command"])
+        return 0 if workflow["valid"] and workflow["decision"] != "reject" else 1
     if cmd == "run":
         try: val, out = run_call(src, call)
         except LoomError as e: print("REJECTED: " + str(e)); return 1
