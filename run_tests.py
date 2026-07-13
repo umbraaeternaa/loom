@@ -2549,7 +2549,9 @@ def main(argv=None):
             and '"findingsByFn"' in play
             and '"globalFindings"' in play
             and "TextDecoder()" in play
+            and 'typeof abi.value === "number"' in play
             and "k === 6" in play
+            and "n++ > 2048" in play
             and 'name: "WASM · heap meter"' in play
             and 'globalValue("loom_heap_limit")' in play
             and 'globalValue("loom_heap_used")' in play
@@ -2754,6 +2756,8 @@ def main(argv=None):
             and "assigned by first\noccurrence of the foreign component name inside one compiled module" in abi_doc
             and "Repeated\nuses of the same foreign name in one module use the same raw ID" in abi_doc
             and "must not be persisted or compared across\nseparately compiled modules" in abi_doc
+            and "finite traversal guard" in abi_doc
+            and "2048 traversed cells" in abi_doc
             and "i31\ndomain/wraparound/host-decoding rule changes" in abi_doc
             and "[`i31_semantics.md`](i31_semantics.md)" in asm_doc
         )

@@ -165,6 +165,10 @@ A conforming host decoder must:
    and decode only the matching layout.
 5. Reject invalid pointers, unknown kinds, malformed chains, and out-of-bounds
    objects. It must not guess an object type from payload shape.
+6. Use a finite traversal guard for linked structures such as lists and record
+   chains so malformed cyclic or attacker-supplied memory cannot make the host
+   decoder loop forever. The published browser and Node hosts currently reject
+   a list or record chain after 2048 traversed cells.
 
 Hosts need the compiler-produced field-ID and variant-tag maps to recover
 source names. Those maps describe one module and are not stable ABI IDs.
