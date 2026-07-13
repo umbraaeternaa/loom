@@ -176,12 +176,48 @@ def run_wasm(program_src, call_src):
 
 
 # ---- CLI: turn the kernel into a usable TOOL. `python3 loom.py <check|run|build|audit> file.loom [call] [--target py|js|wat]` ----
-_CLI_FRONTEND = _loom_cli.Frontend(parse, check, run_call, compile_py, compile_js, emit_wat, LoomError)
+_CLI_FRONTEND = _loom_cli.Frontend(
+    parse,
+    check,
+    run_call,
+    compile_py,
+    compile_js,
+    emit_wat,
+    LoomError,
+    metadata={
+        "citadel_checks": 414,
+        "wasm_abi_version": _WASM_ABI_VERSION,
+        "i31_bits": INT_BITS,
+        "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],
+        "commands": [
+            "about",
+            "check",
+            "run",
+            "build",
+            "audit",
+            "source-map",
+            "gate",
+            "gate-request",
+            "gate-claim",
+            "gate-finish",
+            "gate-plan",
+            "gate-exec-finish",
+            "gate-attempt",
+            "gate-process-attempt",
+            "gate-process-finish",
+        ],
+    },
+)
 
 
 def build_verdict(program_src):
     """Return the stable JSON-safe checker verdict used by LOOM Gate clients."""
     return _loom_cli.build_verdict(_CLI_FRONTEND, program_src)
+
+
+def build_about():
+    """Return the stable JSON-safe LOOM implementation capability summary."""
+    return _loom_cli.build_about(_CLI_FRONTEND)
 
 
 def validate_manifest(manifest):

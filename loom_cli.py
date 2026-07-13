@@ -95,6 +95,32 @@ def _emit_json(verdict):
     print(json.dumps(verdict, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
 
 
+def build_about(frontend):
+    meta = getattr(frontend, "metadata", {}) or {}
+    return {
+        "schema": "loom-about/v1",
+        "language": "LOOM",
+        "citadel_checks": meta.get("citadel_checks"),
+        "wasm_abi_version": meta.get("wasm_abi_version"),
+        "i31_bits": meta.get("i31_bits"),
+        "backends": list(meta.get("backends", [])),
+        "commands": list(meta.get("commands", [])),
+    }
+
+
+def _about(frontend, output_format="text"):
+    about = build_about(frontend)
+    if output_format == "json":
+        _emit_json(about)
+        return 0
+    print("LOOM — trust layer for AI-written code")
+    print(f"citadel: {about['citadel_checks']} self-verifying checks")
+    print(f"WASM ABI: v{about['wasm_abi_version']}")
+    print(f"i31: {about['i31_bits']} bit signed wraparound")
+    print("backends: " + ", ".join(about["backends"]))
+    return 0
+
+
 def _gate(frontend, src, output_format="text"):
     del frontend
     try:
@@ -413,13 +439,18 @@ def _check(frontend, src, output_format="text"):
 
 def cli(argv, frontend):
     flags, pos = _parse_flags(argv)
-    if len(pos) < 2:
-        print("usage: python3 loom.py <check|run|build|audit|source-map|gate|gate-request|gate-claim|gate-finish|gate-plan|gate-exec-finish|gate-attempt|gate-process-attempt|gate-process-finish> FILE... [call] [--target py|js|wat] [--format text|json] [--nonce HEX64]")
+    if len(pos) < 1:
+        print("usage: python3 loom.py <about|check|run|build|audit|source-map|gate|gate-request|gate-claim|gate-finish|gate-plan|gate-exec-finish|gate-attempt|gate-process-attempt|gate-process-finish> FILE... [call] [--target py|js|wat] [--format text|json] [--nonce HEX64]")
         return 2
     cmd = pos[0]
     output_format = flags.get("format", "text")
     if output_format not in ("text", "json"):
         print("unsupported format: " + output_format)
+        return 2
+    if cmd == "about":
+        return _about(frontend, output_format)
+    if len(pos) < 2:
+        print("usage: python3 loom.py <about|check|run|build|audit|source-map|gate|gate-request|gate-claim|gate-finish|gate-plan|gate-exec-finish|gate-attempt|gate-process-attempt|gate-process-finish> FILE... [call] [--target py|js|wat] [--format text|json] [--nonce HEX64]")
         return 2
     if cmd == "gate-claim":
         return _gate_claim(frontend, pos[1:], output_format)

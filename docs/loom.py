@@ -3425,6 +3425,31 @@ def _emit_verdict_json(verdict):
     print(json.dumps(verdict, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
 
 
+def build_about():
+    return {
+        "schema": "loom-about/v1",
+        "language": "LOOM",
+        "citadel_checks": 414,
+        "wasm_abi_version": _WASM_ABI_VERSION,
+        "i31_bits": INT_BITS,
+        "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],
+        "commands": ["about", "check", "run", "build", "audit", "source-map", "gate"],
+    }
+
+
+def _about(output_format="text"):
+    about = build_about()
+    if output_format == "json":
+        _emit_verdict_json(about)
+        return 0
+    print("LOOM — trust layer for AI-written code")
+    print(f"citadel: {about['citadel_checks']} self-verifying checks")
+    print(f"WASM ABI: v{about['wasm_abi_version']}")
+    print(f"i31: {about['i31_bits']} bit signed wraparound")
+    print("backends: " + ", ".join(about["backends"]))
+    return 0
+
+
 def allocation_source_map_lines(wat):
     rows = sorted({
         (int(line), int(column), label.strip())
@@ -3474,14 +3499,19 @@ def _cli(argv):
         elif a == "--format" and i + 1 < len(argv): flags["format"] = argv[i+1]; i += 2
         elif a.startswith("--format="): flags["format"] = a.split("=", 1)[1]; i += 1
         else: pos.append(a); i += 1
-    if len(pos) < 2:
-        print("usage: python3 loom.py <check|run|build|audit|source-map|gate> FILE [call] [--target py|js|wat] [--format text|json]"); return 2
-    cmd, path = pos[0], pos[1]; call = pos[2] if len(pos) > 2 else "(main)"
-    try: src = open(path).read()
-    except OSError as e: print("cannot read file: " + str(e)); return 2
+    if len(pos) < 1:
+        print("usage: python3 loom.py <about|check|run|build|audit|source-map|gate> FILE [call] [--target py|js|wat] [--format text|json]"); return 2
+    cmd = pos[0]
     output_format = flags.get("format", "text")
     if output_format not in ("text", "json"):
         print("unsupported format: " + output_format); return 2
+    if cmd == "about":
+        return _about(output_format)
+    if len(pos) < 2:
+        print("usage: python3 loom.py <about|check|run|build|audit|source-map|gate> FILE [call] [--target py|js|wat] [--format text|json]"); return 2
+    path = pos[1]; call = pos[2] if len(pos) > 2 else "(main)"
+    try: src = open(path).read()
+    except OSError as e: print("cannot read file: " + str(e)); return 2
     if cmd == "check":
         verdict = build_verdict(src)
         if output_format == "json":

@@ -136,9 +136,9 @@ class RuntimeFrontend(BackendFrontend):
 
 
 class CliFrontend:
-    __slots__ = ("parse", "check", "run_call", "compile_py", "compile_js", "emit_wat", "error")
+    __slots__ = ("parse", "check", "run_call", "compile_py", "compile_js", "emit_wat", "error", "metadata")
 
-    def __init__(self, parse, check, run_call, compile_py, compile_js, emit_wat, error):
+    def __init__(self, parse, check, run_call, compile_py, compile_js, emit_wat, error, metadata=None):
         self.parse = parse
         self.check = check
         self.run_call = run_call
@@ -146,3 +146,4 @@ class CliFrontend:
         self.compile_js = compile_js
         self.emit_wat = emit_wat
         self.error = error
+        self.metadata = dict(metadata or {})

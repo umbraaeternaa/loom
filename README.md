@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 413 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 414 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 413/413 citadel checks
+PASS — 414/414 citadel checks
 ```
 
 ## The idea in one screen
@@ -157,6 +157,7 @@ python3 loom.py run   examples/demo.loom            # => [1, 4, 9, 16, 25]
 python3 loom.py build examples/demo.loom --target js   # compile the checked program to JavaScript
 python3 loom.py source-map examples/demo.loom       # summarize WAT heap allocation source locations
 python3 loom.py source-map examples/demo.loom --format json  # stable machine source-map contract
+python3 loom.py about --format json             # machine-readable LOOM capability/canon summary
 python3 loom.py gate manifest.json             # redacted Gate manifest diagnostics
 python3 loom.py gate-request manifest.json --nonce <64-hex> --format json  # operator approval request
 python3 loom.py gate-claim manifest.json challenge.json approval.json --format json  # reserve signed approval before execution

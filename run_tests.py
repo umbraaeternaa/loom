@@ -2539,6 +2539,28 @@ def main(argv=None):
         print(f"  {'ok  ' if cli_boundary_ok else 'FAIL'} cli: stable module facade")
     except Exception as e:
         print(f"  FAIL cli module facade: {e}")
+    try:                                               # CLI/about gives dashboard/organism a machine-readable canon, not README scraping
+        import io, contextlib
+        about_out = io.StringIO()
+        with contextlib.redirect_stdout(about_out):
+            about_code = _loom._cli(["about", "--format=json"])
+        about_json = json.loads(about_out.getvalue())
+        about_api = _loom.build_about()
+        about_contract_ok = (
+            about_code == 0
+            and about_json == about_api
+            and about_json["schema"] == "loom-about/v1"
+            and about_json["language"] == "LOOM"
+            and about_json["citadel_checks"] == 414
+            and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
+            and about_json["i31_bits"] == 31
+            and "webassembly" in about_json["backends"]
+            and "about" in about_json["commands"]
+        )
+        ok += about_contract_ok
+        print(f"  {'ok  ' if about_contract_ok else 'FAIL'} cli/api: machine-readable about contract v1")
+    except Exception as e:
+        print(f"  FAIL cli/api about contract: {e}")
     try:                                               # published browser bundle discipline is explicit, not tribal knowledge
         play = Path(__file__).with_name("docs").joinpath("play.html").read_text()
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
@@ -2817,7 +2839,7 @@ def main(argv=None):
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 110   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 111   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 
