@@ -478,7 +478,20 @@ def _capture9_program():
 CAPTURE9_PROGRAM = _capture9_program()
 
 
-def main():
+def _finish(ok, total):
+    passed = (ok == total)
+    print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
+    return 0 if passed else 1
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv == ["--self-test-logical-fail-exit"]:
+        return _finish(0, 1)
+    if argv:
+        print("usage: run_tests.py [--self-test-logical-fail-exit]", file=sys.stderr)
+        return 2
+
     ok = 0
     for name, src, accept in CASES:
         _, errs = check(parse(src))
@@ -2661,6 +2674,20 @@ def main():
         print(f"  {'ok  ' if process_cli_doc_ok else 'FAIL'} docs: process CLI lifecycle pinned")
     except Exception as e:
         print(f"  FAIL process CLI lifecycle pin: {e}")
+    try:                                               # logical FAIL must hard-fail the process, not only print red text
+        runner_fail_closed = subprocess.run(
+            [sys.executable, str(Path(__file__)), "--self-test-logical-fail-exit"],
+            capture_output=True,
+            text=True,
+        )
+        runner_exit_ok = (
+            runner_fail_closed.returncode == 1
+            and "FAIL — 0/1 citadel checks" in runner_fail_closed.stdout
+        )
+        ok += runner_exit_ok
+        print(f"  {'ok  ' if runner_exit_ok else 'FAIL'} test runner: logical FAIL exits nonzero")
+    except Exception as e:
+        print(f"  FAIL test runner fail-closed exit pin: {e}")
     try:                                               # deterministic property fuzz is part of the citadel, not an optional side script
         fuzz = Path(__file__).with_name("fuzz_tests.py")
         fr = subprocess.run([sys.executable, str(fuzz), "--cases", "64", "--seed", "0xC17ADE1"], capture_output=True, text=True)
@@ -2669,10 +2696,8 @@ def main():
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 106   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle pins, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
-    passed = (ok == total)
-    print(f"{'PASS' if passed else 'FAIL'} — {ok}/{total} citadel checks")
-    return 0 if passed else 1
+    total = len(CASES) + 107   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    return _finish(ok, total)
 
 
 if __name__ == "__main__":
