@@ -42,7 +42,9 @@ Each registry entry is the implementation's single contract record:
 `i31.add` evaluates both arguments, adds them with LOOM's signed i31
 modulo-`2^31` wraparound, and returns one tagged i31. The interpreter and
 portable Python/JavaScript backends emulate that exact contract; WASM lowers
-the already-tagged operands to one `i32.add`, and WAT mirrors it visibly.
+the already-tagged operands to one `i32.add`, and WAT mirrors it visibly. The
+normative integer law is shared with ABI v1 in
+[`i31_semantics.md`](i31_semantics.md).
 
 `i31.sub` follows the same value and effect contract, subtracting the second
 argument from the first with identical modulo-`2^31` wraparound. WASM lowers

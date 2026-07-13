@@ -2674,6 +2674,30 @@ def main(argv=None):
         print(f"  {'ok  ' if process_cli_doc_ok else 'FAIL'} docs: process CLI lifecycle pinned")
     except Exception as e:
         print(f"  FAIL process CLI lifecycle pin: {e}")
+    try:                                               # i31 semantics are a normative cross-backend/ABI contract, not a comment
+        i31doc = Path(__file__).with_name("docs").joinpath("i31_semantics.md").read_text()
+        abi_doc = Path(__file__).with_name("docs").joinpath("wasm_abi_v1.md").read_text()
+        asm_doc = Path(__file__).with_name("docs").joinpath("asm_v0.md").read_text()
+        i31_doc_ok = (
+            "Status: normative for the interpreter, portable Python backend, portable" in i31doc
+            and "minimum: `-1073741824` (`-2^30`)" in i31doc
+            and "maximum: `1073741823` (`2^30 - 1`)" in i31doc
+            and "i31(n) = ((n - (-1073741824)) mod 2147483648) + (-1073741824)" in i31doc
+            and "`1073741823 + 1` becomes `-1073741824`" in i31doc
+            and "`-1073741824 - 1` becomes `1073741823`" in i31doc
+            and "`1073741823 * 2` becomes `-2`" in i31doc
+            and "`1073741823 * 1073741823` becomes `1`" in i31doc
+            and "ABI v1 encodes signed i31 integer `n` as the even tagged `i32` value `n << 1`" in i31doc
+            and "Changing any of the domain, literal rejection rule, wraparound equation," in i31doc
+            and '{"add": -1073741824, "sub": 1073741823, "mul": -2, "wide": 1}' in i31doc
+            and "[`i31_semantics.md`](i31_semantics.md)" in abi_doc
+            and "i31\ndomain/wraparound/host-decoding rule changes" in abi_doc
+            and "[`i31_semantics.md`](i31_semantics.md)" in asm_doc
+        )
+        ok += i31_doc_ok
+        print(f"  {'ok  ' if i31_doc_ok else 'FAIL'} docs: i31 semantics pinned")
+    except Exception as e:
+        print(f"  FAIL i31 semantics doc pin: {e}")
     try:                                               # logical FAIL must hard-fail the process, not only print red text
         runner_fail_closed = subprocess.run(
             [sys.executable, str(Path(__file__)), "--self-test-logical-fail-exit"],
@@ -2696,7 +2720,7 @@ def main(argv=None):
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 107   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 108   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/seamN-static backend guards, runtime/cli facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

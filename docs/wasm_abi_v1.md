@@ -20,7 +20,8 @@ Every LOOM function parameter and result uses one tagged `i32` value.
 The integer domain is `-1073741824..1073741823`. Literals outside this
 range are rejected. Arithmetic wraps modulo `2^31`, then is interpreted as
 a signed i31 value. A host decodes an even value with arithmetic shift
-right by one.
+right by one. The normative cross-backend integer law is specified in
+[`i31_semantics.md`](i31_semantics.md).
 
 Heap pointers are never confused with integers. To obtain the aligned
 memory address, clear the pointer's low bit (`value & -2`). Valid v1 heap
@@ -179,9 +180,9 @@ source names. Those maps describe one module and are not stable ABI IDs.
 ## Compatibility policy
 
 ABI version `1` must change if any tagged-value encoding, stable effect ID,
-heap kind, object offset, import signature, or closure convention changes.
-Adding a source-language form without changing those contracts does not by
-itself require a new ABI version.
+heap kind, object offset, import signature, closure convention, or i31
+domain/wraparound/host-decoding rule changes. Adding a source-language form
+without changing those contracts does not by itself require a new ABI version.
 
 Hosts must reject unknown ABI versions. A future incompatible layout must
 use a new integer version and a separate normative document.
