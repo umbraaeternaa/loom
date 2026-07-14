@@ -334,6 +334,13 @@ function renderApprovalRequest(result){
     s += "why approval is required:\n";
     for (const reason of req.policy_reasons) s += "  " + esc(reason.code + ": " + reason.message) + "\n";
   }
+  s += "\nwhat happens outside the browser:\n";
+  s += "  1. native operator issuer reviews and signs this request\n";
+  s += "  2. trusted host claims the signed approval before any action\n";
+  s += "  3. trusted host builds a bounded plan for declared actions only\n";
+  s += "  4. dry-run validates the attempt envelope against that plan\n";
+  s += "  5. finish consumes the claim exactly once and emits a receipt\n";
+  s += "<span class='gate-note'>the browser deliberately stops before private signing, claim, execution, ledger consumption, and receipt finalization</span>\n";
   return s;
 }
 
@@ -353,7 +360,7 @@ async function boot(){
     pyodide = await loadPyodide();
     setStatus("loading LOOM…");
     const bundleUrl = new URL("./loom.py", location.href);
-    bundleUrl.searchParams.set("v", "419-playground-approval-request-v1");
+    bundleUrl.searchParams.set("v", "420-playground-outside-browser-v1");
     const response = await fetch(bundleUrl, {cache: "no-store"});
     if (!response.ok) throw new Error("LOOM bundle HTTP " + response.status);
     const code = await response.text();
