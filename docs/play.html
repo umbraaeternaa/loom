@@ -76,6 +76,7 @@
     <button type="button" class="act" id="bGate" disabled>Gate diagnostics</button>
     <button type="button" class="act" id="bWorkflow" disabled>Gate workflow</button>
     <button type="button" class="act" id="bApproval" disabled>Approval request</button>
+    <button type="button" class="act" id="bApprovalCopy" disabled>Copy approval JSON</button>
     <span class="status" id="status">loading…</span>
   </div>
 
@@ -221,6 +222,7 @@ const EXAMPLES = [
 
 const $ = id => document.getElementById(id);
 let pyodide = null;
+let lastApprovalRequestJson = "";
 const GATE_DIAGNOSTIC_CLASS_LEGEND = ["CredentialAccess", "SecretExfil"];
 const GATE_DIAGNOSTIC_DISPOSITION_LEGEND = ["approval-required", "blocked"];
 
@@ -360,7 +362,7 @@ async function boot(){
     pyodide = await loadPyodide();
     setStatus("loading LOOM…");
     const bundleUrl = new URL("./loom.py", location.href);
-    bundleUrl.searchParams.set("v", "420-playground-outside-browser-v1");
+    bundleUrl.searchParams.set("v", "421-playground-approval-json-copy-v1");
     const response = await fetch(bundleUrl, {cache: "no-store"});
     if (!response.ok) throw new Error("LOOM bundle HTTP " + response.status);
     const code = await response.text();
@@ -368,6 +370,7 @@ async function boot(){
     pyodide.runPython("import loom, json");
     setStatus("ready ✓");
     ["bCheck","bRun","bWasm","bJs","bWat","bGate","bWorkflow","bApproval"].forEach(id => $(id).disabled = false);
+    $("bApprovalCopy").disabled = true;
     show("Ready — press <span class='v-eff'>Check</span>, or pick an example above.");
   } catch (e) {
     setStatus("failed to load");
@@ -700,11 +703,35 @@ _manifest = {
 }
 _challenge_result = loom.build_approval_challenge(_manifest, "1" * 64)
 _result = loom.build_approval_request(_manifest, _challenge_result["challenge"]) if _challenge_result["valid"] else _challenge_result
-_r = json.dumps(_result)
+_r = json.dumps(_result, indent=2, sort_keys=True)
 _r
 `);
+    lastApprovalRequestJson = JSON.stringify(request, null, 2);
+    $("bApprovalCopy").disabled = !request.valid;
     show(renderApprovalRequest(request));
   } catch(e){ show("<span class='v-bad'>Approval request error</span>\n" + esc(e)); }
+};
+
+$("bApprovalCopy").onclick = async () => {
+  if (!lastApprovalRequestJson) {
+    show("<span class='v-bad'>No approval request yet.</span>\nPress Approval request first.");
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(lastApprovalRequestJson);
+    setStatus("approval JSON copied");
+  } catch(e) {
+    const area = document.createElement("textarea");
+    area.value = lastApprovalRequestJson;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.left = "-9999px";
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand("copy");
+    document.body.removeChild(area);
+    setStatus("approval JSON copied");
+  }
 };
 
 boot();

@@ -2551,7 +2551,7 @@ def main(argv=None):
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 420
+            and about_json["citadel_checks"] == 421
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
@@ -2646,7 +2646,7 @@ def main(argv=None):
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "420-playground-outside-browser-v1")' in play
+            and 'bundleUrl.searchParams.set("v", "421-playground-approval-json-copy-v1")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -2836,6 +2836,23 @@ def main(argv=None):
         print(f"  {'ok  ' if off_browser_boundary_ok else 'FAIL'} docs: playground off-browser approval boundary pinned")
     except Exception as e:
         print(f"  FAIL playground off-browser approval boundary pin: {e}")
+    try:                                               # Playground can export the request JSON without signing in-browser
+        play = Path(__file__).with_name("docs").joinpath("play.html").read_text()
+        approval_json_copy_ok = (
+            'id="bApprovalCopy"' in play
+            and "Copy approval JSON" in play
+            and 'let lastApprovalRequestJson = ""' in play
+            and "lastApprovalRequestJson = JSON.stringify(request, null, 2)" in play
+            and "navigator.clipboard.writeText(lastApprovalRequestJson)" in play
+            and "Press Approval request first." in play
+            and "private signing" in play
+            and "/Users" not in play
+            and "API_KEY" not in play
+        )
+        ok += approval_json_copy_ok
+        print(f"  {'ok  ' if approval_json_copy_ok else 'FAIL'} docs: playground approval JSON copy pinned")
+    except Exception as e:
+        print(f"  FAIL playground approval JSON copy pin: {e}")
     try:                                               # runtime quantity mediation needs a design contract before it becomes ABI/runtime code
         qdoc = Path(__file__).with_name("docs").joinpath("wasm_quantity_mediation.md").read_text()
         quantity_doc_ok = (
@@ -2975,7 +2992,7 @@ def main(argv=None):
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 117   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 118   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 
