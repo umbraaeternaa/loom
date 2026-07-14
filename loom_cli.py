@@ -242,10 +242,30 @@ def _gate_workflow(frontend, src, output_format="text"):
         return 0 if workflow["valid"] and workflow["decision"] != "reject" else 1
     print("LOOM GATE WORKFLOW - bounded AI action route")
     print("decision: " + str(workflow["decision"]))
+    if workflow["agent"]:
+        print("agent: " + workflow["agent"]["id"] + " (" + workflow["agent"]["role"] + ")")
     if workflow["task_summary"]:
         print("task: " + workflow["task_summary"])
     if workflow["actions"]:
-        print("actions: " + ", ".join(workflow["actions"]))
+        print("requested actions: " + ", ".join(workflow["actions"]))
+    step_ids = [step["id"] for step in workflow["steps"]]
+    if not workflow["valid"]:
+        print("allowed now: fix the manifest only")
+        print("blocked until valid: approval, claim, plan, execution, finish")
+        print("next safe step: " + workflow["steps"][0]["id"])
+    elif workflow["decision"] == "reject":
+        print("allowed now: fix policy violations only")
+        print("blocked until policy accepts: approval, claim, plan, execution, finish")
+        print("next safe step: " + workflow["steps"][0]["id"])
+    elif workflow["decision"] == "accept":
+        print("allowed now: manifest-declared action only")
+        print("blocked always: anything outside declared actions and paths")
+        print("next safe step: " + workflow["steps"][0]["id"])
+    else:
+        print("allowed now: operator approval request only")
+        print("blocked until approval: " + ", ".join(step_ids[1:]))
+        print("next safe step: " + workflow["steps"][0]["id"])
+    print("safety: this command explains the route; it does not execute shell/network/tools")
     for step in workflow["steps"]:
         print(f"  {step['id']}: {step['description']}")
         if "command" in step:

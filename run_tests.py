@@ -2551,7 +2551,7 @@ def main(argv=None):
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 416
+            and about_json["citadel_checks"] == 417
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
@@ -2618,6 +2618,29 @@ def main(argv=None):
         print(f"  {'ok  ' if example_workflow_ok else 'FAIL'} examples: bounded AI action Gate workflow fixture")
     except Exception as e:
         print(f"  FAIL bounded AI action workflow fixture: {e}")
+    try:                                               # Gate workflow text is operator-readable, not JSON-only tribal knowledge
+        import io, contextlib
+        example_path = Path(__file__).with_name("examples").joinpath("bounded_ai_action_manifest.json")
+        text_out = io.StringIO()
+        with contextlib.redirect_stdout(text_out):
+            text_code = _loom._cli(["gate-workflow", str(example_path)])
+        text = text_out.getvalue()
+        operator_text_ok = (
+            text_code == 0
+            and "LOOM GATE WORKFLOW - bounded AI action route" in text
+            and "agent: codex (code)" in text
+            and "task: Review and plan a bounded LOOM code change" in text
+            and "decision: operator-required" in text
+            and "requested actions: process, read" in text
+            and "allowed now: operator approval request only" in text
+            and "blocked until approval: claim, plan, attempt-dry-run, finish" in text
+            and "next safe step: approval-request" in text
+            and "does not execute shell/network/tools" in text
+        )
+        ok += operator_text_ok
+        print(f"  {'ok  ' if operator_text_ok else 'FAIL'} cli: Gate workflow operator-readable text")
+    except Exception as e:
+        print(f"  FAIL Gate workflow operator text: {e}")
     try:                                               # published browser bundle discipline is explicit, not tribal knowledge
         play = Path(__file__).with_name("docs").joinpath("play.html").read_text()
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
@@ -2896,7 +2919,7 @@ def main(argv=None):
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 113   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 114   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 
