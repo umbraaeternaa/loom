@@ -74,6 +74,7 @@
     <button type="button" class="act" id="bJs" disabled>Compile → JS</button>
     <button type="button" class="act" id="bWat" disabled>Compile → WAT</button>
     <button type="button" class="act" id="bGate" disabled>Gate diagnostics</button>
+    <button type="button" class="act" id="bWorkflow" disabled>Gate workflow</button>
     <span class="status" id="status">loading…</span>
   </div>
 
@@ -285,6 +286,35 @@ function renderGateDiagnostics(diagnostics){
   }
   return s;
 }
+function renderGateWorkflow(workflow){
+  let s = "<span class='v-eff'>loom-gate-workflow/v1</span>\n";
+  s += "decision: <span class='" + (workflow.decision === "reject" ? "v-bad" : "v-ok") + "'>" + esc(workflow.decision) + "</span>\n";
+  if (workflow.agent) s += "agent: <span class='v-key'>" + esc(workflow.agent.id + " (" + workflow.agent.role + ")") + "</span>\n";
+  if (workflow.task_summary) s += "task: " + esc(workflow.task_summary) + "\n";
+  if (workflow.actions && workflow.actions.length) s += "requested actions: " + esc(workflow.actions.join(", ")) + "\n";
+  const steps = workflow.steps || [];
+  const stepIds = steps.map(step => step.id);
+  if (!workflow.valid) {
+    s += "allowed now: fix the manifest only\n";
+    s += "blocked until valid: approval, claim, plan, execution, finish\n";
+  } else if (workflow.decision === "reject") {
+    s += "allowed now: fix policy violations only\n";
+    s += "blocked until policy accepts: approval, claim, plan, execution, finish\n";
+  } else if (workflow.decision === "accept") {
+    s += "allowed now: manifest-declared action only\n";
+    s += "blocked always: anything outside declared actions and paths\n";
+  } else {
+    s += "allowed now: operator approval request only\n";
+    s += "blocked until approval: " + esc(stepIds.slice(1).join(", ")) + "\n";
+  }
+  if (steps.length) s += "next safe step: <span class='v-key'>" + esc(steps[0].id) + "</span>\n";
+  s += "<span class='gate-note'>route only: this panel does not execute shell/network/tools or approve anything</span>\n";
+  if (steps.length) {
+    s += "steps:\n";
+    for (const step of steps) s += "  " + esc(step.id + ": " + step.description) + "\n";
+  }
+  return s;
+}
 
 // render example chips
 EXAMPLES.forEach((ex,i) => {
@@ -302,14 +332,14 @@ async function boot(){
     pyodide = await loadPyodide();
     setStatus("loading LOOM…");
     const bundleUrl = new URL("./loom.py", location.href);
-    bundleUrl.searchParams.set("v", "405-playground-gate-diagnostics-v1");
+    bundleUrl.searchParams.set("v", "418-playground-gate-workflow-v1");
     const response = await fetch(bundleUrl, {cache: "no-store"});
     if (!response.ok) throw new Error("LOOM bundle HTTP " + response.status);
     const code = await response.text();
     pyodide.FS.writeFile("loom.py", code);
     pyodide.runPython("import loom, json");
     setStatus("ready ✓");
-    ["bCheck","bRun","bWasm","bJs","bWat","bGate"].forEach(id => $(id).disabled = false);
+    ["bCheck","bRun","bWasm","bJs","bWat","bGate","bWorkflow"].forEach(id => $(id).disabled = false);
     show("Ready — press <span class='v-eff'>Check</span>, or pick an example above.");
   } catch (e) {
     setStatus("failed to load");
@@ -601,6 +631,28 @@ _r
 `);
     show(renderGateDiagnostics(diagnostics));
   } catch(e){ show("<span class='v-bad'>Gate diagnostics error</span>\n" + esc(e)); }
+};
+
+$("bWorkflow").onclick = () => {
+  if(!pyodide) return;
+  try {
+    const workflow = pyjson(`
+import json
+_manifest = {
+    "schema": "loom-gate-manifest/v1",
+    "agent": {"id": "codex", "role": "code"},
+    "task": {"summary": "Review and plan a bounded LOOM code change", "intent": "Show the operator the safe route before any action"},
+    "repositories": [],
+    "read_paths": ["/project/loom"],
+    "write_paths": [],
+    "actions": ["read", "process"],
+    "evidence_required": [],
+}
+_r = json.dumps(loom.build_gate_workflow(_manifest))
+_r
+`);
+    show(renderGateWorkflow(workflow));
+  } catch(e){ show("<span class='v-bad'>Gate workflow error</span>\n" + esc(e)); }
 };
 
 boot();

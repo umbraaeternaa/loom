@@ -23,7 +23,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "405-playground-gate-diagnostics-v1")',
+        'bundleUrl.searchParams.set("v", "418-playground-gate-workflow-v1")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -113,11 +113,12 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "417 self-verifying checks",
-        ">417</div>",
+        "418 self-verifying checks",
+        ">418</div>",
     )
     forbidden = (
         "415 self-verifying checks",
+        "417 self-verifying checks",
         ">415</div>",
         "414 self-verifying checks",
         ">414</div>",
