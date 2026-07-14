@@ -2551,7 +2551,7 @@ def main(argv=None):
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 418
+            and about_json["citadel_checks"] == 419
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
@@ -2646,7 +2646,7 @@ def main(argv=None):
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "418-playground-gate-workflow-v1")' in play
+            and 'bundleUrl.searchParams.set("v", "419-playground-approval-request-v1")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -2800,6 +2800,26 @@ def main(argv=None):
         print(f"  {'ok  ' if gate_workflow_ui_ok else 'FAIL'} docs: playground Gate workflow UI pinned")
     except Exception as e:
         print(f"  FAIL playground Gate workflow UI pin: {e}")
+    try:                                               # Playground shows the approval-request envelope without pretending to sign or consume it
+        play = Path(__file__).with_name("docs").joinpath("play.html").read_text()
+        approval_request_ui_ok = (
+            'id="bApproval"' in play
+            and "Approval request" in play
+            and "function renderApprovalRequest(result)" in play
+            and "loom.build_approval_challenge(_manifest" in play
+            and "loom.build_approval_request(_manifest" in play
+            and "loom-gate-approval-request/v1" in play
+            and "not an approval: this envelope must leave the browser" in play
+            and "no private key, claim, ledger consumption, host action, or receipt is created here" in play
+            and "request sha256:" in play
+            and "why approval is required:" in play
+            and "/Users" not in play
+            and "API_KEY" not in play
+        )
+        ok += approval_request_ui_ok
+        print(f"  {'ok  ' if approval_request_ui_ok else 'FAIL'} docs: playground approval-request UI pinned")
+    except Exception as e:
+        print(f"  FAIL playground approval-request UI pin: {e}")
     try:                                               # runtime quantity mediation needs a design contract before it becomes ABI/runtime code
         qdoc = Path(__file__).with_name("docs").joinpath("wasm_quantity_mediation.md").read_text()
         quantity_doc_ok = (
@@ -2939,7 +2959,7 @@ def main(argv=None):
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 115   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 116   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 
