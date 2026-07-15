@@ -49,6 +49,8 @@ From the playground:
 Approval request -> Copy approval JSON -> request.json
 ```
 
+Or use `Download approval JSON` to save the same envelope as a file.
+
 The copied JSON contains both `manifest` and `challenge`. Save those exact
 objects as `manifest.json` and `challenge.json` if the trusted host does not
 already have them from the original workflow.
@@ -68,6 +70,17 @@ least:
 
 Only the native issuer writes `approval.json`. Codex, the playground, and the
 trusted host do not create the private signature.
+
+The reference operator-side issuer is:
+
+```console
+python3 examples/native_issuer.py request.json operator_private_key.json approval.json
+```
+
+It validates the request with `loom.validate_approval_request(request)`, displays
+the review surface, asks for explicit operator confirmation, and writes only the
+signed `approval.json`. It does not claim an approval, write the ledger, plan,
+execute, or finalize a receipt.
 
 ## 3. Trusted host claims before action
 

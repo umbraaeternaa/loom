@@ -2551,7 +2551,7 @@ def main(argv=None):
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 424
+            and about_json["citadel_checks"] == 425
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
@@ -2952,8 +2952,11 @@ def main(argv=None):
             "LOOM Gate native issuer handoff" in ndoc
             and "operator-facing bridge from the browser playground to the real trusted host lifecycle" in ndoc
             and "Approval request -> Copy approval JSON -> request.json" in ndoc
+            and "Download approval JSON" in ndoc
             and "the issuer validates the copied envelope with" in ndoc
             and "loom.validate_approval_request(request)" in ndoc
+            and "python3 examples/native_issuer.py request.json operator_private_key.json approval.json" in ndoc
+            and "It does not claim an approval, write the ledger, plan," in ndoc
             and "Only the native issuer writes `approval.json`" in ndoc
             and "python3 loom.py gate-claim manifest.json challenge.json approval.json --format json" in ndoc
             and "python3 loom.py gate-process-attempt plan.json attempt.json --format json" in ndoc
@@ -2961,11 +2964,45 @@ def main(argv=None):
             and "Do not let the agent that requests approval also control the issuer private" in ndoc
             and "Permission begins only after issuer signing and successful trusted-host claim" in ndoc
             and "docs/gate_native_issuer_handoff.md" in readme
+            and "examples/native_issuer.py" in readme
         )
         ok += native_issuer_doc_ok
         print(f"  {'ok  ' if native_issuer_doc_ok else 'FAIL'} docs: native issuer handoff pinned")
     except Exception as e:
         print(f"  FAIL native issuer handoff pin: {e}")
+    try:                                               # reference native issuer validates a copied request and writes only approval.json
+        native_issuer = Path(__file__).with_name("examples").joinpath("native_issuer.py")
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            request_file = td / "request.json"
+            private_key_file = td / "operator_private_key.json"
+            approval_file = td / "approval.json"
+            request_file.write_text(json.dumps(approval_request["request"]))
+            private_key_file.write_text(json.dumps({"algorithm": "rsa-pkcs1v15-sha256", "n": test_n_hex, "e": 65537, "d": format(test_d, "x")}))
+            issuer_run = subprocess.run([sys.executable, str(native_issuer), str(request_file), str(private_key_file), str(approval_file), "--yes"], capture_output=True, text=True)
+            issued_approval = json.loads(approval_file.read_text()) if approval_file.exists() else {}
+            verified_issued = verify_fn(approval_manifest, challenge, issued_approval, test_key) if issued_approval else {"valid": False, "findings": []}
+            ledger_absent = not any(path.name.endswith(".sqlite3") for path in td.iterdir())
+            claim_absent = not (td / "claim.json").exists()
+        native_issuer_example_ok = (
+            native_issuer.exists()
+            and issuer_run.returncode == 0
+            and "LOOM native issuer review" in issuer_run.stdout
+            and approval_request["request"]["request_sha256"] in issuer_run.stdout
+            and "wrote approval:" in issuer_run.stdout
+            and issued_approval["schema"] == "loom-gate-operator-approval/v1"
+            and issued_approval["challenge_sha256"] == challenge["challenge_sha256"]
+            and issued_approval["manifest_sha256"] == challenge["manifest_sha256"]
+            and issued_approval["approver"] == "operator"
+            and issued_approval["decision"] == "approve"
+            and issued_approval["key_sha256"] == key_hash
+            and verified_issued["valid"] is True
+            and ledger_absent and claim_absent
+        )
+        ok += native_issuer_example_ok
+        print(f"  {'ok  ' if native_issuer_example_ok else 'FAIL'} examples: native issuer writes signed approval only")
+    except Exception as e:
+        print(f"  FAIL native issuer example pin: {e}")
     try:                                               # i31 semantics are a normative cross-backend/ABI contract, not a comment
         i31doc = Path(__file__).with_name("docs").joinpath("i31_semantics.md").read_text()
         abi_doc = Path(__file__).with_name("docs").joinpath("wasm_abi_v1.md").read_text()
@@ -3047,7 +3084,7 @@ def main(argv=None):
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 121   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/native-issuer-doc/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 122   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/native-issuer-doc/native-issuer-example/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 
