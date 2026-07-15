@@ -2551,7 +2551,7 @@ def main(argv=None):
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 430
+            and about_json["citadel_checks"] == 431
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
@@ -3225,6 +3225,34 @@ def main(argv=None):
         print(f"  {'ok  ' if module_boundary_doc_ok else 'FAIL'} docs: module boundaries pinned")
     except Exception as e:
         print(f"  FAIL module boundaries doc pin: {e}")
+    try:                                               # public release readiness says what is stable, bounded, and not claimed
+        rdoc = Path(__file__).with_name("docs").joinpath("release_readiness.md").read_text()
+        readme = Path(__file__).with_name("README.md").read_text()
+        rdoc_words = " ".join(rdoc.split())
+        release_readiness_ok = (
+            "LOOM release readiness" in rdoc
+            and "Status: public release-readiness contract" in rdoc
+            and "PASS -- 431/431 citadel checks" in rdoc
+            and "python3 verify_docs_parity.py" in rdoc
+            and "Parser, checker, interpreter, and CLI facade." in rdoc
+            and "WebAssembly/WAT backend for the published supported surface" in rdoc
+            and "LOOM Gate advisory contracts" in rdoc
+            and "Experimental or bounded" in rdoc
+            and "does not magically confine arbitrary external tools" in rdoc_words
+            and "Native operator signing is intentionally outside the public language runtime." in rdoc
+            and "runtime quantity mediation for `seamN` counters is not yet an ABI-enforced runtime meter" in rdoc_words
+            and "Release verification checklist" in rdoc
+            and "loom.py about --format json" in rdoc
+            and "Non-claims" in rdoc
+            and "does not provide a mechanism to harvest passwords, keys, wallets" in rdoc
+            and "Internal development operations, private dashboards, private journals, and private automation" in rdoc_words
+            and "docs/release_readiness.md" in readme
+            and "what is experimental or bounded" in readme
+        )
+        ok += release_readiness_ok
+        print(f"  {'ok  ' if release_readiness_ok else 'FAIL'} docs: release readiness pinned")
+    except Exception as e:
+        print(f"  FAIL release readiness doc pin: {e}")
     try:                                               # logical FAIL must hard-fail the process, not only print red text
         runner_fail_closed = subprocess.run(
             [sys.executable, str(Path(__file__)), "--self-test-logical-fail-exit"],
@@ -3247,7 +3275,7 @@ def main(argv=None):
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 127   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 128   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

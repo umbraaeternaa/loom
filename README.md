@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 430 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 431 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 430/430 citadel checks
+PASS — 431/431 citadel checks
 ```
 
 ## The idea in one screen
@@ -146,6 +146,13 @@ python3 verify_docs_parity.py
 
 The workflow and invariants are documented in
 [docs/published_bundle_workflow.md](docs/published_bundle_workflow.md).
+
+## Release readiness
+
+The public release contract is pinned in
+[`docs/release_readiness.md`](docs/release_readiness.md). It lists what is
+stable today, what is experimental or bounded, the release verification
+commands, and the non-claims LOOM deliberately makes.
 
 ## Use it as a tool
 
