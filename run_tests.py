@@ -938,20 +938,21 @@ def main(argv=None):
         print(f"  {'ok  ' if heap_label_locations_ok else 'FAIL'} backend(WAT): allocation source labels include locations")
     except Exception as e:
         print(f"  FAIL backend(WAT) allocation labels: {e}")
-    try:                                               # seamN quantity is a source-checker guarantee in ABI v1; WASM carries cap presence, not a runtime quantum counter
+    try:                                               # seamN quantity now survives WASM/WAT lowering as an internal direct-effect meter without changing ABI imports/exports
         seam_k2 = '(defx t (Net) (fn (u) (seamN 2 (Net) (net u))))'
         seam_k5 = '(defx t (Net) (fn (u) (seamN 5 (Net) (net u))))'
         seam_wat_k2 = emit_wat(seam_k2)
         seam_meter_boundary_ok = (
-            seam_wat_k2 == emit_wat(seam_k5)
-            and compile_wasm(seam_k2) == compile_wasm(seam_k5)
+            seam_wat_k2 != emit_wat(seam_k5)
+            and compile_wasm(seam_k2) != compile_wasm(seam_k5)
             and "call $push_caps" in seam_wat_k2
             and "call $has_cap" in seam_wat_k2
-            and "seamN" not in seam_wat_k2
-            and "quantum" not in seam_wat_k2
+            and "seamN quantum for Net" in seam_wat_k2
+            and "local.set $__loom_meter_Net" in seam_wat_k2
+            and "local.get $__loom_meter_Net" in seam_wat_k2
         )
         ok += seam_meter_boundary_ok
-        print(f"  {'ok  ' if seam_meter_boundary_ok else 'FAIL'} backend(WASM): seamN quantum is static-only in ABI v1")
+        print(f"  {'ok  ' if seam_meter_boundary_ok else 'FAIL'} backend(WASM): seamN quantum lowers to an internal direct-effect meter")
     except Exception as e:
         print(f"  FAIL backend(WASM) seamN static boundary: {e}")
     try:                                               # i31 overflow semantics must match on every execution backend
@@ -3047,7 +3048,7 @@ def main(argv=None):
         print(f"  {'ok  ' if native_issuer_handoff_ok else 'FAIL'} docs: playground native issuer handoff pinned")
     except Exception as e:
         print(f"  FAIL playground native issuer handoff pin: {e}")
-    try:                                               # runtime quantity mediation needs a design contract before it becomes ABI/runtime code
+    try:                                               # runtime quantity mediation needs a design contract before it grows beyond the internal direct-effect meter
         qdoc = Path(__file__).with_name("docs").joinpath("wasm_quantity_mediation.md").read_text()
         quantity_doc_ok = (
             "LOOM WASM Quantity Mediation Roadmap" in qdoc
@@ -3056,8 +3057,10 @@ def main(argv=None):
             and "`loom_heap_limit`" in qdoc
             and "`loom_heap_used`" in qdoc
             and "Do not add `memory.grow` until heap growth is explicitly metered by LOOM." in qdoc
-            and "`push_caps` and `has_cap`" in qdoc
-            and "not represented as a binary runtime meter" in qdoc
+            and "`push_caps`" in qdoc
+            and "`has_cap`" in qdoc
+            and "internal compiler-emitted direct-effect counter for `seamN`" in qdoc
+            and "does not add imports, exports, globals, object\nlayouts, or host obligations" in qdoc
             and "Capability-use quantity and heap-byte quantity are one runtime-mediation family" in qdoc
             and "ABI v2" in qdoc
             and "No unmetered `memory.grow`." in qdoc
@@ -3348,6 +3351,7 @@ def main(argv=None):
             and "`has_cap`" in abi_doc
             and "`host_ffi`" in abi_doc
             and "source-checked capability presence only" in abi_doc
+            and "internal compiler-emitted local counters for\ndirect effects inside a metered seam" in abi_doc
             and "assigned by first\noccurrence of the foreign component name inside one compiled module" in abi_doc
             and "Repeated\nuses of the same foreign name in one module use the same raw ID" in abi_doc
             and "must not be persisted or compared across\nseparately compiled modules" in abi_doc
@@ -3402,7 +3406,7 @@ def main(argv=None):
             and "Experimental or bounded" in rdoc
             and "does not magically confine arbitrary external tools" in rdoc_words
             and "Native operator signing is intentionally outside the public language runtime." in rdoc
-            and "runtime quantity mediation for `seamN` counters is not yet an ABI-enforced runtime meter" in rdoc_words
+            and "`seamN` now lowers to an internal direct-effect runtime meter" in rdoc_words
             and "Release verification checklist" in rdoc
             and "python3 loom.py release-check" in rdoc
             and "python3 -m pip install ." in rdoc

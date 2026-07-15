@@ -13,9 +13,15 @@ LOOM has two different quantity stories today:
   `loom_heap_used`; `$reserve` increments the used counter for each successful
   heap allocation.
 
-ABI v1 does not yet have a runtime capability-use counter. Generated WASM
-contains capability presence gates through `push_caps` and `has_cap`; the
-numeric `seamN` quantum is not represented as a binary runtime meter.
+ABI v1 now has an internal compiler-emitted direct-effect counter for `seamN`.
+Generated WASM still contains capability presence gates through `push_caps` and
+`has_cap`; additionally, direct `IO`, `Net`, `Rand`, and `Alloc` effect
+boundaries inside a metered seam decrement a local runtime counter before the
+effect becomes visible. This does not add imports, exports, globals, object
+layouts, or host obligations.
+
+That internal meter is not yet a full ABI-enforced quantity mediation layer for
+closures, recursion, effect handlers, or future heap growth.
 
 ## Rule Before Growth
 
@@ -63,9 +69,11 @@ case, LOOM must either:
 
 ## Recommended Sequence
 
-1. Keep ABI v1 honest: source-checked quantities and heap-used diagnostics.
+1. Keep ABI v1 honest: source-checked quantities, internal direct-effect
+   `seamN` lowering, and heap-used diagnostics.
 2. Add human-facing diagnostics that explain which heap object families reserve
    bytes.
-3. Prototype a runtime meter behind tests, not public claims.
+3. Extend the internal runtime meter behind tests until closures, recursion,
+   handlers, and heap bytes compose.
 4. Only after capability-use and heap-byte meters compose, consider metered
    `memory.grow`.

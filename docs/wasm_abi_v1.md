@@ -63,7 +63,10 @@ Every binary module imports these functions from module `env`:
 | `host_ffi` | `(raw_foreign_id, tagged_arg_list, raw_silent) -> tagged_value` | Host foreign-function boundary; receives module-local foreign ID, tagged argument list, and a raw silence flag |
 
 The capability imports represent source-checked capability presence only. They
-do not encode the numeric `seamN K` quantum as a runtime counter in ABI v1.
+do not encode the numeric `seamN K` quantum as a host-visible counter in ABI v1.
+Generated modules may also carry internal compiler-emitted local counters for
+direct effects inside a metered seam; those counters do not add host imports,
+exports, globals, object layouts, or ABI obligations.
 The foreign ID passed to `host_ffi` is module-local metadata assigned by first
 occurrence of the foreign component name inside one compiled module. Repeated
 uses of the same foreign name in one module use the same raw ID; distinct names
@@ -192,8 +195,10 @@ builds, with no closure/layout state inherited across modules.
 - An unmatched variant arm emits a WebAssembly trap.
 - Metered source seams such as `seamN K` are enforced by the LOOM source
   checker before code generation. In ABI v1, generated WASM carries capability
-  presence only (`push_caps` / `has_cap`); the numeric quantum `K` is not a
-  runtime counter in the binary artifact.
+  presence (`push_caps` / `has_cap`) and may also lower direct effect uses inside
+  the metered seam to internal local counter checks. The numeric quantum `K` is
+  still not a host-visible ABI counter, and full quantity mediation for
+  closures, recursion, effect handlers, and future heap growth is outside ABI v1.
 - The current allocator does not grow memory. Generated modules declare one 64 KiB page
   and contain no `memory.grow` path. Before each runtime heap
   allocation, `$reserve` checks `hp + size <= loom_heap_limit` and also

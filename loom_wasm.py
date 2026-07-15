@@ -75,6 +75,16 @@ def _wasm_capmask(effs):
 def _wasm_require_cap(effid):
     return b"\x41" + _leb_s(effid) + b"\x10" + _leb_u(_WASM_I_HAS_CAP) + b"\x45\x04\x40\x00\x0b"
 
+def _wasm_meter_local(eff):
+    return "__loom_meter_" + eff
+
+def _wasm_meter_take(lmap, eff, metered_effs):
+    if eff not in (metered_effs or set()):
+        return b""
+    idx = lmap[_wasm_meter_local(eff)]
+    return (b"\x20" + _leb_u(idx) + b"\x45\x04\x40\x00\x0b"
+            + b"\x20" + _leb_u(idx) + _wasm_const(1) + b"\x6b\x21" + _leb_u(idx))
+
 def _wasm_transparent_body(frontend, node):
     head = node[0]
     if head in ("resource", "prov", "declassify"):
@@ -95,19 +105,20 @@ def _wasm_transparent_body(frontend, node):
         return node[1:]
     return None
 
-def _emit_wasm_seq(ctx, nodes, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env=None, handled_effs=None, with_handlers=None):
+def _emit_wasm_seq(ctx, nodes, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env=None, handled_effs=None, with_handlers=None, metered_effs=None):
     out = b""
     for i, child in enumerate(nodes):
-        out += _emit_wasm(ctx, child, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
+        out += _emit_wasm(ctx, child, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers, metered_effs)
         if i + 1 < len(nodes):
             out += b"\x1a"
     return out
 
-def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env=None, handled_effs=None, with_handlers=None):        # body bytes; lmap: name->local idx; helpers: cons/rec/get; tags/fields: ids; si: scrutinee local
+def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env=None, handled_effs=None, with_handlers=None, metered_effs=None):        # body bytes; lmap: name->local idx; helpers: cons/rec/get; tags/fields: ids; si: scrutinee local
     frontend = ctx.frontend
     callable_env = callable_env or set()
     handled_effs = handled_effs or set()
     with_handlers = with_handlers or {}
+    metered_effs = metered_effs or set()
     if isinstance(node, int): return _wasm_int(node)                    # immediate integer: n << 1, low bit clear
     if _is_symbol(node):
         if node in lmap: return b"\x20" + _leb_u(lmap[node])            # local.get (param / let / match-bound)
@@ -164,7 +175,18 @@ def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ca
         for b in node[2:]: out += _emit_wasm(ctx, b, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ncall, handled_effs, with_handlers)
         return out
     if h == "seamN":
-        return _emit_wasm(ctx, ["seam"] + node[2:], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
+        body = frontend.roleclauses(node[3:])[3]
+        granted = set(node[2]) - {"Pure"}
+        metered = {eff for eff in granted if eff in EFFECT_IDS}
+        out = b"\x41" + _leb_s(_wasm_capmask(node[2])) + b"\x10" + _leb_u(_WASM_I_PUSH_CAPS) + b"\x1a"
+        for eff in metered:
+            out += _wasm_const(node[1]) + b"\x21" + _leb_u(lmap[_wasm_meter_local(eff)])
+        nested_metered = set(metered_effs) | metered
+        for b in body:
+            out += _emit_wasm(ctx, b, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers, nested_metered)
+        for eff in metered:
+            out += _wasm_const(0) + b"\x21" + _leb_u(lmap[_wasm_meter_local(eff)])
+        return out + b"\x10" + _leb_u(_WASM_I_POP_CAPS) + b"\x1a"
     if h in ("seam", "seam1"):
         body = frontend.roleclauses(node[2:])[3]
         out = b"\x41" + _leb_s(_wasm_capmask(node[1])) + b"\x10" + _leb_u(_WASM_I_PUSH_CAPS) + b"\x1a"
@@ -190,7 +212,7 @@ def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ca
         apply1_id = ctx.apply_ids.get(1, ctx.apply1_id)
         if "IO" in with_handlers:
             return _emit_wasm(ctx, with_handlers["IO"], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply1_id + _WASM_IMPORTS)
-        out = _wasm_require_cap(EFFECT_IDS["IO"]) + b"\x41" + _leb_s(EFFECT_IDS["IO"]) + b"\x10" + _leb_u(_WASM_I_CURRENT) + b"\x22" + _leb_u(lmap["hd"]) + b"\x45\x04\x7f"
+        out = _wasm_require_cap(EFFECT_IDS["IO"]) + _wasm_meter_take(lmap, "IO", metered_effs) + b"\x41" + _leb_s(EFFECT_IDS["IO"]) + b"\x10" + _leb_u(_WASM_I_CURRENT) + b"\x22" + _leb_u(lmap["hd"]) + b"\x45\x04\x7f"
         out += _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
         out += b"\x10" + _leb_u(_WASM_I_PRINT) + b"\x05" + b"\x20" + _leb_u(lmap["hd"]) + _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply1_id + _WASM_IMPORTS) + b"\x0b"
         if "IO" in handled_effs:
@@ -200,7 +222,7 @@ def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ca
         apply1_id = ctx.apply_ids.get(1, ctx.apply1_id)
         if "Net" in with_handlers:
             return _emit_wasm(ctx, with_handlers["Net"], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply1_id + _WASM_IMPORTS)
-        out = _wasm_require_cap(EFFECT_IDS["Net"]) + b"\x41" + _leb_s(EFFECT_IDS["Net"]) + b"\x10" + _leb_u(_WASM_I_CURRENT) + b"\x22" + _leb_u(lmap["hd"]) + b"\x45\x04\x7f"
+        out = _wasm_require_cap(EFFECT_IDS["Net"]) + _wasm_meter_take(lmap, "Net", metered_effs) + b"\x41" + _leb_s(EFFECT_IDS["Net"]) + b"\x10" + _leb_u(_WASM_I_CURRENT) + b"\x22" + _leb_u(lmap["hd"]) + b"\x45\x04\x7f"
         out += b"\x41" + _leb_s(EFFECT_IDS["Net"]) + _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(cons_i + 1 + _WASM_IMPORTS)
         out += b"\x05" + b"\x20" + _leb_u(lmap["hd"]) + _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply1_id + _WASM_IMPORTS) + b"\x0b"
         return out
@@ -210,7 +232,7 @@ def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ca
             raise frontend.error("wasm: missing arity-0 apply helper")
         if "Rand" in with_handlers:
             return _emit_wasm(ctx, with_handlers["Rand"], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply0_id + _WASM_IMPORTS)
-        out = _wasm_require_cap(EFFECT_IDS["Rand"]) + b"\x41" + _leb_s(EFFECT_IDS["Rand"]) + b"\x10" + _leb_u(_WASM_I_CURRENT) + b"\x22" + _leb_u(lmap["hd"]) + b"\x45\x04\x7f"
+        out = _wasm_require_cap(EFFECT_IDS["Rand"]) + _wasm_meter_take(lmap, "Rand", metered_effs) + b"\x41" + _leb_s(EFFECT_IDS["Rand"]) + b"\x10" + _leb_u(_WASM_I_CURRENT) + b"\x22" + _leb_u(lmap["hd"]) + b"\x45\x04\x7f"
         out += b"\x41" + _leb_s(EFFECT_IDS["Rand"]) + b"\x41\x00" + b"\x10" + _leb_u(cons_i + 1 + _WASM_IMPORTS)
         out += b"\x05" + b"\x20" + _leb_u(lmap["hd"]) + b"\x10" + _leb_u(apply0_id + _WASM_IMPORTS) + b"\x0b"
         return out
@@ -218,7 +240,7 @@ def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ca
         apply1_id = ctx.apply_ids.get(1, ctx.apply1_id)
         if "Alloc" in with_handlers:
             return _emit_wasm(ctx, with_handlers["Alloc"], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + _emit_wasm(ctx, node[1] if len(node) > 1 else 0, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply1_id + _WASM_IMPORTS)
-        out = _wasm_require_cap(EFFECT_IDS["Alloc"]) + b"\x41" + _leb_s(EFFECT_IDS["Alloc"]) + b"\x10" + _leb_u(_WASM_I_CURRENT) + b"\x22" + _leb_u(lmap["hd"]) + b"\x45\x04\x7f"
+        out = _wasm_require_cap(EFFECT_IDS["Alloc"]) + _wasm_meter_take(lmap, "Alloc", metered_effs) + b"\x41" + _leb_s(EFFECT_IDS["Alloc"]) + b"\x10" + _leb_u(_WASM_I_CURRENT) + b"\x22" + _leb_u(lmap["hd"]) + b"\x45\x04\x7f"
         if len(node) == 1:
             out += _wasm_const(_WASM_NIL)
         else:
@@ -232,7 +254,7 @@ def _emit_wasm(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ca
         return out
     transparent_body = _wasm_transparent_body(frontend, node)
     if transparent_body is not None:
-        return _emit_wasm_seq(ctx, transparent_body, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
+        return _emit_wasm_seq(ctx, transparent_body, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers, metered_effs)
     if h == "ffi":
         if type(node[1]) is not str:
             raise frontend.error("wasm: ffi name must be a string literal")
@@ -602,7 +624,7 @@ def compile_wasm(program_src, frontend):
     for t in ds:
         fn = t[3]; params = [frontend.pname(p) for p in fn[1]]; names = []; flags = {"match": False}
         for b in fn[2:]: _wasm_locals(b, names, flags)
-        seen = list(dict.fromkeys(["hd"] + names))         # handler temp + unique let-names + match-vars -> local slots after the params
+        seen = list(dict.fromkeys(["hd"] + [_wasm_meter_local(eff) for eff in EFFECT_IDS] + names))         # handler temp + meter slots + unique let-names + match-vars
         lmap = {p: i for i, p in enumerate(params)}
         for j, nm in enumerate(seen): lmap[nm] = len(params) + j
         si = len(params) + len(seen)                        # one shared scrutinee temp per function (used by match)
@@ -613,7 +635,7 @@ def compile_wasm(program_src, frontend):
         fn = spec["node"]; params = spec["captures"] + [frontend.pname(p) for p in fn[1]]
         names = []; flags = {"match": False}
         for b in fn[2:]: _wasm_locals(b, names, flags)
-        seen = list(dict.fromkeys(["hd"] + names))
+        seen = list(dict.fromkeys(["hd"] + [_wasm_meter_local(eff) for eff in EFFECT_IDS] + names))
         lmap = {p: i for i, p in enumerate(params)}
         for j, nm in enumerate(seen): lmap[nm] = len(params) + j
         si = len(params) + len(seen)
@@ -804,6 +826,7 @@ def emit_wat(program_src, frontend):
         handled_effs = handled_effs or set()
         with_handlers = with_handlers or {}
         callable_env = callable_env or set()
+        metered_effs = getattr(w, "_metered_effs", set())
         if path is None and isinstance(node, list):
             path = ctx.node_path_by_id.get(id(node))
         def child_path(i):
@@ -815,6 +838,12 @@ def emit_wat(program_src, frontend):
                 if i + 1 < len(nodes):
                     out += [ind + "drop"]
             return out
+        def meter_take(eff):
+            if eff not in metered_effs:
+                return []
+            local = _wasm_meter_local(eff)
+            return [ind + "local.get $" + local, ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end",
+                    ind + "local.get $" + local, ind + "i32.const 1", ind + "i32.sub", ind + "local.set $" + local]
         if isinstance(node, int): return [ind + "i32.const " + str(node << 1) + "  ;; int " + str(node)]
         if _is_symbol(node):
             if node in ctx.topdefs:
@@ -865,7 +894,22 @@ def emit_wat(program_src, frontend):
             for i, b in enumerate(node[2:], 2): o += w(b, ind, handled_effs, with_handlers, ncall, child_path(i))
             return o
         if h == "seamN":
-            return w(["seam"] + node[2:], ind, handled_effs, with_handlers, callable_env)
+            body = frontend.roleclauses(node[3:])[3]
+            metered = [eff for eff in node[2] if eff in EFFECT_IDS]
+            o = [ind + "i32.const " + str(_wasm_capmask(node[2])), ind + "call $push_caps", ind + "drop"]
+            for eff in metered:
+                o += [ind + "i32.const " + str(node[1]) + "  ;; seamN quantum for " + eff,
+                      ind + "local.set $" + _wasm_meter_local(eff)]
+            old_metered = getattr(w, "_metered_effs", set())
+            w._metered_effs = set(old_metered) | set(metered)
+            try:
+                for b in body:
+                    o += w(b, ind, handled_effs, with_handlers, callable_env)
+            finally:
+                w._metered_effs = old_metered
+            for eff in metered:
+                o += [ind + "i32.const 0", ind + "local.set $" + _wasm_meter_local(eff)]
+            return o + [ind + "call $pop_caps", ind + "drop"]
         if h in ("seam", "seam1"):
             body = frontend.roleclauses(node[2:])[3]
             o = [ind + "i32.const " + str(_wasm_capmask(node[1])), ind + "call $push_caps", ind + "drop"]
@@ -888,7 +932,7 @@ def emit_wat(program_src, frontend):
             uses_print[0] = True
             if "IO" in with_handlers:
                 return w(with_handlers["IO"], ind, handled_effs, with_handlers, callable_env) + w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + [ind + "call $apply1"]
-            cap = [ind + "i32.const 0  ;; effect IO", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end"]
+            cap = [ind + "i32.const 0  ;; effect IO", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end"] + meter_take("IO")
             if "IO" in handled_effs:
                 return cap + w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1))
             return cap + w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + [ind + "call $host_print"]
@@ -896,19 +940,19 @@ def emit_wat(program_src, frontend):
             uses_heap[0] = True
             if "Net" in with_handlers:
                 return w(with_handlers["Net"], ind, handled_effs, with_handlers, callable_env) + w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + [ind + "call $apply1"]
-            return [ind + "i32.const 1  ;; effect Net", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end", ind + "i32.const 1  ;; effect Net"] + w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + [ind + "call $effbox  ;; alloc effect box from net" + _wat_at(ctx, path)]
+            return [ind + "i32.const 1  ;; effect Net", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end"] + meter_take("Net") + [ind + "i32.const 1  ;; effect Net"] + w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + [ind + "call $effbox  ;; alloc effect box from net" + _wat_at(ctx, path)]
         if h == "rand":
             uses_heap[0] = True
             if "Rand" in with_handlers:
                 return w(with_handlers["Rand"], ind, handled_effs, with_handlers, callable_env) + [ind + "call $apply0"]
-            return [ind + "i32.const 2  ;; effect Rand", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end", ind + "i32.const 2  ;; effect Rand", ind + "i32.const 0"] + [ind + "call $effbox  ;; alloc effect box from rand" + _wat_at(ctx, path)]
+            return [ind + "i32.const 2  ;; effect Rand", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end"] + meter_take("Rand") + [ind + "i32.const 2  ;; effect Rand", ind + "i32.const 0"] + [ind + "call $effbox  ;; alloc effect box from rand" + _wat_at(ctx, path)]
         if h == "alloc":
             uses_heap[0] = True
             if "Alloc" in with_handlers:
                 return w(with_handlers["Alloc"], ind, handled_effs, with_handlers, callable_env) + w(node[1] if len(node) > 1 else 0, ind, handled_effs, with_handlers, callable_env, child_path(1) if len(node) > 1 else None) + [ind + "call $apply1"]
             if len(node) == 1:
-                return [ind + "i32.const 3  ;; effect Alloc", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end", ind + "i32.const " + str(_WASM_NIL)]
-            return [ind + "i32.const 3  ;; effect Alloc", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end"] + w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + [ind + "i32.const 0", ind + "call $alloc  ;; alloc list cells from alloc" + _wat_at(ctx, path)]
+                return [ind + "i32.const 3  ;; effect Alloc", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end"] + meter_take("Alloc") + [ind + "i32.const " + str(_WASM_NIL)]
+            return [ind + "i32.const 3  ;; effect Alloc", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end"] + meter_take("Alloc") + w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + [ind + "i32.const 0", ind + "call $alloc  ;; alloc list cells from alloc" + _wat_at(ctx, path)]
         transparent_body = _wasm_transparent_body(frontend, node)
         if transparent_body is not None:
             return seq(transparent_body)
@@ -979,7 +1023,7 @@ def emit_wat(program_src, frontend):
     bodies = []
     for t in ds:
         fn = t[3]; pn = [frontend.pname(p) for p in fn[1]]; sig = " ".join("(param $" + p + " i32)" for p in pn)
-        nm = ["hd"]; flags = {"match": False}
+        nm = ["hd"] + [_wasm_meter_local(eff) for eff in EFFECT_IDS]; flags = {"match": False}
         for b in fn[2:]: _wasm_locals(b, nm, flags)
         locs = " ".join("(local $" + x + " i32)" for x in dict.fromkeys(nm))
         if flags["match"]: locs = (locs + " " if locs else "") + "(local $s i32)"
@@ -989,7 +1033,7 @@ def emit_wat(program_src, frontend):
                       + ["  )", '  (export "' + t[1] + '" (func $' + t[1] + "))"])
     for spec in order:
         fn = spec["node"]; params = spec["captures"] + [frontend.pname(p) for p in fn[1]]; sig = " ".join("(param $" + p + " i32)" for p in params)
-        nm = ["hd"]; flags = {"match": False}
+        nm = ["hd"] + [_wasm_meter_local(eff) for eff in EFFECT_IDS]; flags = {"match": False}
         for b in fn[2:]: _wasm_locals(b, nm, flags)
         locs = " ".join("(local $" + x + " i32)" for x in dict.fromkeys(nm))
         if flags["match"]: locs = (locs + " " if locs else "") + "(local $s i32)"

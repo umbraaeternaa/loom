@@ -54,8 +54,10 @@ experimental, and what LOOM does not claim yet.
 - Native operator signing is intentionally outside the public language runtime.
   LOOM verifies the approval artifact and documents the required boundary; it
   does not ship private keys or production key ownership.
-- WASM ABI v1 is stable for the documented surface, but runtime quantity
-  mediation for `seamN` counters is not yet an ABI-enforced runtime meter.
+- WASM ABI v1 is stable for the documented surface. `seamN` now lowers to an
+  internal direct-effect runtime meter without adding host ABI obligations, but
+  full ABI-enforced quantity mediation across closures, recursion, handlers, and
+  future heap growth remains experimental.
 - Future incompatible changes to tagged values, stable effect IDs, host imports,
   or exported ABI metadata require a new ABI version.
 
