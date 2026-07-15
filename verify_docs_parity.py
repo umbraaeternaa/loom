@@ -23,7 +23,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "422-playground-native-issuer-handoff-v1")',
+        'bundleUrl.searchParams.set("v", "424-playground-approval-json-download-v1")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -113,13 +113,15 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "423 self-verifying checks",
-        ">423</div>",
+        "424 self-verifying checks",
+        ">424</div>",
     )
     forbidden = (
         "415 self-verifying checks",
         "417 self-verifying checks",
         "418 self-verifying checks",
+        "423 self-verifying checks",
+        ">423</div>",
         "422 self-verifying checks",
         ">422</div>",
         "421 self-verifying checks",

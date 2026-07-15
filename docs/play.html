@@ -77,6 +77,7 @@
     <button type="button" class="act" id="bWorkflow" disabled>Gate workflow</button>
     <button type="button" class="act" id="bApproval" disabled>Approval request</button>
     <button type="button" class="act" id="bApprovalCopy" disabled>Copy approval JSON</button>
+    <button type="button" class="act" id="bApprovalDownload" disabled>Download approval JSON</button>
     <span class="status" id="status">loading…</span>
   </div>
 
@@ -367,7 +368,7 @@ async function boot(){
     pyodide = await loadPyodide();
     setStatus("loading LOOM…");
     const bundleUrl = new URL("./loom.py", location.href);
-    bundleUrl.searchParams.set("v", "422-playground-native-issuer-handoff-v1");
+    bundleUrl.searchParams.set("v", "424-playground-approval-json-download-v1");
     const response = await fetch(bundleUrl, {cache: "no-store"});
     if (!response.ok) throw new Error("LOOM bundle HTTP " + response.status);
     const code = await response.text();
@@ -376,6 +377,7 @@ async function boot(){
     setStatus("ready ✓");
     ["bCheck","bRun","bWasm","bJs","bWat","bGate","bWorkflow","bApproval"].forEach(id => $(id).disabled = false);
     $("bApprovalCopy").disabled = true;
+    $("bApprovalDownload").disabled = true;
     show("Ready — press <span class='v-eff'>Check</span>, or pick an example above.");
   } catch (e) {
     setStatus("failed to load");
@@ -713,6 +715,7 @@ _r
 `);
     lastApprovalRequestJson = JSON.stringify(request, null, 2);
     $("bApprovalCopy").disabled = !request.valid;
+    $("bApprovalDownload").disabled = !request.valid;
     show(renderApprovalRequest(request));
   } catch(e){ show("<span class='v-bad'>Approval request error</span>\n" + esc(e)); }
 };
@@ -737,6 +740,23 @@ $("bApprovalCopy").onclick = async () => {
     document.body.removeChild(area);
     setStatus("approval JSON copied");
   }
+};
+
+$("bApprovalDownload").onclick = () => {
+  if (!lastApprovalRequestJson) {
+    show("<span class='v-bad'>No approval request yet.</span>\nPress Approval request first.");
+    return;
+  }
+  const blob = new Blob([lastApprovalRequestJson + "\n"], {type: "application/json"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "loom-approval-request.json";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  setStatus("approval JSON downloaded");
 };
 
 boot();
