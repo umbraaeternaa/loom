@@ -50,6 +50,19 @@ The private key must remain in a separate operator-controlled issuer.
 `/Users/macbook/codex/Кодекс/gate/operator_public_key.json` and verifies the
 complete binding. The API does not accept a caller-selected key.
 
+The reference pinning helper is:
+
+```console
+python3 examples/pin_operator_public_key.py operator_public_key.json
+```
+
+It accepts either a public key JSON (`algorithm`, `n`, `e`) or the private-key
+JSON used by the reference issuer (`algorithm`, `n`, `e`, `d`).
+It writes only the public portion to the pinned verifier path.
+It creates the parent directory as `0700`, writes the key file as `0600`, and
+refuses a symlink output path.
+It is an operator setup helper, not an approval issuer, and not an agent approval path.
+
 `loom.consume_operator_approval(...)` then atomically inserts the approval hash
 into the fixed SQLite ledger
 `/Users/macbook/codex/Кодекс/gate/operator_approvals.sqlite3`. The SHA-256

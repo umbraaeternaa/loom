@@ -2551,7 +2551,7 @@ def main(argv=None):
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 425
+            and about_json["citadel_checks"] == 426
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
@@ -2956,6 +2956,7 @@ def main(argv=None):
             and "the issuer validates the copied envelope with" in ndoc
             and "loom.validate_approval_request(request)" in ndoc
             and "python3 examples/native_issuer.py request.json operator_private_key.json approval.json" in ndoc
+            and "python3 examples/pin_operator_public_key.py operator_public_key.json" in ndoc
             and "It does not claim an approval, write the ledger, plan," in ndoc
             and "Only the native issuer writes `approval.json`" in ndoc
             and "python3 loom.py gate-claim manifest.json challenge.json approval.json --format json" in ndoc
@@ -2965,6 +2966,7 @@ def main(argv=None):
             and "Permission begins only after issuer signing and successful trusted-host claim" in ndoc
             and "docs/gate_native_issuer_handoff.md" in readme
             and "examples/native_issuer.py" in readme
+            and "examples/pin_operator_public_key.py" in readme
         )
         ok += native_issuer_doc_ok
         print(f"  {'ok  ' if native_issuer_doc_ok else 'FAIL'} docs: native issuer handoff pinned")
@@ -3003,6 +3005,41 @@ def main(argv=None):
         print(f"  {'ok  ' if native_issuer_example_ok else 'FAIL'} examples: native issuer writes signed approval only")
     except Exception as e:
         print(f"  FAIL native issuer example pin: {e}")
+    try:                                               # operator public-key pinning writes only verifier material with strict file modes
+        pin_helper = Path(__file__).with_name("examples").joinpath("pin_operator_public_key.py")
+        approval_doc = Path(__file__).with_name("docs").joinpath("gate_operator_approval_v1.md").read_text()
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            private_key_file = td / "operator_private_key.json"
+            pinned_file = td / "gate" / "operator_public_key.json"
+            symlink_file = td / "gate" / "bad_link.json"
+            private_key_file.write_text(json.dumps({"algorithm": "rsa-pkcs1v15-sha256", "n": test_n_hex, "e": 65537, "d": format(test_d, "x")}))
+            pin_run = subprocess.run([sys.executable, str(pin_helper), str(private_key_file), "--output", str(pinned_file)], capture_output=True, text=True)
+            pinned_key = json.loads(pinned_file.read_text()) if pinned_file.exists() else {}
+            pinned_mode = pinned_file.stat().st_mode & 0o777 if pinned_file.exists() else 0
+            pinned_dir_mode = pinned_file.parent.stat().st_mode & 0o777 if pinned_file.parent.exists() else 0
+            symlink_file.symlink_to(pinned_file)
+            symlink_run = subprocess.run([sys.executable, str(pin_helper), str(private_key_file), "--output", str(symlink_file)], capture_output=True, text=True)
+        pin_operator_key_ok = (
+            pin_helper.exists()
+            and pin_run.returncode == 0
+            and pinned_key == test_key
+            and "d" not in pinned_key
+            and pinned_mode == 0o600
+            and pinned_dir_mode == 0o700
+            and key_hash in pin_run.stdout
+            and "pinned operator public key:" in pin_run.stdout
+            and symlink_run.returncode != 0
+            and "symlink" in (symlink_run.stdout + symlink_run.stderr)
+            and "python3 examples/pin_operator_public_key.py operator_public_key.json" in approval_doc
+            and "writes only the public portion to the pinned verifier path" in approval_doc
+            and "not an approval issuer" in approval_doc
+            and "agent approval path" in approval_doc
+        )
+        ok += pin_operator_key_ok
+        print(f"  {'ok  ' if pin_operator_key_ok else 'FAIL'} examples: operator public key pinning writes verifier key only")
+    except Exception as e:
+        print(f"  FAIL operator public key pinning pin: {e}")
     try:                                               # i31 semantics are a normative cross-backend/ABI contract, not a comment
         i31doc = Path(__file__).with_name("docs").joinpath("i31_semantics.md").read_text()
         abi_doc = Path(__file__).with_name("docs").joinpath("wasm_abi_v1.md").read_text()
@@ -3084,7 +3121,7 @@ def main(argv=None):
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 122   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/native-issuer-doc/native-issuer-example/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 123   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/native-issuer-doc/native-issuer-example/operator-public-key-pinning/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

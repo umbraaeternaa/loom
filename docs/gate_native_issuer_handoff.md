@@ -82,6 +82,15 @@ the review surface, asks for explicit operator confirmation, and writes only the
 signed `approval.json`. It does not claim an approval, write the ledger, plan,
 execute, or finalize a receipt.
 
+Before the trusted host can verify `approval.json`, pin the matching public key:
+
+```console
+python3 examples/pin_operator_public_key.py operator_public_key.json
+```
+
+The helper may read the reference private-key JSON too, but it writes only
+`algorithm`, `n`, and `e` to LOOM's fixed verifier path.
+
 ## 3. Trusted host claims before action
 
 ```console
