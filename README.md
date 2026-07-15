@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 431 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 432 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 431/431 citadel checks
+PASS — 432/432 citadel checks
 ```
 
 ## The idea in one screen
@@ -153,6 +153,7 @@ The public release contract is pinned in
 [`docs/release_readiness.md`](docs/release_readiness.md). It lists what is
 stable today, what is experimental or bounded, the release verification
 commands, and the non-claims LOOM deliberately makes.
+For one-command verification of a checkout, run `python3 loom.py release-check`.
 
 ## Use it as a tool
 
@@ -164,6 +165,7 @@ python3 loom.py run   examples/demo.loom            # => [1, 4, 9, 16, 25]
 python3 loom.py build examples/demo.loom --target js   # compile the checked program to JavaScript
 python3 loom.py source-map examples/demo.loom       # summarize WAT heap allocation source locations
 python3 loom.py source-map examples/demo.loom --format json  # stable machine source-map contract
+python3 loom.py release-check                  # run the public release verification checklist
 python3 loom.py about --format json             # machine-readable LOOM capability/canon summary
 python3 loom.py gate manifest.json             # redacted Gate manifest diagnostics
 python3 loom.py gate-workflow manifest.json --format json  # safe next-step route for an AI/host action

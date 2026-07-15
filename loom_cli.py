@@ -4,6 +4,8 @@
 import hashlib
 import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import loom_approval as _loom_approval
@@ -37,6 +39,9 @@ def _parse_flags(argv):
             index += 2
         elif arg.startswith("--nonce="):
             flags["nonce"] = arg.split("=", 1)[1]
+            index += 1
+        elif arg == "--dry-run":
+            flags["dry_run"] = True
             index += 1
         else:
             pos.append(arg)
@@ -119,6 +124,66 @@ def _about(frontend, output_format="text"):
     print(f"i31: {about['i31_bits']} bit signed wraparound")
     print("backends: " + ", ".join(about["backends"]))
     return 0
+
+
+_RELEASE_CHECK_STEPS = (
+    ("citadel", ("python3", "run_tests.py")),
+    ("docs-parity", ("python3", "verify_docs_parity.py")),
+    ("fuzz", ("python3", "fuzz_tests.py", "--cases", "256", "--seed", "0xBADC0DE")),
+    ("about", ("python3", "loom.py", "about", "--format", "json")),
+)
+
+
+def _summarize_output(text):
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    return lines[-1][:240]
+
+
+def _release_check(frontend, output_format="text", dry_run=False):
+    del frontend
+    root = Path(__file__).resolve().parent
+    steps = []
+    ok = True
+    for step_id, command in _RELEASE_CHECK_STEPS:
+        item = {
+            "id": step_id,
+            "command": list(command),
+            "returncode": None,
+            "summary": "planned",
+        }
+        if dry_run:
+            steps.append(item)
+            continue
+        run_command = [sys.executable if part == "python3" else part for part in command]
+        proc = subprocess.run(run_command, cwd=str(root), capture_output=True, text=True)
+        item.update({
+            "returncode": proc.returncode,
+            "summary": _summarize_output(proc.stdout) or _summarize_output(proc.stderr),
+        })
+        if proc.returncode != 0:
+            ok = False
+            item["stderr_tail"] = _summarize_output(proc.stderr)
+            item["stdout_tail"] = _summarize_output(proc.stdout)
+        steps.append(item)
+    result = {
+        "schema": "loom-release-check/v1",
+        "ok": ok,
+        "dry_run": bool(dry_run),
+        "steps": steps,
+    }
+    if output_format == "json":
+        _emit_json(result)
+        return 0 if ok else 1
+    print("LOOM release check" + (" (dry run)" if dry_run else ""))
+    for item in steps:
+        status = "PLAN" if dry_run else ("PASS" if item["returncode"] == 0 else "FAIL")
+        print(f"{status} {item['id']}: " + " ".join(item["command"]))
+        if item["summary"] and item["summary"] != "planned":
+            print("  " + item["summary"])
+    print("PASS release-check" if ok else "FAIL release-check")
+    return 0 if ok else 1
 
 
 def _gate(frontend, src, output_format="text"):
@@ -569,8 +634,9 @@ def _check(frontend, src, output_format="text"):
 
 def cli(argv, frontend):
     flags, pos = _parse_flags(argv)
+    usage = "usage: python3 loom.py <about|release-check|check|run|build|audit|source-map|gate|gate-workflow|gate-request|gate-claim|gate-finish|gate-plan|gate-exec-finish|gate-attempt|gate-process-attempt|gate-process-finish> FILE... [call] [--target py|js|wat] [--format text|json] [--nonce HEX64] [--dry-run]"
     if len(pos) < 1:
-        print("usage: python3 loom.py <about|check|run|build|audit|source-map|gate|gate-workflow|gate-request|gate-claim|gate-finish|gate-plan|gate-exec-finish|gate-attempt|gate-process-attempt|gate-process-finish> FILE... [call] [--target py|js|wat] [--format text|json] [--nonce HEX64]")
+        print(usage)
         return 2
     cmd = pos[0]
     output_format = flags.get("format", "text")
@@ -579,8 +645,10 @@ def cli(argv, frontend):
         return 2
     if cmd == "about":
         return _about(frontend, output_format)
+    if cmd == "release-check":
+        return _release_check(frontend, output_format, bool(flags.get("dry_run")))
     if len(pos) < 2:
-        print("usage: python3 loom.py <about|check|run|build|audit|source-map|gate|gate-workflow|gate-request|gate-claim|gate-finish|gate-plan|gate-exec-finish|gate-attempt|gate-process-attempt|gate-process-finish> FILE... [call] [--target py|js|wat] [--format text|json] [--nonce HEX64]")
+        print(usage)
         return 2
     if cmd == "gate-claim":
         return _gate_claim(frontend, pos[1:], output_format)

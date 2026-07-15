@@ -3429,11 +3429,11 @@ def build_about():
     return {
         "schema": "loom-about/v1",
         "language": "LOOM",
-        "citadel_checks": 431,
+        "citadel_checks": 432,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "i31_bits": INT_BITS,
         "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],
-        "commands": ["about", "check", "run", "build", "audit", "source-map", "gate", "gate-workflow"],
+        "commands": ["about", "release-check", "check", "run", "build", "audit", "source-map", "gate", "gate-workflow"],
     }
 
 
@@ -3447,6 +3447,37 @@ def _about(output_format="text"):
     print(f"WASM ABI: v{about['wasm_abi_version']}")
     print(f"i31: {about['i31_bits']} bit signed wraparound")
     print("backends: " + ", ".join(about["backends"]))
+    return 0
+
+
+_RELEASE_CHECK_STEPS = (
+    ("citadel", ("python3", "run_tests.py")),
+    ("docs-parity", ("python3", "verify_docs_parity.py")),
+    ("fuzz", ("python3", "fuzz_tests.py", "--cases", "256", "--seed", "0xBADC0DE")),
+    ("about", ("python3", "loom.py", "about", "--format", "json")),
+)
+
+
+def _release_check(output_format="text", dry_run=False):
+    if not dry_run:
+        print("release-check executes only from a local LOOM checkout; use --dry-run in the standalone browser bundle")
+        return 2
+    result = {
+        "schema": "loom-release-check/v1",
+        "ok": True,
+        "dry_run": True,
+        "steps": [
+            {"id": step_id, "command": list(command), "returncode": None, "summary": "planned"}
+            for step_id, command in _RELEASE_CHECK_STEPS
+        ],
+    }
+    if output_format == "json":
+        _emit_verdict_json(result)
+        return 0
+    print("LOOM release check (dry run)")
+    for item in result["steps"]:
+        print("PLAN " + item["id"] + ": " + " ".join(item["command"]))
+    print("PASS release-check")
     return 0
 
 
@@ -3543,17 +3574,20 @@ def _cli(argv):
         elif a.startswith("--target="): flags["target"] = a.split("=", 1)[1]; i += 1
         elif a == "--format" and i + 1 < len(argv): flags["format"] = argv[i+1]; i += 2
         elif a.startswith("--format="): flags["format"] = a.split("=", 1)[1]; i += 1
+        elif a == "--dry-run": flags["dry_run"] = True; i += 1
         else: pos.append(a); i += 1
     if len(pos) < 1:
-        print("usage: python3 loom.py <about|check|run|build|audit|source-map|gate|gate-workflow> FILE [call] [--target py|js|wat] [--format text|json]"); return 2
+        print("usage: python3 loom.py <about|release-check|check|run|build|audit|source-map|gate|gate-workflow> FILE [call] [--target py|js|wat] [--format text|json] [--dry-run]"); return 2
     cmd = pos[0]
     output_format = flags.get("format", "text")
     if output_format not in ("text", "json"):
         print("unsupported format: " + output_format); return 2
     if cmd == "about":
         return _about(output_format)
+    if cmd == "release-check":
+        return _release_check(output_format, bool(flags.get("dry_run")))
     if len(pos) < 2:
-        print("usage: python3 loom.py <about|check|run|build|audit|source-map|gate|gate-workflow> FILE [call] [--target py|js|wat] [--format text|json]"); return 2
+        print("usage: python3 loom.py <about|release-check|check|run|build|audit|source-map|gate|gate-workflow> FILE [call] [--target py|js|wat] [--format text|json] [--dry-run]"); return 2
     path = pos[1]; call = pos[2] if len(pos) > 2 else "(main)"
     try: src = open(path).read()
     except OSError as e: print("cannot read file: " + str(e)); return 2

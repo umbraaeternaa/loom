@@ -2551,17 +2551,42 @@ def main(argv=None):
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 431
+            and about_json["citadel_checks"] == 432
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
             and "about" in about_json["commands"]
+            and "release-check" in about_json["commands"]
             and "gate-workflow" in about_json["commands"]
         )
         ok += about_contract_ok
         print(f"  {'ok  ' if about_contract_ok else 'FAIL'} cli/api: machine-readable about contract v1")
     except Exception as e:
         print(f"  FAIL cli/api about contract: {e}")
+    try:                                               # release-check gives users one public release verification entrypoint without recursive citadel execution
+        import io, contextlib
+        release_out = io.StringIO()
+        with contextlib.redirect_stdout(release_out):
+            release_code = _loom._cli(["release-check", "--dry-run", "--format=json"])
+        release_json = json.loads(release_out.getvalue())
+        expected_release_commands = [
+            ["python3", "run_tests.py"],
+            ["python3", "verify_docs_parity.py"],
+            ["python3", "fuzz_tests.py", "--cases", "256", "--seed", "0xBADC0DE"],
+            ["python3", "loom.py", "about", "--format", "json"],
+        ]
+        release_check_ok = (
+            release_code == 0
+            and release_json["schema"] == "loom-release-check/v1"
+            and release_json["ok"] is True
+            and release_json["dry_run"] is True
+            and [step["command"] for step in release_json["steps"]] == expected_release_commands
+            and [step["id"] for step in release_json["steps"]] == ["citadel", "docs-parity", "fuzz", "about"]
+        )
+        ok += release_check_ok
+        print(f"  {'ok  ' if release_check_ok else 'FAIL'} cli: public release-check dry-run contract")
+    except Exception as e:
+        print(f"  FAIL release-check dry-run contract: {e}")
     try:                                               # Gate workflow gives AI/operator a safe route without executing host actions
         import io, contextlib
         workflow_manifest = gate_manifest("codex", "code", ["/Users/macbook/Projects/loom"], [], ["read", "process"], [], [])
@@ -3232,7 +3257,7 @@ def main(argv=None):
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 431/431 citadel checks" in rdoc
+            and "PASS -- 432/432 citadel checks" in rdoc
             and "python3 verify_docs_parity.py" in rdoc
             and "Parser, checker, interpreter, and CLI facade." in rdoc
             and "WebAssembly/WAT backend for the published supported surface" in rdoc
@@ -3242,6 +3267,7 @@ def main(argv=None):
             and "Native operator signing is intentionally outside the public language runtime." in rdoc
             and "runtime quantity mediation for `seamN` counters is not yet an ABI-enforced runtime meter" in rdoc_words
             and "Release verification checklist" in rdoc
+            and "python3 loom.py release-check" in rdoc
             and "loom.py about --format json" in rdoc
             and "Non-claims" in rdoc
             and "does not provide a mechanism to harvest passwords, keys, wallets" in rdoc
@@ -3275,7 +3301,7 @@ def main(argv=None):
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 128   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 129   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 
