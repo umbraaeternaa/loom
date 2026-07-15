@@ -44,6 +44,13 @@ This is the preferred production direction for macOS:
 LOOM should treat this wrapper as a separate operator tool. The language, Gate,
 dashboard, and agents verify the result; they do not become the key owner.
 
+The normative wrapper boundary is pinned in
+[`gate_macos_native_issuer_contract.md`](gate_macos_native_issuer_contract.md).
+That contract requires stable signed app identity, exactly one private Keychain
+access group, fixed inbox/outbox, no stdin/path signing, explicit operator
+review, macOS user presence, dashboard-as-launcher only, and runtime
+self-test/status health before production use.
+
 ## Forbidden storage models
 
 - Private key committed to the LOOM repository.

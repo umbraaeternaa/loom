@@ -2551,7 +2551,7 @@ def main(argv=None):
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 429
+            and about_json["citadel_checks"] == 430
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
@@ -3024,6 +3024,35 @@ def main(argv=None):
         print(f"  {'ok  ' if key_storage_ok else 'FAIL'} docs: operator key storage boundary pinned")
     except Exception as e:
         print(f"  FAIL operator key storage boundary pin: {e}")
+    try:                                               # macOS native issuer must remain an operator-presence signer, not an agent key owner
+        mdoc = Path(__file__).with_name("docs").joinpath("gate_macos_native_issuer_contract.md").read_text()
+        mdoc_words = " ".join(mdoc.split())
+        kdoc = Path(__file__).with_name("docs").joinpath("gate_operator_key_storage.md").read_text()
+        ndoc = Path(__file__).with_name("docs").joinpath("gate_native_issuer_handoff.md").read_text()
+        readme = Path(__file__).with_name("README.md").read_text()
+        macos_native_issuer_ok = (
+            "LOOM Gate macOS native issuer contract" in mdoc
+            and "does not ship private keys, provisioning profiles, certificates, or an enrolled operator identity" in mdoc_words
+            and "macOS user presence" in mdoc
+            and "stable code-signing identity, Team ID, bundle identifier, and exactly one private Keychain access group" in mdoc_words
+            and "verify its own signing and entitlement boundary before enrollment or signing" in mdoc
+            and "read only a fixed pending request inbox, not arbitrary request paths or stdin" in mdoc
+            and "reject extra command-line arguments for signing" in mdoc
+            and "refuse to overwrite an existing approval output" in mdoc
+            and "claim approvals, plan host actions, execute host actions, consume the ledger" in mdoc
+            and "The dashboard launches exactly the fixed issuer binary with the single `sign-pending` argument, without a shell." in mdoc_words
+            and "Code signature validity is necessary but not sufficient." in mdoc
+            and "self-test or status command must also run successfully" in mdoc_words
+            and "a signature is only a signature, not completed execution" in mdoc_words
+            and "gate_macos_native_issuer_contract.md" in kdoc
+            and "gate_macos_native_issuer_contract.md" in ndoc
+            and "docs/gate_macos_native_issuer_contract.md" in readme
+            and "dashboard-as-launcher only" in readme
+        )
+        ok += macos_native_issuer_ok
+        print(f"  {'ok  ' if macos_native_issuer_ok else 'FAIL'} docs: macOS native issuer contract pinned")
+    except Exception as e:
+        print(f"  FAIL macOS native issuer contract pin: {e}")
     try:                                               # reference native issuer validates a copied request and writes only approval.json
         native_issuer = Path(__file__).with_name("examples").joinpath("native_issuer.py")
         with tempfile.TemporaryDirectory() as td:
@@ -3218,7 +3247,7 @@ def main(argv=None):
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 126   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 127   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 
