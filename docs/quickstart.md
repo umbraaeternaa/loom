@@ -6,6 +6,7 @@ This is the shortest path from a fresh checkout to a verified LOOM program.
 
 ```console
 python3 -m loom about --format json
+python3 -m loom help quickstart
 python3 -m loom check examples/first.loom
 python3 -m loom run examples/first.loom
 ```
@@ -57,7 +58,14 @@ python3 loom.py about --format json
 The expected public baseline is:
 
 ```console
-PASS -- 434/434 citadel checks
+PASS -- 435/435 citadel checks
+```
+
+The CLI help is also pinned:
+
+```console
+loom --help
+loom help quickstart
 ```
 
 ## 4. See the trust gate

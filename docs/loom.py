@@ -3429,11 +3429,11 @@ def build_about():
     return {
         "schema": "loom-about/v1",
         "language": "LOOM",
-        "citadel_checks": 434,
+        "citadel_checks": 435,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "i31_bits": INT_BITS,
         "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],
-        "commands": ["about", "release-check", "check", "run", "build", "audit", "source-map", "gate", "gate-workflow"],
+        "commands": ["about", "release-check", "help", "check", "run", "build", "audit", "source-map", "gate", "gate-workflow"],
     }
 
 
@@ -3447,6 +3447,55 @@ def _about(output_format="text"):
     print(f"WASM ABI: v{about['wasm_abi_version']}")
     print(f"i31: {about['i31_bits']} bit signed wraparound")
     print("backends: " + ", ".join(about["backends"]))
+    return 0
+
+
+def _usage():
+    return "usage: python3 loom.py <about|release-check|help|check|run|build|audit|source-map|gate|gate-workflow> FILE [call] [--target py|js|wat] [--format text|json] [--dry-run]"
+
+
+def _help(topic=None):
+    about = build_about()
+    if topic == "quickstart":
+        print("LOOM quickstart")
+        print("1. Inspect the local build:")
+        print("   python3 -m loom about --format json")
+        print("2. Check and run the smallest honest program:")
+        print("   python3 -m loom check examples/first.loom")
+        print("   python3 -m loom run examples/first.loom")
+        print("3. Verify the checkout:")
+        print("   python3 -m loom release-check")
+        print("4. See the trust gate:")
+        print("   python3 -m loom check examples/trust.loom")
+        print("   python3 -m loom run examples/trust.loom")
+        print("Docs: docs/quickstart.md")
+        return 0
+    if topic and topic not in ("commands",):
+        print("unknown help topic: " + topic)
+        print("try: python3 loom.py help quickstart")
+        return 2
+    print("LOOM — trust layer for AI-written code")
+    print(f"citadel: {about['citadel_checks']} self-verifying checks")
+    print("")
+    print("Start here:")
+    print("  python3 -m loom help quickstart")
+    print("  python3 -m loom check examples/first.loom")
+    print("  python3 -m loom run examples/first.loom")
+    print("  python3 -m loom release-check")
+    print("")
+    print("Core commands:")
+    print("  about                 machine-readable capability/canon summary")
+    print("  check FILE            prove every effect declaration is honest")
+    print("  run FILE [call]       check, then run a function call; default is (main)")
+    print("  build FILE            compile checked code; use --target py|js|wat")
+    print("  audit FILE            show declared-vs-performed capability surface")
+    print("  source-map FILE       show WAT heap allocation source locations")
+    print("  release-check         run the public verification checklist")
+    print("")
+    print("Gate commands:")
+    print("  gate, gate-workflow")
+    print("")
+    print(_usage())
     return 0
 
 
@@ -3577,17 +3626,19 @@ def _cli(argv):
         elif a == "--dry-run": flags["dry_run"] = True; i += 1
         else: pos.append(a); i += 1
     if len(pos) < 1:
-        print("usage: python3 loom.py <about|release-check|check|run|build|audit|source-map|gate|gate-workflow> FILE [call] [--target py|js|wat] [--format text|json] [--dry-run]"); return 2
+        print(_usage()); return 2
     cmd = pos[0]
     output_format = flags.get("format", "text")
     if output_format not in ("text", "json"):
         print("unsupported format: " + output_format); return 2
+    if cmd in ("--help", "-h", "help"):
+        return _help(pos[1] if len(pos) > 1 else None)
     if cmd == "about":
         return _about(output_format)
     if cmd == "release-check":
         return _release_check(output_format, bool(flags.get("dry_run")))
     if len(pos) < 2:
-        print("usage: python3 loom.py <about|release-check|check|run|build|audit|source-map|gate|gate-workflow> FILE [call] [--target py|js|wat] [--format text|json] [--dry-run]"); return 2
+        print(_usage()); return 2
     path = pos[1]; call = pos[2] if len(pos) > 2 else "(main)"
     try: src = open(path).read()
     except OSError as e: print("cannot read file: " + str(e)); return 2

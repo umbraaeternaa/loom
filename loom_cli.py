@@ -18,6 +18,82 @@ class Frontend(_CliFrontend):
     __slots__ = ()
 
 
+_COMMANDS = (
+    "about",
+    "release-check",
+    "help",
+    "check",
+    "run",
+    "build",
+    "audit",
+    "source-map",
+    "gate",
+    "gate-workflow",
+    "gate-request",
+    "gate-claim",
+    "gate-finish",
+    "gate-plan",
+    "gate-exec-finish",
+    "gate-attempt",
+    "gate-process-attempt",
+    "gate-process-finish",
+)
+
+
+def _usage():
+    return (
+        "usage: python3 loom.py <"
+        + "|".join(_COMMANDS)
+        + "> FILE... [call] [--target py|js|wat] [--format text|json] [--nonce HEX64] [--dry-run]"
+    )
+
+
+def _help(frontend, topic=None):
+    about = build_about(frontend)
+    if topic == "quickstart":
+        print("LOOM quickstart")
+        print("1. Inspect the local build:")
+        print("   python3 -m loom about --format json")
+        print("2. Check and run the smallest honest program:")
+        print("   python3 -m loom check examples/first.loom")
+        print("   python3 -m loom run examples/first.loom")
+        print("3. Verify the checkout:")
+        print("   python3 -m loom release-check")
+        print("4. See the trust gate:")
+        print("   python3 -m loom check examples/trust.loom")
+        print("   python3 -m loom run examples/trust.loom")
+        print("Docs: docs/quickstart.md")
+        return 0
+    if topic and topic not in ("commands",):
+        print("unknown help topic: " + topic)
+        print("try: python3 loom.py help quickstart")
+        return 2
+    print("LOOM — trust layer for AI-written code")
+    print(f"citadel: {about['citadel_checks']} self-verifying checks")
+    print("")
+    print("Start here:")
+    print("  python3 -m loom help quickstart")
+    print("  python3 -m loom check examples/first.loom")
+    print("  python3 -m loom run examples/first.loom")
+    print("  python3 -m loom release-check")
+    print("")
+    print("Core commands:")
+    print("  about                 machine-readable capability/canon summary")
+    print("  check FILE            prove every effect declaration is honest")
+    print("  run FILE [call]       check, then run a function call; default is (main)")
+    print("  build FILE            compile checked code; use --target py|js|wat")
+    print("  audit FILE            show declared-vs-performed capability surface")
+    print("  source-map FILE       show WAT heap allocation source locations")
+    print("  release-check         run the public verification checklist")
+    print("")
+    print("Gate commands:")
+    print("  gate, gate-workflow, gate-request, gate-claim, gate-finish")
+    print("  gate-plan, gate-exec-finish, gate-attempt, gate-process-attempt, gate-process-finish")
+    print("")
+    print(_usage())
+    return 0
+
+
 def _parse_flags(argv):
     flags, pos, index = {}, [], 0
     while index < len(argv):
@@ -634,21 +710,22 @@ def _check(frontend, src, output_format="text"):
 
 def cli(argv, frontend):
     flags, pos = _parse_flags(argv)
-    usage = "usage: python3 loom.py <about|release-check|check|run|build|audit|source-map|gate|gate-workflow|gate-request|gate-claim|gate-finish|gate-plan|gate-exec-finish|gate-attempt|gate-process-attempt|gate-process-finish> FILE... [call] [--target py|js|wat] [--format text|json] [--nonce HEX64] [--dry-run]"
     if len(pos) < 1:
-        print(usage)
+        print(_usage())
         return 2
     cmd = pos[0]
     output_format = flags.get("format", "text")
     if output_format not in ("text", "json"):
         print("unsupported format: " + output_format)
         return 2
+    if cmd in ("--help", "-h", "help"):
+        return _help(frontend, pos[1] if len(pos) > 1 else None)
     if cmd == "about":
         return _about(frontend, output_format)
     if cmd == "release-check":
         return _release_check(frontend, output_format, bool(flags.get("dry_run")))
     if len(pos) < 2:
-        print(usage)
+        print(_usage())
         return 2
     if cmd == "gate-claim":
         return _gate_claim(frontend, pos[1:], output_format)

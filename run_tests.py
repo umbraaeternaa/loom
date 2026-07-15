@@ -2551,18 +2551,50 @@ def main(argv=None):
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 434
+            and about_json["citadel_checks"] == 435
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
             and "about" in about_json["commands"]
             and "release-check" in about_json["commands"]
+            and "help" in about_json["commands"]
             and "gate-workflow" in about_json["commands"]
         )
         ok += about_contract_ok
         print(f"  {'ok  ' if about_contract_ok else 'FAIL'} cli/api: machine-readable about contract v1")
     except Exception as e:
         print(f"  FAIL cli/api about contract: {e}")
+    try:                                               # help must be a real onboarding surface, not an error-shaped usage dump
+        import io, contextlib
+        help_out = io.StringIO()
+        with contextlib.redirect_stdout(help_out):
+            help_code = _loom._cli(["--help"])
+        quick_out = io.StringIO()
+        with contextlib.redirect_stdout(quick_out):
+            quick_code = _loom._cli(["help", "quickstart"])
+        bad_out = io.StringIO()
+        with contextlib.redirect_stdout(bad_out):
+            bad_code = _loom._cli(["help", "unknown-topic"])
+        help_text = help_out.getvalue()
+        quick_text = quick_out.getvalue()
+        help_ok = (
+            help_code == 0
+            and "LOOM — trust layer for AI-written code" in help_text
+            and "python3 -m loom help quickstart" in help_text
+            and "python3 -m loom check examples/first.loom" in help_text
+            and "release-check" in help_text
+            and "Gate commands:" in help_text
+            and quick_code == 0
+            and "LOOM quickstart" in quick_text
+            and "python3 -m loom run examples/first.loom" in quick_text
+            and "docs/quickstart.md" in quick_text
+            and bad_code == 2
+            and "unknown help topic" in bad_out.getvalue()
+        )
+        ok += help_ok
+        print(f"  {'ok  ' if help_ok else 'FAIL'} cli: beginner help and quickstart discovery pinned")
+    except Exception as e:
+        print(f"  FAIL cli help discovery pin: {e}")
     try:                                               # release-check gives users one public release verification entrypoint without recursive citadel execution
         import io, contextlib
         release_out = io.StringIO()
@@ -2629,7 +2661,9 @@ def main(argv=None):
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 434/434 citadel checks" in quick
+            and "PASS -- 435/435 citadel checks" in quick
+            and "loom --help" in quick
+            and "loom help quickstart" in quick
             and "examples/trust.loom" in quick
             and "umbraaeternaa.github.io/loom/play.html" in quick
             and "docs/quickstart.md" in readme
@@ -3309,7 +3343,7 @@ def main(argv=None):
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 434/434 citadel checks" in rdoc
+            and "PASS -- 435/435 citadel checks" in rdoc
             and "python3 verify_docs_parity.py" in rdoc
             and "Parser, checker, interpreter, and CLI facade." in rdoc
             and "WebAssembly/WAT backend for the published supported surface" in rdoc
@@ -3354,7 +3388,7 @@ def main(argv=None):
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 131   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 132   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 
