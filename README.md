@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 422 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 423 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 422/422 citadel checks
+PASS — 423/423 citadel checks
 ```
 
 ## The idea in one screen
@@ -270,6 +270,10 @@ See [`examples/process_lifecycle_cli.py`](examples/process_lifecycle_cli.py) for
 the full CLI handoff recipe and
 [`docs/gate_process_cli_lifecycle.md`](docs/gate_process_cli_lifecycle.md) for
 a transcript-style walkthrough.
+The browser-to-native boundary is summarized in
+[`docs/gate_native_issuer_handoff.md`](docs/gate_native_issuer_handoff.md):
+copied playground JSON goes to an operator-controlled issuer, then a trusted
+host claims, plans, dry-runs, and finishes through the same one-use lifecycle.
 
 Secret and credential handling is denial-first by design. The defensive
 [LOOM Secret and Credential Safety Policy](docs/secret_credential_policy.md)

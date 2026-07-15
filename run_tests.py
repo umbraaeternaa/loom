@@ -2551,7 +2551,7 @@ def main(argv=None):
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 422
+            and about_json["citadel_checks"] == 423
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
@@ -2927,6 +2927,27 @@ def main(argv=None):
         print(f"  {'ok  ' if process_cli_doc_ok else 'FAIL'} docs: process CLI lifecycle pinned")
     except Exception as e:
         print(f"  FAIL process CLI lifecycle pin: {e}")
+    try:                                               # native issuer handoff keeps copied playground JSON outside browser signing
+        ndoc = Path(__file__).with_name("docs").joinpath("gate_native_issuer_handoff.md").read_text()
+        readme = Path(__file__).with_name("README.md").read_text()
+        native_issuer_doc_ok = (
+            "LOOM Gate native issuer handoff" in ndoc
+            and "operator-facing bridge from the browser playground to the real trusted host lifecycle" in ndoc
+            and "Approval request -> Copy approval JSON -> request.json" in ndoc
+            and "the issuer validates the copied envelope with" in ndoc
+            and "loom.validate_approval_request(request)" in ndoc
+            and "Only the native issuer writes `approval.json`" in ndoc
+            and "python3 loom.py gate-claim manifest.json challenge.json approval.json --format json" in ndoc
+            and "python3 loom.py gate-process-attempt plan.json attempt.json --format json" in ndoc
+            and "python3 loom.py gate-process-finish manifest.json challenge.json approval.json claim.json plan.json attempt.json --format json" in ndoc
+            and "Do not let the agent that requests approval also control the issuer private" in ndoc
+            and "Permission begins only after issuer signing and successful trusted-host claim" in ndoc
+            and "docs/gate_native_issuer_handoff.md" in readme
+        )
+        ok += native_issuer_doc_ok
+        print(f"  {'ok  ' if native_issuer_doc_ok else 'FAIL'} docs: native issuer handoff pinned")
+    except Exception as e:
+        print(f"  FAIL native issuer handoff pin: {e}")
     try:                                               # i31 semantics are a normative cross-backend/ABI contract, not a comment
         i31doc = Path(__file__).with_name("docs").joinpath("i31_semantics.md").read_text()
         abi_doc = Path(__file__).with_name("docs").joinpath("wasm_abi_v1.md").read_text()
@@ -3008,7 +3029,7 @@ def main(argv=None):
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 119   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/native-issuer-handoff/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 120   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/native-issuer-handoff/native-issuer-doc/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 
