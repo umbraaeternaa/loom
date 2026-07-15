@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 428 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 429 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 428/428 citadel checks
+PASS — 429/429 citadel checks
 ```
 
 ## The idea in one screen
@@ -288,6 +288,11 @@ temporary workdir without touching the real Gate key or ledger.
 is the operator-facing production checklist: real private keys stay outside
 Codex, Cloud Code, the browser, dashboard, GitHub, shared context, and the
 trusted-host ledger path.
+[`docs/gate_operator_key_storage.md`](docs/gate_operator_key_storage.md)
+pins the storage boundary: the current reference issuer may read an external
+operator-controlled key file, while the preferred macOS production direction is
+a Keychain/native-presence wrapper that never exports the private key to LOOM,
+agents, browser storage, dashboard state, logs, or shared memory.
 
 Secret and credential handling is denial-first by design. The defensive
 [LOOM Secret and Credential Safety Policy](docs/secret_credential_policy.md)

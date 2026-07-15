@@ -2551,7 +2551,7 @@ def main(argv=None):
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 428
+            and about_json["citadel_checks"] == 429
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
@@ -3000,6 +3000,30 @@ def main(argv=None):
         print(f"  {'ok  ' if operator_real_workflow_ok else 'FAIL'} docs: real operator workflow pinned")
     except Exception as e:
         print(f"  FAIL real operator workflow pin: {e}")
+    try:                                               # real operator private-key storage must stay outside LOOM and agent-visible memory
+        kdoc = Path(__file__).with_name("docs").joinpath("gate_operator_key_storage.md").read_text()
+        odoc = Path(__file__).with_name("docs").joinpath("gate_operator_real_workflow.md").read_text()
+        readme = Path(__file__).with_name("README.md").read_text()
+        key_storage_ok = (
+            "LOOM Gate operator key storage model" in kdoc
+            and "This document does not generate, import, export, or migrate keys." in kdoc
+            and "The operator private signing key is an operator-controlled credential" in kdoc
+            and "External operator key file" in kdoc
+            and "macOS Keychain or native presence wrapper" in kdoc
+            and "The only output crossing back into LOOM is `approval.json`." in kdoc
+            and "Private key committed to the LOOM repository." in kdoc
+            and "Private key passed to Codex, Cloud Code, Gemini, untrusted agents" in kdoc
+            and "Private key copied into the trusted-host ledger directory." in kdoc
+            and "If any step requires an agent, browser, dashboard, or repository file to possess" in kdoc
+            and "gate_operator_key_storage.md" in odoc
+            and "preferred macOS production direction is a Keychain/native-presence wrapper" in odoc
+            and "docs/gate_operator_key_storage.md" in readme
+            and "Keychain/native-presence wrapper that never exports the private key" in readme
+        )
+        ok += key_storage_ok
+        print(f"  {'ok  ' if key_storage_ok else 'FAIL'} docs: operator key storage boundary pinned")
+    except Exception as e:
+        print(f"  FAIL operator key storage boundary pin: {e}")
     try:                                               # reference native issuer validates a copied request and writes only approval.json
         native_issuer = Path(__file__).with_name("examples").joinpath("native_issuer.py")
         with tempfile.TemporaryDirectory() as td:
@@ -3194,7 +3218,7 @@ def main(argv=None):
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 125   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 126   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

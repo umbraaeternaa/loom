@@ -9,6 +9,13 @@ created and stored by an operator-controlled tool or secret store outside the
 LOOM repository. The reference scripts below show the handoff shape, not a
 policy that the agent may own signing material.
 
+For the storage boundary, see
+[`gate_operator_key_storage.md`](gate_operator_key_storage.md). The current
+reference issuer can read an external operator-controlled key file; the
+preferred macOS production direction is a Keychain/native-presence wrapper that
+never exports the private key into LOOM, agents, browser storage, dashboard
+state, logs, or shared memory.
+
 ## Trust boundary
 
 - Operator: owns the private signing key and decides whether to approve.
