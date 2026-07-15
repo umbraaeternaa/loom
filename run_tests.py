@@ -2976,11 +2976,12 @@ def main(argv=None):
         print(f"  FAIL native issuer handoff pin: {e}")
     try:                                               # real operator workflow must keep private signing material outside agents and host ledgers
         odoc = Path(__file__).with_name("docs").joinpath("gate_operator_real_workflow.md").read_text()
+        odoc_words = " ".join(odoc.split())
         readme = Path(__file__).with_name("README.md").read_text()
         operator_real_workflow_ok = (
             "LOOM Gate real operator workflow" in odoc
             and "This document is intentionally not a key generator." in odoc
-            and "Real operator keys must be created and stored by an operator-controlled tool or secret store outside the LOOM repository." in odoc
+            and "Real operator keys must be created and stored by an operator-controlled tool or secret store outside the LOOM repository." in odoc_words
             and "Codex, Cloud Code, dashboard, playground, and untrusted agents: must not read," in odoc
             and "copy, generate, escrow, upload, or persist the operator private key" in odoc
             and "python3 examples/pin_operator_public_key.py operator_public_key.json" in odoc
@@ -2991,7 +2992,7 @@ def main(argv=None):
             and "dashboard, GitHub, shared context files, or the approval ledger path." in odoc
             and "A copied request is not permission." in odoc
             and "A signed approval is not execution." in odoc
-            and "public test material and must never be used for real approvals." in odoc
+            and "public test material and must never be used for real approvals." in odoc_words
             and "docs/gate_operator_real_workflow.md" in readme
             and "real private keys stay outside" in readme
         )

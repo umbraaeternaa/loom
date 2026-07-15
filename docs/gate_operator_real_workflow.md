@@ -9,8 +9,6 @@ created and stored by an operator-controlled tool or secret store outside the
 LOOM repository. The reference scripts below show the handoff shape, not a
 policy that the agent may own signing material.
 
-Real operator keys must be created and stored by an operator-controlled tool or secret store outside the LOOM repository.
-
 ## Trust boundary
 
 - Operator: owns the private signing key and decides whether to approve.
@@ -78,7 +76,6 @@ python3 loom.py gate-process-finish manifest.json challenge.json approval.json c
   bind it to the fixed public key and one-use ledger.
 - The demo private key in `examples/operator_handoff_cli.py` is public test
   material and must never be used for real approvals.
-- The demo private key in `examples/operator_handoff_cli.py` is public test material and must never be used for real approvals.
 
 ## Demo versus real workflow
 
