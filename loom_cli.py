@@ -23,6 +23,7 @@ _COMMANDS = (
     "release-check",
     "help",
     "examples",
+    "doctor",
     "check",
     "run",
     "build",
@@ -96,6 +97,8 @@ def _help(frontend, topic=None):
         print("   python3 -m loom run examples/trust.loom")
         print("5. Discover bundled examples:")
         print("   python3 -m loom examples")
+        print("6. Check local checkout health:")
+        print("   python3 -m loom doctor --dry-run")
         print("Docs: docs/quickstart.md")
         return 0
     if topic and topic not in ("commands",):
@@ -110,6 +113,7 @@ def _help(frontend, topic=None):
     print("  python3 -m loom check examples/first.loom")
     print("  python3 -m loom run examples/first.loom")
     print("  python3 -m loom examples")
+    print("  python3 -m loom doctor --dry-run")
     print("  python3 -m loom release-check")
     print("")
     print("Core commands:")
@@ -120,6 +124,7 @@ def _help(frontend, topic=None):
     print("  audit FILE            show declared-vs-performed capability surface")
     print("  source-map FILE       show WAT heap allocation source locations")
     print("  examples              list bundled example programs and runnable commands")
+    print("  doctor --dry-run      lightweight local checkout health check")
     print("  release-check         run the public verification checklist")
     print("")
     print("Gate commands:")
@@ -257,6 +262,55 @@ def _examples(output_format="text"):
         print(f"  check: {item['check']}")
         print(f"  run:   {item['run']}")
     return 0
+
+
+_DOCTOR_FILES = (
+    "loom.py",
+    "loom_cli.py",
+    "run_tests.py",
+    "verify_docs_parity.py",
+    "docs/loom.py",
+    "docs/quickstart.md",
+    "examples/first.loom",
+    "examples/trust.loom",
+    "pyproject.toml",
+)
+
+
+def build_doctor(frontend, dry_run=False):
+    root = Path(__file__).resolve().parent
+    about = build_about(frontend)
+    examples = build_examples()
+    checks = []
+    def add(name, ok, detail):
+        checks.append({"name": name, "ok": bool(ok), "detail": detail})
+    add("python", sys.version_info >= (3, 10), ".".join(map(str, sys.version_info[:3])))
+    add("about-contract", about.get("schema") == "loom-about/v1" and "doctor" in about.get("commands", []),
+        f"citadel={about.get('citadel_checks')}")
+    add("examples-contract", examples.get("schema") == "loom-examples/v1" and bool(examples.get("examples")),
+        f"{len(examples.get('examples', []))} bundled examples")
+    for rel in _DOCTOR_FILES:
+        add("file:" + rel, root.joinpath(rel).exists(), rel)
+    add("release-check-plan", True, "next: python3 -m loom release-check")
+    return {
+        "schema": "loom-doctor/v1",
+        "ok": all(item["ok"] for item in checks),
+        "dry_run": bool(dry_run),
+        "root": str(root),
+        "checks": checks,
+    }
+
+
+def _doctor(frontend, output_format="text", dry_run=False):
+    result = build_doctor(frontend, dry_run)
+    if output_format == "json":
+        _emit_json(result)
+        return 0 if result["ok"] else 1
+    print("LOOM doctor" + (" (dry run)" if dry_run else ""))
+    for item in result["checks"]:
+        print(("PASS " if item["ok"] else "FAIL ") + item["name"] + ": " + item["detail"])
+    print("PASS doctor" if result["ok"] else "FAIL doctor")
+    return 0 if result["ok"] else 1
 
 
 _RELEASE_CHECK_STEPS = (
@@ -781,6 +835,8 @@ def cli(argv, frontend):
         return _about(frontend, output_format)
     if cmd == "examples":
         return _examples(output_format)
+    if cmd == "doctor":
+        return _doctor(frontend, output_format, bool(flags.get("dry_run")))
     if cmd == "release-check":
         return _release_check(frontend, output_format, bool(flags.get("dry_run")))
     if len(pos) < 2:

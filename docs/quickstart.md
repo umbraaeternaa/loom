@@ -8,6 +8,7 @@ This is the shortest path from a fresh checkout to a verified LOOM program.
 python3 -m loom about --format json
 python3 -m loom help quickstart
 python3 -m loom examples
+python3 -m loom doctor --dry-run
 python3 -m loom check examples/first.loom
 python3 -m loom run examples/first.loom
 ```
@@ -59,7 +60,7 @@ python3 loom.py about --format json
 The expected public baseline is:
 
 ```console
-PASS -- 436/436 citadel checks
+PASS -- 437/437 citadel checks
 ```
 
 The CLI help is also pinned:
@@ -68,6 +69,7 @@ The CLI help is also pinned:
 loom --help
 loom help quickstart
 loom examples
+loom doctor --dry-run
 ```
 
 ## 4. See the trust gate

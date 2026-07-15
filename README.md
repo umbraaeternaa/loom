@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 436 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 437 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 436/436 citadel checks
+PASS — 437/437 citadel checks
 ```
 
 ## The idea in one screen
@@ -129,6 +129,7 @@ python3 -m loom check examples/first.loom
 python3 -m loom run examples/first.loom
 python3 -m loom help quickstart
 python3 -m loom examples
+python3 -m loom doctor --dry-run
 ```
 
 It verifies and runs the smallest honest LOOM program, then points to install,
@@ -208,6 +209,7 @@ loom check examples/first.loom                      # smallest first-run program
 loom run   examples/first.loom                      # => 42
 loom help quickstart                                # terminal first-run guide
 loom examples                                       # list bundled proof programs
+loom doctor --dry-run                               # lightweight checkout health check
 python3 loom.py check examples/demo.loom            # prove every effect is honest (else REJECTED)
 python3 loom.py run   examples/demo.loom            # => [1, 4, 9, 16, 25]
 python3 loom.py build examples/demo.loom --target js   # compile the checked program to JavaScript
