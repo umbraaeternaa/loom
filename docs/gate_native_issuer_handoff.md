@@ -125,6 +125,7 @@ the same claim fails closed.
 See also:
 
 - `docs/gate_operator_approval_v1.md`
+- `docs/gate_operator_real_workflow.md`
 - `docs/gate_process_cli_lifecycle.md`
 - `examples/process_lifecycle_cli.py`
 - `examples/operator_handoff_cli.py` for a complete local demo transcript that

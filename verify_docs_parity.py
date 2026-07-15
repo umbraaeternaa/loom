@@ -113,13 +113,15 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "427 self-verifying checks",
-        ">427</div>",
+        "428 self-verifying checks",
+        ">428</div>",
     )
     forbidden = (
         "415 self-verifying checks",
         "417 self-verifying checks",
         "418 self-verifying checks",
+        "427 self-verifying checks",
+        ">427</div>",
         "426 self-verifying checks",
         ">426</div>",
         "425 self-verifying checks",
