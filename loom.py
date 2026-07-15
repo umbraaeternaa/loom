@@ -185,7 +185,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
     emit_wat,
     LoomError,
     metadata={
-        "citadel_checks": 435,
+        "citadel_checks": 436,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "i31_bits": INT_BITS,
         "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],
@@ -193,6 +193,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
             "about",
             "release-check",
             "help",
+            "examples",
             "check",
             "run",
             "build",

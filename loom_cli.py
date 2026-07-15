@@ -22,6 +22,7 @@ _COMMANDS = (
     "about",
     "release-check",
     "help",
+    "examples",
     "check",
     "run",
     "build",
@@ -37,6 +38,37 @@ _COMMANDS = (
     "gate-attempt",
     "gate-process-attempt",
     "gate-process-finish",
+)
+
+_EXAMPLES = (
+    {
+        "path": "examples/first.loom",
+        "title": "smallest pure program",
+        "purpose": "proves and runs a pure main that returns 42",
+        "check": "python3 -m loom check examples/first.loom",
+        "run": "python3 -m loom run examples/first.loom",
+    },
+    {
+        "path": "examples/trust.loom",
+        "title": "trust gate",
+        "purpose": "shows why AI-only trust is circular unless independent anchors vouch",
+        "check": "python3 -m loom check examples/trust.loom",
+        "run": "python3 -m loom run examples/trust.loom",
+    },
+    {
+        "path": "examples/demo.loom",
+        "title": "effects and capability seams",
+        "purpose": "demonstrates checked effects, capability seams, and honest declarations",
+        "check": "python3 -m loom check examples/demo.loom",
+        "run": "python3 -m loom run examples/demo.loom",
+    },
+    {
+        "path": "examples/flagship.loom",
+        "title": "flagship proof sketch",
+        "purpose": "larger public example for the trust-layer story",
+        "check": "python3 -m loom check examples/flagship.loom",
+        "run": "python3 -m loom run examples/flagship.loom",
+    },
 )
 
 
@@ -62,6 +94,8 @@ def _help(frontend, topic=None):
         print("4. See the trust gate:")
         print("   python3 -m loom check examples/trust.loom")
         print("   python3 -m loom run examples/trust.loom")
+        print("5. Discover bundled examples:")
+        print("   python3 -m loom examples")
         print("Docs: docs/quickstart.md")
         return 0
     if topic and topic not in ("commands",):
@@ -75,6 +109,7 @@ def _help(frontend, topic=None):
     print("  python3 -m loom help quickstart")
     print("  python3 -m loom check examples/first.loom")
     print("  python3 -m loom run examples/first.loom")
+    print("  python3 -m loom examples")
     print("  python3 -m loom release-check")
     print("")
     print("Core commands:")
@@ -84,6 +119,7 @@ def _help(frontend, topic=None):
     print("  build FILE            compile checked code; use --target py|js|wat")
     print("  audit FILE            show declared-vs-performed capability surface")
     print("  source-map FILE       show WAT heap allocation source locations")
+    print("  examples              list bundled example programs and runnable commands")
     print("  release-check         run the public verification checklist")
     print("")
     print("Gate commands:")
@@ -199,6 +235,27 @@ def _about(frontend, output_format="text"):
     print(f"WASM ABI: v{about['wasm_abi_version']}")
     print(f"i31: {about['i31_bits']} bit signed wraparound")
     print("backends: " + ", ".join(about["backends"]))
+    return 0
+
+
+def build_examples():
+    return {
+        "schema": "loom-examples/v1",
+        "examples": [dict(item) for item in _EXAMPLES],
+    }
+
+
+def _examples(output_format="text"):
+    payload = build_examples()
+    if output_format == "json":
+        _emit_json(payload)
+        return 0
+    print("LOOM examples")
+    for item in payload["examples"]:
+        print(f"- {item['path']} — {item['title']}")
+        print(f"  {item['purpose']}")
+        print(f"  check: {item['check']}")
+        print(f"  run:   {item['run']}")
     return 0
 
 
@@ -722,6 +779,8 @@ def cli(argv, frontend):
         return _help(frontend, pos[1] if len(pos) > 1 else None)
     if cmd == "about":
         return _about(frontend, output_format)
+    if cmd == "examples":
+        return _examples(output_format)
     if cmd == "release-check":
         return _release_check(frontend, output_format, bool(flags.get("dry_run")))
     if len(pos) < 2:

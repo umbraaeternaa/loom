@@ -3429,11 +3429,11 @@ def build_about():
     return {
         "schema": "loom-about/v1",
         "language": "LOOM",
-        "citadel_checks": 435,
+        "citadel_checks": 436,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "i31_bits": INT_BITS,
         "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],
-        "commands": ["about", "release-check", "help", "check", "run", "build", "audit", "source-map", "gate", "gate-workflow"],
+        "commands": ["about", "release-check", "help", "examples", "check", "run", "build", "audit", "source-map", "gate", "gate-workflow"],
     }
 
 
@@ -3450,8 +3450,40 @@ def _about(output_format="text"):
     return 0
 
 
+_EXAMPLES = (
+    {
+        "path": "examples/first.loom",
+        "title": "smallest pure program",
+        "purpose": "proves and runs a pure main that returns 42",
+        "check": "python3 -m loom check examples/first.loom",
+        "run": "python3 -m loom run examples/first.loom",
+    },
+    {
+        "path": "examples/trust.loom",
+        "title": "trust gate",
+        "purpose": "shows why AI-only trust is circular unless independent anchors vouch",
+        "check": "python3 -m loom check examples/trust.loom",
+        "run": "python3 -m loom run examples/trust.loom",
+    },
+    {
+        "path": "examples/demo.loom",
+        "title": "effects and capability seams",
+        "purpose": "demonstrates checked effects, capability seams, and honest declarations",
+        "check": "python3 -m loom check examples/demo.loom",
+        "run": "python3 -m loom run examples/demo.loom",
+    },
+    {
+        "path": "examples/flagship.loom",
+        "title": "flagship proof sketch",
+        "purpose": "larger public example for the trust-layer story",
+        "check": "python3 -m loom check examples/flagship.loom",
+        "run": "python3 -m loom run examples/flagship.loom",
+    },
+)
+
+
 def _usage():
-    return "usage: python3 loom.py <about|release-check|help|check|run|build|audit|source-map|gate|gate-workflow> FILE [call] [--target py|js|wat] [--format text|json] [--dry-run]"
+    return "usage: python3 loom.py <about|release-check|help|examples|check|run|build|audit|source-map|gate|gate-workflow> FILE [call] [--target py|js|wat] [--format text|json] [--dry-run]"
 
 
 def _help(topic=None):
@@ -3468,6 +3500,8 @@ def _help(topic=None):
         print("4. See the trust gate:")
         print("   python3 -m loom check examples/trust.loom")
         print("   python3 -m loom run examples/trust.loom")
+        print("5. Discover bundled examples:")
+        print("   python3 -m loom examples")
         print("Docs: docs/quickstart.md")
         return 0
     if topic and topic not in ("commands",):
@@ -3481,6 +3515,7 @@ def _help(topic=None):
     print("  python3 -m loom help quickstart")
     print("  python3 -m loom check examples/first.loom")
     print("  python3 -m loom run examples/first.loom")
+    print("  python3 -m loom examples")
     print("  python3 -m loom release-check")
     print("")
     print("Core commands:")
@@ -3490,12 +3525,34 @@ def _help(topic=None):
     print("  build FILE            compile checked code; use --target py|js|wat")
     print("  audit FILE            show declared-vs-performed capability surface")
     print("  source-map FILE       show WAT heap allocation source locations")
+    print("  examples              list bundled example programs and runnable commands")
     print("  release-check         run the public verification checklist")
     print("")
     print("Gate commands:")
     print("  gate, gate-workflow")
     print("")
     print(_usage())
+    return 0
+
+
+def build_examples():
+    return {
+        "schema": "loom-examples/v1",
+        "examples": [dict(item) for item in _EXAMPLES],
+    }
+
+
+def _examples(output_format="text"):
+    payload = build_examples()
+    if output_format == "json":
+        _emit_verdict_json(payload)
+        return 0
+    print("LOOM examples")
+    for item in payload["examples"]:
+        print(f"- {item['path']} — {item['title']}")
+        print(f"  {item['purpose']}")
+        print(f"  check: {item['check']}")
+        print(f"  run:   {item['run']}")
     return 0
 
 
@@ -3635,6 +3692,8 @@ def _cli(argv):
         return _help(pos[1] if len(pos) > 1 else None)
     if cmd == "about":
         return _about(output_format)
+    if cmd == "examples":
+        return _examples(output_format)
     if cmd == "release-check":
         return _release_check(output_format, bool(flags.get("dry_run")))
     if len(pos) < 2:

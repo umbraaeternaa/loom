@@ -6,7 +6,7 @@ experimental, and what LOOM does not claim yet.
 
 ## Current public baseline
 
-- Canonical self-verification: `PASS -- 435/435 citadel checks`.
+- Canonical self-verification: `PASS -- 436/436 citadel checks`.
 - Published browser bundle parity is required before release:
   `python3 verify_docs_parity.py`.
 - The public compatibility surface is `loom.py`; module boundaries are pinned in
@@ -19,6 +19,8 @@ experimental, and what LOOM does not claim yet.
   with `examples/first.loom`.
 - CLI discovery is pinned through `loom --help`, `loom help`, and
   `loom help quickstart`.
+- Bundled example discovery is pinned through `loom examples` and
+  `loom examples --format json`.
 
 ## Stable today
 
@@ -74,10 +76,10 @@ python3 loom.py about --format json
 
 Expected public markers:
 
-- `run_tests.py` prints `PASS -- 435/435 citadel checks`.
+- `run_tests.py` prints `PASS -- 436/436 citadel checks`.
 - `verify_docs_parity.py` prints that the published bundle is standalone and
   citadel-green.
-- `loom.py about --format json` reports `citadel_checks: 435`, the current
+- `loom.py about --format json` reports `citadel_checks: 436`, the current
   WASM ABI version, and the supported backend list.
 - An installed checkout exposes `loom` as the same CLI surface as
   `python3 loom.py`.
