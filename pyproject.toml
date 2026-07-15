@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "loom-lang"
+version = "0.1.0"
+description = "A tiny effect-typed trust layer for AI-written code."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+  {name = "Volodymyr Natoptanyi"}
+]
+keywords = ["effects", "capabilities", "provenance", "trust", "webassembly", "ai"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Security",
+  "Topic :: Software Development :: Compilers",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://umbraaeternaa.github.io/loom/"
+Repository = "https://github.com/umbraaeternaa/loom"
+Issues = "https://github.com/umbraaeternaa/loom/issues"
+
+[project.scripts]
+loom = "loom:main"
+
+[tool.setuptools]
+py-modules = [
+  "loom",
+  "loom_approval",
+  "loom_checker",
+  "loom_cli",
+  "loom_codegen",
+  "loom_evidence",
+  "loom_executor",
+  "loom_frontend",
+  "loom_gate",
+  "loom_observer",
+  "loom_parse",
+  "loom_runtime",
+  "loom_wasm",
+]

@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 432 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 433 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 432/432 citadel checks
+PASS — 433/433 citadel checks
 ```
 
 ## The idea in one screen
@@ -155,11 +155,40 @@ stable today, what is experimental or bounded, the release verification
 commands, and the non-claims LOOM deliberately makes.
 For one-command verification of a checkout, run `python3 loom.py release-check`.
 
+## Install
+
+LOOM has no runtime dependencies beyond Python. From a checkout:
+
+```console
+python3 -m pip install .
+loom about --format json
+loom release-check
+```
+
+`pip install .` may fetch the standard Python build backend (`setuptools`) if
+your Python does not already ship it. If you want a zero-install smoke test
+from the checkout, use:
+
+```console
+python3 -m loom about --format json
+python3 -m loom release-check --dry-run --format json
+```
+
+For development, keep the checkout editable:
+
+```console
+python3 -m pip install -e .
+loom release-check --dry-run --format json
+```
+
+The repo-local form remains supported too: `python3 loom.py ...`.
+
 ## Use it as a tool
 
 LOOM ships a small CLI — write a `.loom` file and run it:
 
 ```console
+loom check examples/demo.loom                       # installed console command
 python3 loom.py check examples/demo.loom            # prove every effect is honest (else REJECTED)
 python3 loom.py run   examples/demo.loom            # => [1, 4, 9, 16, 25]
 python3 loom.py build examples/demo.loom --target js   # compile the checked program to JavaScript

@@ -185,7 +185,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
     emit_wat,
     LoomError,
     metadata={
-        "citadel_checks": 432,
+        "citadel_checks": 433,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "i31_bits": INT_BITS,
         "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],
@@ -335,6 +335,10 @@ def build_consumed_receipt(manifest, observation, challenge, approval):
 def _cli(argv):
     return _loom_cli.cli(argv, _CLI_FRONTEND)
 
+def main(argv=None):
+    import sys
+    return _cli(sys.argv[1:] if argv is None else argv)
+
 if __name__ == "__main__":
     import sys
-    sys.exit(_cli(sys.argv[1:]))
+    sys.exit(main())
