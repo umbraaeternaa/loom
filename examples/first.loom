@@ -1,0 +1,11 @@
+; first.loom — the smallest honest LOOM program to run after install.
+;
+; Try from the repository root:
+;   python3 loom.py check examples/first.loom
+;   python3 loom.py run   examples/first.loom
+;
+; Or, after `python3 -m pip install .`:
+;   loom check examples/first.loom
+;   loom run   examples/first.loom
+
+(defx main () (fn () 42))

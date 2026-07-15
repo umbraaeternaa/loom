@@ -6,7 +6,7 @@ experimental, and what LOOM does not claim yet.
 
 ## Current public baseline
 
-- Canonical self-verification: `PASS -- 433/433 citadel checks`.
+- Canonical self-verification: `PASS -- 434/434 citadel checks`.
 - Published browser bundle parity is required before release:
   `python3 verify_docs_parity.py`.
 - The public compatibility surface is `loom.py`; module boundaries are pinned in
@@ -15,6 +15,8 @@ experimental, and what LOOM does not claim yet.
 - Installable checkout entry point: `python3 -m pip install .` provides the
   `loom` console command. The zero-install checkout entry points
   `python3 -m loom ...` and `python3 loom.py ...` remain supported.
+- The first-run onboarding path is pinned in `docs/quickstart.md` and starts
+  with `examples/first.loom`.
 
 ## Stable today
 
@@ -70,10 +72,10 @@ python3 loom.py about --format json
 
 Expected public markers:
 
-- `run_tests.py` prints `PASS -- 433/433 citadel checks`.
+- `run_tests.py` prints `PASS -- 434/434 citadel checks`.
 - `verify_docs_parity.py` prints that the published bundle is standalone and
   citadel-green.
-- `loom.py about --format json` reports `citadel_checks: 433`, the current
+- `loom.py about --format json` reports `citadel_checks: 434`, the current
   WASM ABI version, and the supported backend list.
 - An installed checkout exposes `loom` as the same CLI surface as
   `python3 loom.py`.

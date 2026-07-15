@@ -2551,7 +2551,7 @@ def main(argv=None):
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 433
+            and about_json["citadel_checks"] == 434
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
@@ -2614,6 +2614,31 @@ def main(argv=None):
         print(f"  {'ok  ' if packaging_ok else 'FAIL'} packaging: installable console script pinned")
     except Exception as e:
         print(f"  FAIL packaging install metadata pin: {e}")
+    try:                                               # first-run onboarding keeps a new user path pinned from checkout to trust gate
+        root = Path(__file__).resolve().parent
+        first = root.joinpath("examples", "first.loom").read_text()
+        quick = root.joinpath("docs", "quickstart.md").read_text()
+        readme = root.joinpath("README.md").read_text()
+        parsed = _loom.parse(first)
+        fns, errs = _loom.check(parsed)
+        first_run_ok = (
+            not errs
+            and _loom.run_call(first, "(main)") == (42, [])
+            and "(defx main () (fn () 42))" in first
+            and "python3 -m loom check examples/first.loom" in quick
+            and "python3 -m loom run examples/first.loom" in quick
+            and "loom check examples/first.loom" in quick
+            and "loom release-check" in quick
+            and "PASS -- 434/434 citadel checks" in quick
+            and "examples/trust.loom" in quick
+            and "umbraaeternaa.github.io/loom/play.html" in quick
+            and "docs/quickstart.md" in readme
+            and "examples/first.loom" in readme
+        )
+        ok += first_run_ok
+        print(f"  {'ok  ' if first_run_ok else 'FAIL'} docs/examples: first-run quickstart pinned")
+    except Exception as e:
+        print(f"  FAIL first-run quickstart pin: {e}")
     try:                                               # Gate workflow gives AI/operator a safe route without executing host actions
         import io, contextlib
         workflow_manifest = gate_manifest("codex", "code", ["/Users/macbook/Projects/loom"], [], ["read", "process"], [], [])
@@ -3284,7 +3309,7 @@ def main(argv=None):
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 433/433 citadel checks" in rdoc
+            and "PASS -- 434/434 citadel checks" in rdoc
             and "python3 verify_docs_parity.py" in rdoc
             and "Parser, checker, interpreter, and CLI facade." in rdoc
             and "WebAssembly/WAT backend for the published supported surface" in rdoc
@@ -3329,7 +3354,7 @@ def main(argv=None):
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 130   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check contracts, packaging/install metadata, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 131   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 
