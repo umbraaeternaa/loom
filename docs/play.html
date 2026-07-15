@@ -343,6 +343,11 @@ function renderApprovalRequest(result){
   s += "  4. dry-run validates the attempt envelope against that plan\n";
   s += "  5. finish consumes the claim exactly once and emits a receipt\n";
   s += "<span class='gate-note'>the browser deliberately stops before private signing, claim, execution, ledger consumption, and receipt finalization</span>\n";
+  s += "\nnative issuer handoff:\n";
+  s += "  copy this JSON into an operator-controlled issuer, not back into the playground\n";
+  s += "  the issuer signs the request hash and returns a signed approval\n";
+  s += "  a trusted host must bind that approval to the same manifest before planning\n";
+  s += "  browser output is evidence for the issuer, not permission to act\n";
   return s;
 }
 
@@ -362,7 +367,7 @@ async function boot(){
     pyodide = await loadPyodide();
     setStatus("loading LOOM…");
     const bundleUrl = new URL("./loom.py", location.href);
-    bundleUrl.searchParams.set("v", "421-playground-approval-json-copy-v1");
+    bundleUrl.searchParams.set("v", "422-playground-native-issuer-handoff-v1");
     const response = await fetch(bundleUrl, {cache: "no-store"});
     if (!response.ok) throw new Error("LOOM bundle HTTP " + response.status);
     const code = await response.text();
