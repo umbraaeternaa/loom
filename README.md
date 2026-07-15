@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 426 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 427 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 426/426 citadel checks
+PASS — 427/427 citadel checks
 ```
 
 ## The idea in one screen
@@ -280,6 +280,10 @@ review surface, requires operator confirmation, and writes only `approval.json`.
 [`examples/pin_operator_public_key.py`](examples/pin_operator_public_key.py)
 pins only the public verifier key into LOOM's fixed Gate path; it never stores
 the operator private key in the trusted-host ledger path.
+[`examples/operator_handoff_cli.py`](examples/operator_handoff_cli.py) is a
+complete demo transcript that ties request export, public-key pinning, native
+issuer signing, claim, plan, dry-run attempt, and finish together inside a
+temporary workdir without touching the real Gate key or ledger.
 
 Secret and credential handling is denial-first by design. The defensive
 [LOOM Secret and Credential Safety Policy](docs/secret_credential_policy.md)

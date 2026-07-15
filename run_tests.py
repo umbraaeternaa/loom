@@ -2551,7 +2551,7 @@ def main(argv=None):
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 426
+            and about_json["citadel_checks"] == 427
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
@@ -2967,6 +2967,8 @@ def main(argv=None):
             and "docs/gate_native_issuer_handoff.md" in readme
             and "examples/native_issuer.py" in readme
             and "examples/pin_operator_public_key.py" in readme
+            and "examples/operator_handoff_cli.py" in readme
+            and "examples/operator_handoff_cli.py" in ndoc
         )
         ok += native_issuer_doc_ok
         print(f"  {'ok  ' if native_issuer_doc_ok else 'FAIL'} docs: native issuer handoff pinned")
@@ -3040,6 +3042,51 @@ def main(argv=None):
         print(f"  {'ok  ' if pin_operator_key_ok else 'FAIL'} examples: operator public key pinning writes verifier key only")
     except Exception as e:
         print(f"  FAIL operator public key pinning pin: {e}")
+    try:                                               # complete local operator handoff transcript ties issuer and trusted-host lifecycle
+        import contextlib, importlib.util, io
+        if Path(_loom.__file__).parent.name == "docs":
+            operator_handoff_ok = True                 # published Pyodide bundle intentionally has no modular CLI examples
+        else:
+            handoff_path = Path(__file__).with_name("examples").joinpath("operator_handoff_cli.py")
+            handoff_spec = importlib.util.spec_from_file_location("loom_operator_handoff_cli_example", handoff_path)
+            handoff_example = importlib.util.module_from_spec(handoff_spec); handoff_spec.loader.exec_module(handoff_example)
+            with tempfile.TemporaryDirectory() as td:
+                td = Path(td)
+                transcript_dir = td / "handoff"
+                stdout = io.StringIO()
+                with contextlib.redirect_stdout(stdout):
+                    handoff_result = handoff_example.run_operator_handoff(transcript_dir)
+                pinned_key_file = transcript_dir / "gate" / "operator_public_key.json"
+                private_key_file = transcript_dir / "operator_private_key.demo.json"
+                pinned_key = json.loads(pinned_key_file.read_text()) if pinned_key_file.exists() else {}
+                private_key = json.loads(private_key_file.read_text()) if private_key_file.exists() else {}
+                transcript_files_exist = all((transcript_dir / name).exists() for name in ("manifest.json", "request.json", "challenge.json", "approval.json"))
+                trusted_host_files_exist = all((transcript_dir / "trusted-host" / name).exists() for name in ("claim.json", "plan.json", "attempt.json"))
+                ledger_exists = (transcript_dir / "gate" / "operator_approvals.sqlite3").exists()
+            receipt = handoff_result.get("receipt") or {}
+            evidence_kinds = {item.get("kind") for item in receipt.get("evidence", [])}
+            operator_handoff_ok = (
+                handoff_path.exists()
+                and handoff_result["valid"] is True
+                and handoff_result["findings"] == []
+                and receipt.get("result") == "completed"
+                and receipt.get("policy_decision") == "operator-required"
+                and receipt.get("actions_observed") == ["process"]
+                and "operator-approval" in evidence_kinds
+                and "git-clean" in evidence_kinds
+                and pinned_key == test_key
+                and "d" not in pinned_key
+                and private_key.get("d") == format(test_d, "x")
+                and transcript_files_exist
+                and trusted_host_files_exist
+                and ledger_exists
+                and "LOOM native issuer review" in stdout.getvalue()
+                and "pinned operator public key:" in stdout.getvalue()
+            )
+        ok += operator_handoff_ok
+        print(f"  {'ok  ' if operator_handoff_ok else 'FAIL'} examples: operator handoff CLI transcript completes receipt")
+    except Exception as e:
+        print(f"  FAIL operator handoff CLI transcript pin: {e}")
     try:                                               # i31 semantics are a normative cross-backend/ABI contract, not a comment
         i31doc = Path(__file__).with_name("docs").joinpath("i31_semantics.md").read_text()
         abi_doc = Path(__file__).with_name("docs").joinpath("wasm_abi_v1.md").read_text()
@@ -3121,7 +3168,7 @@ def main(argv=None):
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 123   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/native-issuer-doc/native-issuer-example/operator-public-key-pinning/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 124   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about contracts, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 
