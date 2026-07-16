@@ -942,6 +942,15 @@ def main(argv=None):
         seam_k2 = '(defx t (Net) (fn (u) (seamN 2 (Net) (net u))))'
         seam_k5 = '(defx t (Net) (fn (u) (seamN 5 (Net) (net u))))'
         seam_wat_k2 = emit_wat(seam_k2)
+        meter_take_net = bytes.fromhex("2003450440000b200341016b2103")  # local.get Net; trap-at-zero; decrement
+        nested_meter_sources = (
+            '(defx t (Net) (fn (u) (seamN 2 (Net) (record (x (net u))))))',
+            '(defx t (Net) (fn (u) (seamN 2 (Net) (list (net u)))))',
+        )
+        nested_restore = '(defx t (Net) (fn (u) (seamN 2 (Net) (let (x (seamN 1 (Net) (net u))) (net u)))))'
+        multi_body = '(defx t (Net) (fn (u) (seamN 2 (Net) (net u) (net u))))'
+        nested_wasm = run_wasm(nested_restore, "(t 7)")
+        multi_wasm = run_wasm(multi_body, "(t 7)")
         seam_meter_boundary_ok = (
             seam_wat_k2 != emit_wat(seam_k5)
             and compile_wasm(seam_k2) != compile_wasm(seam_k5)
@@ -950,6 +959,10 @@ def main(argv=None):
             and "seamN quantum for Net" in seam_wat_k2
             and "local.set $__loom_meter_Net" in seam_wat_k2
             and "local.get $__loom_meter_Net" in seam_wat_k2
+            and all(compile_wasm(src).count(meter_take_net) == 1 for src in nested_meter_sources)
+            and "charge outer seamN meter" in emit_wat(nested_restore)
+            and nested_wasm == run_call(nested_restore, "(t 7)")
+            and multi_wasm == run_call(multi_body, "(t 7)")
         )
         ok += seam_meter_boundary_ok
         print(f"  {'ok  ' if seam_meter_boundary_ok else 'FAIL'} backend(WASM): seamN quantum lowers to an internal direct-effect meter")
