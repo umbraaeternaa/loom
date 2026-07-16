@@ -979,34 +979,57 @@ def main(argv=None):
         print(f"  {'ok  ' if heap_label_locations_ok else 'FAIL'} backend(WAT): allocation source labels include locations")
     except Exception as e:
         print(f"  FAIL backend(WAT) allocation labels: {e}")
-    try:                                               # seamN quantity now survives WASM/WAT lowering as an internal direct-effect meter without changing ABI imports/exports
+    try:                                               # seamN quantity survives calls/closures/handlers in a private linked frame without changing the host ABI
         seam_k2 = '(defx t (Net) (fn (u) (seamN 2 (Net) (net u))))'
         seam_k5 = '(defx t (Net) (fn (u) (seamN 5 (Net) (net u))))'
         seam_wat_k2 = emit_wat(seam_k2)
-        meter_take_net = bytes.fromhex("2003450440000b200341016b2103")  # local.get Net; trap-at-zero; decrement
-        nested_meter_sources = (
-            '(defx t (Net) (fn (u) (seamN 2 (Net) (record (x (net u))))))',
-            '(defx t (Net) (fn (u) (seamN 2 (Net) (list (net u)))))',
-        )
         nested_restore = '(defx t (Net) (fn (u) (seamN 2 (Net) (let (x (seamN 1 (Net) (net u))) (net u)))))'
         multi_body = '(defx t (Net) (fn (u) (seamN 2 (Net) (net u) (net u))))'
         nested_wasm = run_wasm(nested_restore, "(t 7)")
         multi_wasm = run_wasm(multi_body, "(t 7)")
+        indirect_meter_ok = True
+        indirect_meter_failures = []
+        if not is_browser_bundle and __import__("shutil").which("node"):
+            wf = _loom._WASM_FRONTEND
+            unchecked_wf = _loom._loom_wasm.Frontend(
+                wf.parse, wf.parse_spans, lambda _program: ({}, []), wf.pname, wf.error,
+                wf.op, wf.check_call_literals, wf.platent, wf.roleclauses,
+            )
+            overrun_programs = (
+                '(defx g (Net) (fn (x) (net x))) (defx t (Net) (fn (x) (seamN 1 (Net) (g x) (g x))))',
+                '(defx t (Net) (fn (x) (seamN 1 (Net) (let (g (fn (y) (net y))) (g x) (g x)))))',
+                '(defx g (Net) (fn (n) (if (= n 0) 0 (let (x (net n)) (g (- n 1)))))) (defx t (Net) (fn () (seamN 1 (Net) (g 2))))',
+                '(defx mock () (fn (x) x)) (defx t () (fn () (seamN 1 (Net) (with Net mock (net 1) (net 2)))))',
+                '(defx t (FFI) (fn () (seamN 1 (FFI) (ffi "lib" 1) (ffi "lib" 2))))',
+            )
+            for overrun_index, overrun_program in enumerate(overrun_programs):
+                try:
+                    _loom._loom_wasm.run_wasm(overrun_program, "(t)", unchecked_wf)
+                    indirect_meter_ok = False
+                    indirect_meter_failures.append(str(overrun_index))
+                except LoomError as e:
+                    trapped = "unreachable" in str(e)
+                    indirect_meter_ok = indirect_meter_ok and trapped
+                    if not trapped:
+                        indirect_meter_failures.append(str(overrun_index) + ":" + str(e))
         seam_meter_boundary_ok = (
             seam_wat_k2 != emit_wat(seam_k5)
             and compile_wasm(seam_k2) != compile_wasm(seam_k5)
             and "call $push_caps" in seam_wat_k2
             and "call $has_cap" in seam_wat_k2
-            and "seamN quantum for Net" in seam_wat_k2
-            and "local.set $__loom_meter_Net" in seam_wat_k2
-            and "local.get $__loom_meter_Net" in seam_wat_k2
-            and all(compile_wasm(src).count(meter_take_net) == 1 for src in nested_meter_sources)
-            and "charge outer seamN meter" in emit_wat(nested_restore)
+            and "call $__loom_meter_push" in seam_wat_k2
+            and "call $__loom_meter_take" in seam_wat_k2
+            and "global.set $__loom_meter_frame" in seam_wat_k2
+            and "restore parent frame" in emit_wat(nested_restore)
+            and not any("__loom_meter" in line for line in seam_wat_k2.splitlines() if "(import " in line)
             and nested_wasm == run_call(nested_restore, "(t 7)")
             and multi_wasm == run_call(multi_body, "(t 7)")
+            and indirect_meter_ok
         )
         ok += seam_meter_boundary_ok
-        print(f"  {'ok  ' if seam_meter_boundary_ok else 'FAIL'} backend(WASM): seamN quantum lowers to an internal direct-effect meter")
+        print(f"  {'ok  ' if seam_meter_boundary_ok else 'FAIL'} backend(WASM): seamN lowers to a private linked meter frame")
+        if not indirect_meter_ok:
+            print("       indirect meter failures: " + ", ".join(indirect_meter_failures))
     except Exception as e:
         print(f"  FAIL backend(WASM) seamN static boundary: {e}")
     try:                                               # i31 overflow semantics must match on every execution backend
@@ -3160,7 +3183,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         print(f"  {'ok  ' if native_issuer_handoff_ok else 'FAIL'} docs: playground native issuer handoff pinned")
     except Exception as e:
         print(f"  FAIL playground native issuer handoff pin: {e}")
-    try:                                               # runtime quantity mediation needs a design contract before it grows beyond the internal direct-effect meter
+    try:                                               # runtime quantity mediation needs a design contract before capability-use and heap-byte meters compose
         qdoc = Path(__file__).with_name("docs").joinpath("wasm_quantity_mediation.md").read_text()
         mdoc = Path(__file__).with_name("docs").joinpath("meter_frame_v1.md").read_text()
         quantity_doc_ok = (
@@ -3172,8 +3195,8 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "Do not add `memory.grow` until heap growth is explicitly metered by LOOM." in qdoc
             and "`push_caps`" in qdoc
             and "`has_cap`" in qdoc
-            and "internal compiler-emitted direct-effect counter for `seamN`" in qdoc
-            and "does not add imports, exports, globals, object\nlayouts, or host obligations" in qdoc
+            and "internal compiler-emitted linked meter frame for `seamN`" in qdoc
+            and "no host\nimports, exports, public object layouts, or host obligations" in qdoc
             and "Capability-use quantity and heap-byte quantity are one runtime-mediation family" in qdoc
             and "ABI v2" in qdoc
             and "No unmetered `memory.grow`." in qdoc
@@ -3181,8 +3204,8 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "charges every active frame" in mdoc
             and "traps before changing any counter" in mdoc
             and "Python and JavaScript generated backends implement the same frame" in mdoc
-            and "production checker remains fail-closed" in mdoc
-            and "changes no WASM ABI v1 imports, exports, object layouts, or host" in mdoc
+            and "production checker remains conservatively fail-closed" in mdoc
+            and "changes no WASM ABI v1 imports, exports, public object layouts" in mdoc
         )
         ok += quantity_doc_ok
         print(f"  {'ok  ' if quantity_doc_ok else 'FAIL'} docs: wasm quantity mediation roadmap pinned")
@@ -3470,7 +3493,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "`has_cap`" in abi_doc
             and "`host_ffi`" in abi_doc
             and "source-checked capability presence only" in abi_doc
-            and "internal compiler-emitted local counters for\ndirect effects inside a metered seam" in abi_doc
+            and "compiler-emitted linked meter frame for effects\ninside a metered seam" in abi_doc
             and "assigned by first\noccurrence of the foreign component name inside one compiled module" in abi_doc
             and "Repeated\nuses of the same foreign name in one module use the same raw ID" in abi_doc
             and "must not be persisted or compared across\nseparately compiled modules" in abi_doc
@@ -3525,8 +3548,8 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "Experimental or bounded" in rdoc
             and "does not magically confine arbitrary external tools" in rdoc_words
             and "Native operator signing is intentionally outside the public language runtime." in rdoc
-            and "Portable Meter Frame v1 is implemented by the reference interpreter and the generated Python and JavaScript backends." in rdoc_words
-            and "`seamN` lowers to an internal direct-effect runtime meter" in rdoc_words
+            and "Portable Meter Frame v1 is implemented by the reference interpreter, the generated Python and JavaScript backends, and WASM." in rdoc_words
+            and "`seamN` lowers to an internal linked runtime meter" in rdoc_words
             and "Release verification checklist" in rdoc
             and "python3 loom.py release-check" in rdoc
             and "python3 -m pip install ." in rdoc

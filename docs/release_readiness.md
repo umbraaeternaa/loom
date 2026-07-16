@@ -54,14 +54,14 @@ experimental, and what LOOM does not claim yet.
 - Native operator signing is intentionally outside the public language runtime.
   LOOM verifies the approval artifact and documents the required boundary; it
   does not ship private keys or production key ownership.
-- Portable Meter Frame v1 is implemented by the reference interpreter and the
-  generated Python and JavaScript backends. The checker still rejects indirect
-  metered calls, recursion, higher-order paths, `handle`, and `with` until WASM
-  reaches runtime parity.
+- Portable Meter Frame v1 is implemented by the reference interpreter, the
+  generated Python and JavaScript backends, and WASM. The WASM frame propagates
+  through named calls, closures/`applyN`, recursion, handlers, and FFI. The
+  checker still rejects indirect metered paths conservatively until its
+  quantitative analysis is deliberately relaxed.
 - WASM ABI v1 is stable for the documented surface. `seamN` lowers to an
-  internal direct-effect runtime meter without adding host ABI obligations, but
-  full ABI-enforced quantity mediation and future heap growth remain
-  experimental.
+  internal linked runtime meter without adding host ABI obligations, but
+  host-visible quantity diagnostics and future heap growth remain experimental.
 - Future incompatible changes to tagged values, stable effect IDs, host imports,
   or exported ABI metadata require a new ABI version.
 

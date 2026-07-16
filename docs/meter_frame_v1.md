@@ -36,11 +36,12 @@ are charged under the frames active when those effects occur.
 - The reference interpreter implements Meter Frame v1.
 - The Python and JavaScript generated backends implement the same frame,
   atomic-charge, handler, nesting, and unwind rules.
-- WASM implements direct scoped effects; indirect calls, closures, `applyN`,
-  recursion, and handler parity are pending.
-- The production checker remains fail-closed for indirect metered paths until
-  WASM implements this contract across its indirect runtime paths.
+- WASM implements the same active-frame semantics through named calls,
+  closures/`applyN`, recursion, handlers, and FFI. Its linked frame and active
+  pointer are private implementation state, not host ABI state.
+- The production checker remains conservatively fail-closed for indirect
+  metered paths until its quantitative analysis is deliberately relaxed.
 
-Meter Frame v1 changes no WASM ABI v1 imports, exports, object layouts, or host
-obligations. Host-visible meter state or diagnostics require a separate ABI
-decision.
+Meter Frame v1 changes no WASM ABI v1 imports, exports, public object layouts,
+or host obligations. It uses one private internal global and private raw heap
+records. Host-visible meter state or diagnostics require a separate ABI decision.

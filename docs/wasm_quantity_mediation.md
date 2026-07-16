@@ -5,9 +5,10 @@ document does not change ABI v1 by itself.
 
 The backend-neutral runtime rules are normative in
 [LOOM Portable Meter Frame v1](meter_frame_v1.md). The reference interpreter
-and generated Python and JavaScript backends implement that contract. The
-checker keeps indirect metered calls, closures, recursion, higher-order
-dispatch, and handlers fail-closed until WASM reaches parity.
+and generated Python and JavaScript backends implement that contract. WASM now
+implements it with a private linked frame. The checker keeps indirect metered
+calls, closures, recursion, higher-order dispatch, and handlers conservatively
+fail-closed until its quantitative analysis is deliberately relaxed.
 
 ## Current Truth
 
@@ -19,15 +20,16 @@ LOOM has two different quantity stories today:
   `loom_heap_used`; `$reserve` increments the used counter for each successful
   heap allocation.
 
-ABI v1 now has an internal compiler-emitted direct-effect counter for `seamN`.
+ABI v1 now has an internal compiler-emitted linked meter frame for `seamN`.
 Generated WASM still contains capability presence gates through `push_caps` and
-`has_cap`; additionally, direct `IO`, `Net`, `Rand`, and `Alloc` effect
-boundaries inside a metered seam decrement a local runtime counter before the
-effect becomes visible. This does not add imports, exports, globals, object
-layouts, or host obligations.
+`has_cap`; additionally, `IO`, `Net`, `Rand`, `Alloc`, and `FFI` requests charge
+every matching active frame before the effect becomes visible. The frame
+propagates through named calls, closures/`applyN`, recursion, and handlers. This
+adds one private internal global and private raw heap records, but no host
+imports, exports, public object layouts, or host obligations.
 
-That internal meter is not yet a full ABI-enforced quantity mediation layer for
-closures, recursion, effect handlers, or future heap growth.
+That internal meter is not a host-visible ABI quantity diagnostics layer and it
+does not meter future heap growth.
 
 ## Rule Before Growth
 
@@ -70,16 +72,16 @@ case, LOOM must either:
 - No unmetered `memory.grow`.
 - No hidden host-side quantum enforcement that is absent from WAT/binary
   structure.
-- No claim that a WASM artifact self-enforces `seamN K` until the runtime meter
-  exists and is pinned by tests.
+- No claim that a WASM artifact self-enforces a quantity unless its runtime
+  meter exists and is pinned by tests.
 
 ## Recommended Sequence
 
-1. Keep ABI v1 honest: source-checked quantities, internal direct-effect
-   `seamN` lowering, and heap-used diagnostics.
+1. Keep ABI v1 honest: source-checked quantities, private linked `seamN`
+   lowering, and heap-used diagnostics.
 2. Add human-facing diagnostics that explain which heap object families reserve
    bytes.
-3. Extend the internal runtime meter behind tests until closures, recursion,
-   handlers, and heap bytes compose.
+3. Keep calls, closures, recursion, handlers, and FFI pinned while defining how
+   capability-use meters compose with heap-byte budgets.
 4. Only after capability-use and heap-byte meters compose, consider metered
    `memory.grow`.

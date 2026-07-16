@@ -191,8 +191,8 @@ def _check_wasm_abi_doc() -> None:
         "finite traversal guard",
         "2048 traversed cells",
         "host-visible counter",
-        "internal compiler-emitted local counters for\n"
-        "direct effects inside a metered seam",
+        "compiler-emitted linked meter frame for effects\n"
+        "inside a metered seam",
         "`loom_heap_limit`",
         "`loom_heap_used`",
         "`loom_heap_static_used`",
@@ -241,8 +241,8 @@ def _check_quantity_mediation_doc() -> None:
         "Do not add `memory.grow` until heap growth is explicitly metered by LOOM.",
         "`push_caps`",
         "`has_cap`",
-        "internal compiler-emitted direct-effect counter for `seamN`",
-        "does not add imports, exports, globals, object\nlayouts, or host obligations",
+        "internal compiler-emitted linked meter frame for `seamN`",
+        "no host\nimports, exports, public object layouts, or host obligations",
         "Capability-use quantity and heap-byte quantity are one runtime-mediation family",
         "ABI v2",
         "No unmetered `memory.grow`.",
@@ -262,8 +262,9 @@ def _check_meter_frame_doc() -> None:
         "`IO`, `Net`, `Alloc`, `Rand`, and `FFI`",
         "reference interpreter implements Meter Frame v1",
         "Python and JavaScript generated backends implement the same frame",
-        "production checker remains fail-closed",
-        "changes no WASM ABI v1 imports, exports, object layouts, or host",
+        "WASM implements the same active-frame semantics",
+        "production checker remains conservatively fail-closed",
+        "changes no WASM ABI v1 imports, exports, public object layouts",
     )
     missing = [needle for needle in required if needle not in text]
     if missing:
