@@ -57,8 +57,9 @@ experimental, and what LOOM does not claim yet.
 - Portable Meter Frame v1 is implemented by the reference interpreter, the
   generated Python and JavaScript backends, and WASM. The WASM frame propagates
   through named calls, closures/`applyN`, recursion, handlers, and FFI. The
-  checker still rejects indirect metered paths conservatively until its
-  quantitative analysis is deliberately relaxed.
+  Checker Meter Summary v1 admits finite statically resolved calls, closures,
+  higher-order applications, and handlers. Recursion and unresolved
+  higher-order dispatch remain fail-closed.
 - WASM ABI v1 is stable for the documented surface. `seamN` lowers to an
   internal linked runtime meter without adding host ABI obligations, but
   host-visible quantity diagnostics and future heap growth remain experimental.

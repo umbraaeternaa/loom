@@ -6,9 +6,10 @@ document does not change ABI v1 by itself.
 The backend-neutral runtime rules are normative in
 [LOOM Portable Meter Frame v1](meter_frame_v1.md). The reference interpreter
 and generated Python and JavaScript backends implement that contract. WASM now
-implements it with a private linked frame. The checker keeps indirect metered
-calls, closures, recursion, higher-order dispatch, and handlers conservatively
-fail-closed until its quantitative analysis is deliberately relaxed.
+implements it with a private linked frame. Checker Meter Summary v1 admits
+finite statically resolved calls, closures, higher-order dispatch, and handlers
+by their maximal path count. Recursion and unresolved dispatch saturate and
+remain fail-closed.
 
 ## Current Truth
 

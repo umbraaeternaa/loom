@@ -263,7 +263,8 @@ def _check_meter_frame_doc() -> None:
         "reference interpreter implements Meter Frame v1",
         "Python and JavaScript generated backends implement the same frame",
         "WASM implements the same active-frame semantics",
-        "production checker remains conservatively fail-closed",
+        "Checker Meter Summary v1 composes finite statically resolved named calls",
+        "Recursion\n  and unresolved higher-order dispatch saturate and remain fail-closed",
         "changes no WASM ABI v1 imports, exports, public object layouts",
     )
     missing = [needle for needle in required if needle not in text]

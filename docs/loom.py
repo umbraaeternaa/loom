@@ -435,55 +435,92 @@ def _ucount(node, fns, penv):
 
 _NCAP = 1024                                                         # D27 meter ceiling: counts saturate here (>> any lawful quantum); recursion/overflow reach it
 def _nadd(a, b): return min(a + b, _NCAP)
-def _ncount(node, fns, penv):                                        # D27 EXACT use-count {effect:int}, saturating -- numeric refinement of _ucount (whose {0,1,'M'} collapses every count >= 2)
-    out = {}                                                         # conservative: a call/recursion/unknown higher-order use -> _NCAP (fail-closed); if/match branches take MAX (one runs)
-    def add(dd):
-        for e, c in dd.items(): out[e] = _nadd(out.get(e, 0), c)
+def _nmul(a, b): return min(a * b, _NCAP)
+def _nmerge(target, counts):
+    for e, c in counts.items():
+        if e in EFFECTS or not is_var(e): target[e] = _nadd(target.get(e, 0), c)
+def _callable_ncount(value, fns, penv, cenv, active):
+    if _is_symbol(value):
+        if value in cenv: return dict(cenv[value])
+        if value in fns: return _function_ncount(value, fns, {}, active)
+        if value in penv: return {e: _NCAP for e in penv[value] if not is_var(e)}
+        return {}
+    if isinstance(value, list) and value and value[0] == 'fn':
+        lp = {**penv, **{pname(p): platent(p) for p in value[1] if platent(p) is not None}}
+        summary = {}
+        for x in value[2:]: _nmerge(summary, _ncount(x, fns, lp, cenv, active))
+        return summary
+    return {}
+def _function_ncount(name, fns, bound_cenv, active):
+    info = fns[name]
+    if name in active: return {e: _NCAP for e in info.get('eff', set()) if e in EFFECTS}
+    summary = {}
+    for x in info['fn'][2:]: _nmerge(summary, _ncount(x, fns, info['penv'], bound_cenv, active | {name}))
+    return summary
+def _ncount(node, fns, penv, cenv=None, active=None):
+    """Saturating path count; exact for finite statically resolved call graphs."""
+    cenv, active = cenv or {}, active or set()
+    out = {}
+    def add(dd): _nmerge(out, dd)
     if not isinstance(node, list) or not node: return out
     h = node[0]
     if h == 'fn': return out
-    if h == 'seamN': return _ncount(['seam'] + node[2:], fns, penv)
+    if h == 'seamN': return _ncount(['seam'] + node[2:], fns, penv, cenv, active)
     if h in ('seam', 'seam1'):
-        for x in _roleclauses(node[2:])[3]: add(_ncount(x, fns, penv))
+        for x in _roleclauses(node[2:])[3]: add(_ncount(x, fns, penv, cenv, active))
         return out
     if h == 'if':
-        add(_ncount(node[1], fns, penv))
-        tc, ec = _ncount(node[2], fns, penv), _ncount(node[3], fns, penv)
+        add(_ncount(node[1], fns, penv, cenv, active))
+        tc, ec = _ncount(node[2], fns, penv, cenv, active), _ncount(node[3], fns, penv, cenv, active)
         for e in set(tc) | set(ec): out[e] = _nadd(out.get(e, 0), max(tc.get(e, 0), ec.get(e, 0)))
         return out
     if h == 'match':
-        add(_ncount(node[1], fns, penv))
-        arms = [_ncount(a[1], fns, penv) for a in node[2:] if isinstance(a, list) and len(a) >= 2]
+        add(_ncount(node[1], fns, penv, cenv, active))
+        arms = [_ncount(a[1], fns, penv, cenv, active) for a in node[2:] if isinstance(a, list) and len(a) >= 2]
         for e in set().union(*[set(c) for c in arms]) if arms else set():
             out[e] = _nadd(out.get(e, 0), max(c.get(e, 0) for c in arms))
         return out
     if h == 'let':
-        binding = node[1]; bound_value = binding[1]
-        add(_ncount(bound_value, fns, penv))
-        for x in node[2:]: add(_ncount(x, fns, penv))
-        if isinstance(bound_value, list) and bound_value and bound_value[0] == 'fn' and any(_has_head(x, binding[0]) for x in node[2:]):
-            closure_counts = {}
-            for x in bound_value[2:]:
-                for e, c in _ncount(x, fns, penv).items(): closure_counts[e] = _nadd(closure_counts.get(e, 0), c)
-            for e, c in closure_counts.items():
-                if c: out[e] = _NCAP
+        name, bound_value = node[1][0], node[1][1]
+        add(_ncount(bound_value, fns, penv, cenv, active))
+        nc = cenv
+        if is_fn_expr(bound_value, fns, penv) or (_is_symbol(bound_value) and bound_value in cenv):
+            summary = _callable_ncount(bound_value, fns, penv, cenv, active)
+            if isinstance(bound_value, list) and any(_has_head(x, name) for x in bound_value[2:]): summary = {e: _NCAP for e in summary}
+            nc = {**cenv, name: summary}
+        for x in node[2:]: add(_ncount(x, fns, penv, nc, active))
         return out
     if isinstance(h, list):
-        add(_ncount(h, fns, penv))
-        for a in node[1:]: add(_ncount(a, fns, penv))
+        add(_callable_ncount(h, fns, penv, cenv, active))
+        for a in node[1:]: add(_ncount(a, fns, penv, cenv, active))
+        return out
+    if h == 'handle':
+        for x in node[2:]: add(_ncount(x, fns, penv, cenv, active))
+        return out
+    if h == 'with':
+        body_counts = {}
+        for x in node[3:]: _nmerge(body_counts, _ncount(x, fns, penv, cenv, active))
+        add(body_counts); requests = body_counts.get(node[1], 0)
+        hc = _callable_ncount(node[2], fns, penv, cenv, active)
+        if requests and hc.get(node[1], 0): hc = {e: _NCAP for e in hc}
+        for e, c in hc.items(): out[e] = _nadd(out.get(e, 0), _nmul(requests, c))
         return out
     if h == 'resource':
         spec = node[1]; rname, reffs = (spec[0], set(spec[1:])) if isinstance(spec, list) else (spec, set())
-        for x in node[2:]: add(_ncount(x, fns, penv))
+        for x in node[2:]: add(_ncount(x, fns, penv, cenv, active))
         uses = out.pop(rname, 0)
         for E in reffs & EFFECTS: out[E] = _nadd(out.get(E, 0), uses)
         return out
     if h == 'use': return {node[1]: 1}
-    for a in node[1:]: add(_ncount(a, fns, penv))
+    for a in node[1:]: add(_ncount(a, fns, penv, cenv, active))
     if h in _OPEFF: out[_OPEFF[h]] = _nadd(out.get(_OPEFF[h], 0), 1)
     elif h == 'ffi': out['FFI'] = _nadd(out.get('FFI', 0), 1)
     elif h in fns:
-        for e in fns[h].get('eff', set()) & EFFECTS: out[e] = _NCAP
+        bc = {}
+        for i, p in enumerate(fns[h]['params']):
+            if platent(p) is not None and i + 1 < len(node): bc[pname(p)] = _callable_ncount(node[i + 1], fns, penv, cenv, active)
+        add(_function_ncount(h, fns, bc, active))
+    elif h in cenv: add(cenv[h])
     elif penv and h in penv:
         for e in penv[h]:
             if not is_var(e): out[e] = _NCAP
@@ -742,14 +779,12 @@ def infer(node, fns, errs, penv=None):
         K = node[1] if isinstance(node[1], int) else -1
         decl = infer(['seam'] + node[2:], fns, errs, penv)
         body = _roleclauses(node[3:])[3]
-        opaque = any(_has_head(x, 'with') or _has_head(x, 'handle') for x in body)
         nc = {}
         for x in body:
             for e, c in _ncount(x, fns, penv).items(): nc[e] = _nadd(nc.get(e, 0), c)
         for E in sorted(decl):
             direct_count = nc.get(E, 0)
-            got = _NCAP if opaque else direct_count
-            if K < 0 or K >= _NCAP or got > K:
+            if K < 0 or K >= _NCAP or direct_count > K:
                 errs.append(_meter_error(E, K, direct_count, body, fns, penv))
         return decl
     if h == "repro":                                    # (repro body..) -- pass-10 REPRODUCIBILITY region: this path must be
@@ -930,14 +965,9 @@ def _has_head(node, head):
 def _meter_error(E, K, direct_count, body, fns, penv):
     if K < 0 or K >= _NCAP:
         return f"metered capability {E} has invalid quantum {K} (expected 0..{_NCAP - 1})"
-    opaque = []
-    if any(_has_head(x, "with") for x in body): opaque.append("with")
-    if any(_has_head(x, "handle") for x in body): opaque.append("handle")
-    if any(_ncount(x, fns, penv).get(E, 0) >= _NCAP for x in body): opaque.append("call/recursion/higher-order")
-    if opaque:
-        counted = f"counted {direct_count} direct use(s); " if direct_count else ""
-        return f"metered capability {E} used more than its quantum {K} ({counted}meter became opaque via {', '.join(opaque)}; fail-closed)"
-    return f"metered capability {E} used more than its quantum {K} (counted {direct_count} direct use(s) in the seam body)"
+    if direct_count >= _NCAP:
+        return f"metered capability {E} used more than its quantum {K} (meter summary is unbounded via recursion or unresolved higher-order dispatch; fail-closed)"
+    return f"metered capability {E} used more than its quantum {K} (counted {direct_count} use(s) along the maximal finite path)"
 
 
 def _check_program(program):

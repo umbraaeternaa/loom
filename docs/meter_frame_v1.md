@@ -39,8 +39,10 @@ are charged under the frames active when those effects occur.
 - WASM implements the same active-frame semantics through named calls,
   closures/`applyN`, recursion, handlers, and FFI. Its linked frame and active
   pointer are private implementation state, not host ABI state.
-- The production checker remains conservatively fail-closed for indirect
-  metered paths until its quantitative analysis is deliberately relaxed.
+- Checker Meter Summary v1 composes finite statically resolved named calls,
+  closures, higher-order applications, `handle`, and `with`. Sequential counts
+  add and conditional/match branches take their maximal path count. Recursion
+  and unresolved higher-order dispatch saturate and remain fail-closed.
 
 Meter Frame v1 changes no WASM ABI v1 imports, exports, public object layouts,
 or host obligations. It uses one private internal global and private raw heap

@@ -382,15 +382,15 @@ CASES = [
     #     {0,1,'M'} use-count lattice collapses every count >= 2, so at-most-N (N>=2) is unrepresentable: a legit 2-use
     #     task must over-grant (seam, UNBOUNDED) or under-grant (seam1). (seamN K (E..) ... body) bounds each granted
     #     effect to K uses via an exact saturating count, delegating EVERY seam gate (no bypass); an effect reaching the
-    #     meter via a call/recursion/reinterpret/discharge saturates to overflow (fail-closed). Signals: otari (budget
-    #     enforcement), tokenomics (per-token metering), Agent Zero (unbounded ambient). ---
+    #     meter composes finite path summaries through calls/closures/handlers; recursive or unresolved dispatch remains
+    #     saturated to overflow (fail-closed). Signals: otari (budget enforcement), tokenomics (per-token metering). ---
     ("D27 metered: under quantum ok",        '(defx f (Net) (fn (u) (seamN 2 (Net) (net u) (net u))))', True),
     ("D27 metered: over quantum refused",    '(defx f (Net) (fn (u) (seamN 1 (Net) (net u) (net u))))', False),
     ("D27 metered: K=1 is seam1 (at most once)", '(defx f (Net) (fn (u) (seamN 1 (Net) (net u))))', True),
     ("D27 metered: exactly K accepts",       '(defx f (Net) (fn (u) (seamN 3 (Net) (net u) (net u) (net u))))', True),
     ("D27 metered: K+1 refused",             '(defx f (Net) (fn (u) (seamN 2 (Net) (net u) (net u) (net u))))', False),
     ("D27 metered: if-branches not summed",  '(defx f (Net) (fn (u c) (seamN 1 (Net) (if c (net u) (net u)))))', True),
-    ("D27 metered: effect via a call is fail-closed", '(defx hit (Net) (fn (u) (net u))) (defx f (Net) (fn (u) (seamN 5 (Net) (hit u))))', False),
+    ("D27 metered: finite call summary", '(defx hit (Net) (fn (u) (net u))) (defx f (Net) (fn (u) (seamN 1 (Net) (hit u))))', True),
     ("D27 metered: under-declared row still caught", '(defx f (Net) (fn (u) (seamN 2 (Pure) (net u))))', False),
     ("D27 metered: per-effect quantum holds", '(defx f (Net IO) (fn (u) (seamN 2 (Net IO) (net u) (net u) (print u))))', True),
     ("D27 metered: nested seam cannot launder amplification", '(defx f (Net) (fn (u) (seamN 1 (Net) (seam (Net) (net u) (net u)))))', False),
@@ -499,14 +499,25 @@ def main(argv=None):
         good = (got == accept); ok += good
         why = f"  [{errs[0]}]" if errs else ""
         print(f"  {'ok  ' if good else 'FAIL'} {name:22} expect={'accept' if accept else 'reject':6} got={'accept' if got else 'reject'}{why}")
-    try:                                               # seamN should explain direct overflow differently from fail-closed opaque overflow
+    try:                                               # finite summaries open known calls/closures/handlers; cycles and unresolved HOFs remain fail-closed
         _, direct_errs = check(parse('(defx f (Net) (fn (u) (seamN 1 (Net) (net u) (net u))))'))
-        _, opaque_errs = check(parse('(defx hit (Net) (fn (u) (net u))) (defx f (Net) (fn (u) (seamN 5 (Net) (hit u))))'))
-        direct_ok = bool(direct_errs) and "counted 2 direct use(s) in the seam body" in direct_errs[0]
-        opaque_ok = bool(opaque_errs) and "meter became opaque via call/recursion/higher-order" in opaque_errs[0]
-        meter_diag_ok = direct_ok and opaque_ok
+        _, recursive_errs = check(parse('(defx hit (Net) (fn (n) (if (= n 0) 0 (let (x (net n)) (hit (- n 1)))))) (defx f (Net) (fn () (seamN 10 (Net) (hit 2))))'))
+        finite_programs = (
+            '(defx hit (Net) (fn (u) (net u))) (defx f (Net) (fn () (seamN 1 (Net) (hit 1))))',
+            '(defx f (Net) (fn () (seamN 1 (Net) (let (g (fn (u) (net u))) (g 1)))))',
+            '(defx ap (e) (fn ((g e) x) (g x))) (defx f (Net) (fn () (seamN 1 (Net) (ap (fn (u) (net u)) 1))))',
+            '(defx f (IO) (fn () (seamN 2 (IO) (handle (IO) (print 1) (print 2)))))',
+            '(defx f (Net) (fn () (seamN 2 (Net) (with Net (fn (u) u) (net 1) (net 2)))))',
+            '(defx f (Net IO) (fn () (seamN 1 (Net IO) (with Net (fn (u) (print u)) (net 1)))))',
+        )
+        finite_ok = all(not check(parse(program))[1] for program in finite_programs)
+        _, closure_over = check(parse('(defx f (Net) (fn () (seamN 1 (Net) (let (g (fn (u) (net u))) (g 1) (g 2)))))'))
+        _, unresolved_hof = check(parse('(defx f (Net) (fn ((g Net)) (seamN 10 (Net) (g 1))))'))
+        direct_ok = bool(direct_errs) and "counted 2 use(s) along the maximal finite path" in direct_errs[0]
+        recursive_ok = bool(recursive_errs) and "meter summary is unbounded via recursion or unresolved higher-order dispatch" in recursive_errs[0]
+        meter_diag_ok = direct_ok and recursive_ok and finite_ok and bool(closure_over) and bool(unresolved_hof)
         ok += meter_diag_ok
-        print(f"  {'ok  ' if meter_diag_ok else 'FAIL'} checker: seamN diagnostics stay specific")
+        print(f"  {'ok  ' if meter_diag_ok else 'FAIL'} checker: finite Meter Summary v1 + unbounded fail-closed")
     except Exception as e:
         print(f"  FAIL seamN diagnostics: {e}")
     try:                                               # asm v0 validates a closed typed envelope and rejects everything outside it
@@ -987,6 +998,20 @@ def main(argv=None):
         multi_body = '(defx t (Net) (fn (u) (seamN 2 (Net) (net u) (net u))))'
         nested_wasm = run_wasm(nested_restore, "(t 7)")
         multi_wasm = run_wasm(multi_body, "(t 7)")
+        finite_runtime_programs = (
+            ('(defx hit (Net) (fn (u) (net u))) (defx t (Net) (fn (u) (seamN 1 (Net) (hit u))))', "(t 7)"),
+            ('(defx t (Net) (fn () (seamN 1 (Net) (let (g (fn (u) (net u))) (g 7)))))', "(t)"),
+            ('(defx ap (e) (fn ((g e) x) (g x))) (defx t (Net) (fn () (seamN 1 (Net) (ap (fn (u) (net u)) 7))))', "(t)"),
+            ('(defx t (IO) (fn () (seamN 2 (IO) (handle (IO) (print 1) (print 2)))))', "(t)"),
+            ('(defx t (Net) (fn () (seamN 2 (Net) (with Net (fn (u) u) (net 1) (net 2)))))', "(t)"),
+            ('(defx t (Net IO) (fn () (seamN 1 (Net IO) (with Net (fn (u) (print u)) (net 1)))))', "(t)"),
+        )
+        finite_runtime_ok = True
+        for finite_program, finite_call in finite_runtime_programs:
+            results = [run_call(finite_program, finite_call), run_compiled(finite_program, finite_call), run_wasm(finite_program, finite_call)]
+            if __import__("shutil").which("node"):
+                results.append(run_js(finite_program, finite_call))
+            finite_runtime_ok = finite_runtime_ok and all(result == results[0] for result in results[1:])
         indirect_meter_ok = True
         indirect_meter_failures = []
         if not is_browser_bundle and __import__("shutil").which("node"):
@@ -1024,6 +1049,7 @@ def main(argv=None):
             and not any("__loom_meter" in line for line in seam_wat_k2.splitlines() if "(import " in line)
             and nested_wasm == run_call(nested_restore, "(t 7)")
             and multi_wasm == run_call(multi_body, "(t 7)")
+            and finite_runtime_ok
             and indirect_meter_ok
         )
         ok += seam_meter_boundary_ok
@@ -3204,7 +3230,8 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "charges every active frame" in mdoc
             and "traps before changing any counter" in mdoc
             and "Python and JavaScript generated backends implement the same frame" in mdoc
-            and "production checker remains conservatively fail-closed" in mdoc
+            and "Checker Meter Summary v1 composes finite statically resolved named calls" in mdoc
+            and "Recursion\n  and unresolved higher-order dispatch saturate and remain fail-closed" in mdoc
             and "changes no WASM ABI v1 imports, exports, public object layouts" in mdoc
         )
         ok += quantity_doc_ok
@@ -3549,6 +3576,8 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "does not magically confine arbitrary external tools" in rdoc_words
             and "Native operator signing is intentionally outside the public language runtime." in rdoc
             and "Portable Meter Frame v1 is implemented by the reference interpreter, the generated Python and JavaScript backends, and WASM." in rdoc_words
+            and "Checker Meter Summary v1 admits finite statically resolved calls" in rdoc_words
+            and "Recursion and unresolved higher-order dispatch remain fail-closed." in rdoc_words
             and "`seamN` lowers to an internal linked runtime meter" in rdoc_words
             and "Release verification checklist" in rdoc
             and "python3 loom.py release-check" in rdoc
