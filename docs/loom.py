@@ -28,10 +28,11 @@ _MISS = object()                                        # sentinel for scoped sa
 
 class _RuntimeState:
     """Mutable runtime capability state scoped to one run_call() invocation."""
-    __slots__ = ("caps",)
+    __slots__ = ("caps", "meters")
 
     def __init__(self):
         self.caps = []
+        self.meters = []
 
 
 class _CheckerState:
@@ -69,6 +70,15 @@ def _checker_state():
 def _cap_ok(eff):
     caps = _runtime_state().caps
     return (not caps) or (eff in caps[-1])              # top-level host is unrestricted; a seam SANDBOXES its body
+def _meter_frame(quantum, effects):
+    if not isinstance(quantum, int) or quantum < 0:
+        raise LoomError("meter frame: quantum must be a non-negative integer")
+    return {eff: quantum for eff in effects if eff != "Pure"}
+def _meter_take(eff):
+    active = [frame for frame in _runtime_state().meters if eff in frame]
+    if any(frame[eff] <= 0 for frame in active):
+        raise LoomError(f"meter exhausted: {eff} quantum exceeded before effect request")
+    for frame in active: frame[eff] -= 1
 def _foreign_logger(args, out):                        # opaque foreign code that WANTS IO; emits ONLY if IO was granted
     if _cap_ok("IO"): out.append("foreign:" + str(args[0]))
     return args[0]
@@ -448,8 +458,15 @@ def _ncount(node, fns, penv):                                        # D27 EXACT
             out[e] = _nadd(out.get(e, 0), max(c.get(e, 0) for c in arms))
         return out
     if h == 'let':
-        add(_ncount(node[1][1], fns, penv))
+        binding = node[1]; bound_value = binding[1]
+        add(_ncount(bound_value, fns, penv))
         for x in node[2:]: add(_ncount(x, fns, penv))
+        if isinstance(bound_value, list) and bound_value and bound_value[0] == 'fn' and any(_has_head(x, binding[0]) for x in node[2:]):
+            closure_counts = {}
+            for x in bound_value[2:]:
+                for e, c in _ncount(x, fns, penv).items(): closure_counts[e] = _nadd(closure_counts.get(e, 0), c)
+            for e, c in closure_counts.items():
+                if c: out[e] = _NCAP
         return out
     if isinstance(h, list):
         add(_ncount(h, fns, penv))
@@ -1041,7 +1058,17 @@ def ev(node, env, fns, out, handlers=None):
     if type(node) is str: return node
     h = node[0]
     if h == "fn": return Closure(node[1], node[2:], env)   # a lambda literal evaluates to a closure over env
-    if h == 'seamN': return ev(['seam'] + node[2:], env, fns, out, handlers)   # D27 meter runs as a seam (cap stack); the quantum is a static check
+    if h == 'seamN':                                   # portable runtime quantity frame; checker remains the static first gate
+        state = _runtime_state()
+        state.caps.append(set(node[2]) - {"Pure"})
+        state.meters.append(_meter_frame(node[1], node[2]))
+        try:
+            r = None
+            for x in _roleclauses(node[3:])[3]: r = ev(x, env, fns, out, handlers)
+        finally:
+            state.meters.pop()
+            state.caps.pop()
+        return r
     if h == 'repro':                                    # pass-10 reproducibility region: value-transparent at runtime (a static-only assertion)
         r = None
         for x in node[1:]: r = ev(x, env, fns, out, handlers)
@@ -1058,7 +1085,9 @@ def ev(node, env, fns, out, handlers=None):
     if h == "ffi":                                      # foreign call: run the registered fn under the current grant
         f = FOREIGN.get(node[1])
         if f is None: raise LoomError(f"unknown foreign fn: {node[1]}")
-        return f([ev(x, env, fns, out, handlers) for x in node[2:]], out)
+        args = [ev(x, env, fns, out, handlers) for x in node[2:]]
+        _meter_take("FFI")
+        return f(args, out)
     if h == "handle":                                   # honest discharge: handled IO captured locally, never emitted
         sink = [] if "IO" in set(node[1]) else out
         r = None
@@ -1140,6 +1169,8 @@ def ev(node, env, fns, out, handlers=None):
         if spec["portable_op"] == "gt_s": return 1 if args[0] > args[1] else 0
         raise LoomError("asm: registered intrinsic has no runtime lowering")
     a = [ev(x, env, fns, out, handlers) for x in node[1:]]
+    effect_name = next((eff for eff, op in OP.items() if op == h), None)
+    if effect_name is not None: _meter_take(effect_name)
     if h == "+": return _i31(sum(a))
     if h == "-": return _i31(a[0] - a[1])
     if h == "*":
@@ -1154,7 +1185,7 @@ def ev(node, env, fns, out, handlers=None):
     if h == "head": return a[0][0]
     if h == "tail": return a[0][1:]
     if h == "empty": return 1 if len(a[0]) == 0 else 0
-    if h in OP.values() and h in handlers:              # a reinterpreted operation -> route to its handler fn
+    if effect_name is not None and h in handlers:       # a reinterpreted operation -> route to its handler fn
         return call_fn(handlers[h], a, fns, out, {k: v for k, v in handlers.items() if k != h})  # no self-recursion
     if h == "print":
         if not _cap_ok("IO"): raise LoomError("capability denied: IO not granted by enclosing seam")

@@ -237,9 +237,24 @@ def _ncount(frontend, node, fns, penv):
             out[eff] = _nadd(out.get(eff, 0), max(counts.get(eff, 0) for counts in arms))
         return out
     if head == "let":
-        add(_ncount(frontend, node[1][1], fns, penv))
+        binding = node[1]
+        bound_value = binding[1]
+        add(_ncount(frontend, bound_value, fns, penv))
         for item in node[2:]:
             add(_ncount(frontend, item, fns, penv))
+        if (
+            isinstance(bound_value, list)
+            and bound_value
+            and bound_value[0] == "fn"
+            and any(_has_head(item, binding[0]) for item in node[2:])
+        ):
+            closure_counts = {}
+            for item in bound_value[2:]:
+                for eff, count in _ncount(frontend, item, fns, penv).items():
+                    closure_counts[eff] = _nadd(closure_counts.get(eff, 0), count)
+            for eff, count in closure_counts.items():
+                if count:
+                    out[eff] = _NCAP
         return out
     if isinstance(head, list):
         add(_ncount(frontend, head, fns, penv))

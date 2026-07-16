@@ -12,10 +12,11 @@ class Frontend(_RuntimeFrontend):
 
 class _RuntimeState:
     """Mutable runtime capability state scoped to one run_call() invocation."""
-    __slots__ = ("caps",)
+    __slots__ = ("caps", "meters")
 
     def __init__(self):
         self.caps = []
+        self.meters = []
 
 
 class Closure:
@@ -45,6 +46,20 @@ def _runtime_state():
 def _cap_ok(eff):
     caps = _runtime_state().caps
     return (not caps) or (eff in caps[-1])
+
+
+def _meter_frame(frontend, quantum, effects):
+    if not isinstance(quantum, int) or quantum < 0:
+        raise frontend.error("meter frame: quantum must be a non-negative integer")
+    return {eff: quantum for eff in effects if eff != "Pure"}
+
+
+def _meter_take(frontend, eff):
+    active = [frame for frame in _runtime_state().meters if eff in frame]
+    if any(frame[eff] <= 0 for frame in active):
+        raise frontend.error(f"meter exhausted: {eff} quantum exceeded before effect request")
+    for frame in active:
+        frame[eff] -= 1
 
 
 def _foreign_logger(args, out):
@@ -100,7 +115,15 @@ def ev(frontend, node, env, fns, out, handlers=None):
     if head == "fn":
         return Closure(node[1], node[2:], env)
     if head == "seamN":
-        return ev(frontend, ["seam"] + node[2:], env, fns, out, handlers)
+        state = _runtime_state()
+        frame = _meter_frame(frontend, node[1], node[2])
+        state.caps.append(set(node[2]) - {"Pure"})
+        state.meters.append(frame)
+        try:
+            return _eval_seq(frontend, frontend.roleclauses(node[3:])[3], env, fns, out, handlers)
+        finally:
+            state.meters.pop()
+            state.caps.pop()
     if head == "repro":
         return _eval_seq(frontend, node[1:], env, fns, out, handlers)
     if head in ("seam", "seam1"):
@@ -114,7 +137,9 @@ def ev(frontend, node, env, fns, out, handlers=None):
         foreign = FOREIGN.get(node[1])
         if foreign is None:
             raise frontend.error(f"unknown foreign fn: {node[1]}")
-        return foreign([ev(frontend, arg, env, fns, out, handlers) for arg in node[2:]], out)
+        args = [ev(frontend, arg, env, fns, out, handlers) for arg in node[2:]]
+        _meter_take(frontend, "FFI")
+        return foreign(args, out)
     if head == "handle":
         sink = [] if "IO" in set(node[1]) else out
         return _eval_seq(frontend, node[2:], env, fns, sink, handlers)
@@ -210,7 +235,10 @@ def ev(frontend, node, env, fns, out, handlers=None):
         return args[0][1:]
     if head == "empty":
         return 1 if len(args[0]) == 0 else 0
-    if head in frontend.op.values() and head in handlers:
+    effect_name = next((eff for eff, op in frontend.op.items() if op == head), None)
+    if effect_name is not None:
+        _meter_take(frontend, effect_name)
+    if effect_name is not None and head in handlers:
         return call_fn(frontend, handlers[head], args, fns, out, {name: handler for name, handler in handlers.items() if name != head})
     if head == "print":
         if not _cap_ok("IO"):

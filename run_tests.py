@@ -766,6 +766,7 @@ def main(argv=None):
             ('(defx fa (IO) (fn (x) (seam (IO) (ffi "logger" x))))', "(fa 7)"),
             ('(defx fb () (fn (x) (seam (Pure) (ffi "logger" x))))', "(fb 7)"),
             ('(defx fc (IO) (fn (x) (let (y (seam (Pure) (ffi "logger" x))) (seam (IO) (ffi "logger" y)))))', "(fc 7)"),
+            ('(defx fm (IO) (fn (x) (seamN 1 (IO) (print x))))', "(fm 7)"),
         ]
         expected = [run_call(program, call) for program, call in runtime_programs]
         def run_isolated(i):
@@ -775,14 +776,54 @@ def main(argv=None):
             isolated = list(pool.map(run_isolated, range(64)))
         is_browser_bundle = Path(_loom.__file__).parent.name == "docs"
         boundary_ok = is_browser_bundle or getattr(_loom, "_loom_runtime", None).__name__ == "loom_runtime"
+        runtime_impl = _loom if is_browser_bundle else _loom._loom_runtime
+        runtime_frontend = None if is_browser_bundle else _loom._RUNTIME_FRONTEND
+        def run_unchecked(program, call):
+            fns, static_errors = check(parse(program))
+            state = runtime_impl._RuntimeState()
+            token = runtime_impl._RUNTIME_STATE.set(state)
+            out = []
+            try:
+                try:
+                    node = parse(call)[0]
+                    value = (
+                        runtime_impl.ev(node, {}, fns, out)
+                        if is_browser_bundle
+                        else runtime_impl.ev(runtime_frontend, node, {}, fns, out)
+                    )
+                    result = ("ok", value)
+                except LoomError as exc:
+                    result = ("error", str(exc))
+                return result, list(out), len(state.caps), len(state.meters), static_errors
+            finally:
+                runtime_impl._RUNTIME_STATE.reset(token)
+        meter_cases = [
+            ('(defx f (IO) (fn () (seamN 1 (IO) (print 1) (print 2))))', "(f)", ["1"]),
+            ('(defx hit (Net) (fn (u) (net u))) (defx f (Net) (fn () (seamN 1 (Net) (let (x (hit 1)) (hit 2)))))', "(f)", []),
+            ('(defx f (Net) (fn () (seamN 1 (Net) (let (g (fn (u) (net u))) (let (x (g 1)) (g 2))))))', "(f)", []),
+            ('(defx f (IO) (fn () (seamN 1 (IO) (handle (IO) (print 1) (print 2)))))', "(f)", []),
+            ('(defx f (Net) (fn () (seamN 1 (Net) (with Net (fn (u) u) (net 1) (net 2)))))', "(f)", []),
+            ('(defx f (Net) (fn () (seamN 1 (Net) (let (x (seamN 1 (Net) (net 1))) (net 2)))))', "(f)", []),
+        ]
+        meter_results = [run_unchecked(program, call) for program, call, _ in meter_cases]
+        meter_ok = all(
+            result[0][0] == "error"
+            and "meter exhausted" in result[0][1]
+            and result[1] == expected_out
+            and result[2:4] == (0, 0)
+            and bool(result[4])
+            for result, (_, _, expected_out) in zip(meter_results, meter_cases)
+        )
         runtime_context_ok = (
             boundary_ok
             and
             not hasattr(_loom, "_CAPS")
+            and not hasattr(_loom, "_METERS")
             and all(got == expected[i] for i, got in isolated)
+            and meter_ok
         )
         ok += runtime_context_ok
-        print(f"  {'ok  ' if runtime_context_ok else 'FAIL'} runtime: module boundary + isolated capability contexts (64 parallel calls)")
+        print(f"  {'ok  ' if runtime_context_ok else 'FAIL'} runtime: isolated capability + portable meter frames (64 parallel calls)")
     except Exception as e:
         print(f"  FAIL runtime capability isolation: {e}")
     try:                                               # runtime facade must stay a thin wrapper over the extracted module
@@ -3063,6 +3104,7 @@ def main(argv=None):
         print(f"  FAIL playground native issuer handoff pin: {e}")
     try:                                               # runtime quantity mediation needs a design contract before it grows beyond the internal direct-effect meter
         qdoc = Path(__file__).with_name("docs").joinpath("wasm_quantity_mediation.md").read_text()
+        mdoc = Path(__file__).with_name("docs").joinpath("meter_frame_v1.md").read_text()
         quantity_doc_ok = (
             "LOOM WASM Quantity Mediation Roadmap" in qdoc
             and "Source quantities" in qdoc
@@ -3077,6 +3119,11 @@ def main(argv=None):
             and "Capability-use quantity and heap-byte quantity are one runtime-mediation family" in qdoc
             and "ABI v2" in qdoc
             and "No unmetered `memory.grow`." in qdoc
+            and "LOOM Portable Meter Frame v1" in mdoc
+            and "charges every active frame" in mdoc
+            and "traps before changing any counter" in mdoc
+            and "production checker remains fail-closed" in mdoc
+            and "changes no WASM ABI v1 imports, exports, object layouts, or host" in mdoc
         )
         ok += quantity_doc_ok
         print(f"  {'ok  ' if quantity_doc_ok else 'FAIL'} docs: wasm quantity mediation roadmap pinned")
@@ -3419,7 +3466,8 @@ def main(argv=None):
             and "Experimental or bounded" in rdoc
             and "does not magically confine arbitrary external tools" in rdoc_words
             and "Native operator signing is intentionally outside the public language runtime." in rdoc
-            and "`seamN` now lowers to an internal direct-effect runtime meter" in rdoc_words
+            and "Portable Meter Frame v1 is implemented by the reference interpreter." in rdoc_words
+            and "`seamN` lowers to an internal direct-effect runtime meter" in rdoc_words
             and "Release verification checklist" in rdoc
             and "python3 loom.py release-check" in rdoc
             and "python3 -m pip install ." in rdoc

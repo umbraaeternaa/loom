@@ -16,6 +16,7 @@ INDEX_HTML = ROOT / "docs" / "index.html"
 PLAY_HTML = ROOT / "docs" / "play.html"
 WASM_ABI_DOC = ROOT / "docs" / "wasm_abi_v1.md"
 QUANTITY_DOC = ROOT / "docs" / "wasm_quantity_mediation.md"
+METER_FRAME_DOC = ROOT / "docs" / "meter_frame_v1.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
 
 
@@ -251,6 +252,23 @@ def _check_quantity_mediation_doc() -> None:
         raise SystemExit("docs parity: quantity mediation roadmap drift: missing " + ", ".join(missing))
 
 
+def _check_meter_frame_doc() -> None:
+    text = METER_FRAME_DOC.read_text()
+    required = (
+        "LOOM Portable Meter Frame v1",
+        "normative reference semantics",
+        "charges every active frame",
+        "traps before changing any counter",
+        "`IO`, `Net`, `Alloc`, `Rand`, and `FFI`",
+        "reference interpreter implements Meter Frame v1",
+        "production checker remains fail-closed",
+        "changes no WASM ABI v1 imports, exports, object layouts, or host",
+    )
+    missing = [needle for needle in required if needle not in text]
+    if missing:
+        raise SystemExit("docs parity: portable meter frame contract drift: missing " + ", ".join(missing))
+
+
 def _check_secret_credential_policy_doc() -> None:
     text = SECRET_POLICY_DOC.read_text()
     required = (
@@ -318,6 +336,7 @@ def main() -> int:
     _check_landing_page_count()
     _check_wasm_abi_doc()
     _check_quantity_mediation_doc()
+    _check_meter_frame_doc()
     _check_secret_credential_policy_doc()
     _check_pyodide_import_boundary()
     result = _run_injected_citadel()

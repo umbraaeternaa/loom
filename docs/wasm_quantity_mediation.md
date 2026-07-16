@@ -3,6 +3,12 @@
 Status: design contract for future LOOM WebAssembly runtime work. This
 document does not change ABI v1 by itself.
 
+The backend-neutral runtime rules are normative in
+[LOOM Portable Meter Frame v1](meter_frame_v1.md). The reference interpreter
+implements that contract. The checker keeps indirect metered calls, closures,
+recursion, higher-order dispatch, and handlers fail-closed until Python,
+JavaScript, and WASM reach parity.
+
 ## Current Truth
 
 LOOM has two different quantity stories today:
