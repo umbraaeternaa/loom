@@ -2,6 +2,7 @@
 """Portable Python and JavaScript code generators for checked LOOM programs."""
 
 from loom_frontend import CodegenFrontend as _CodegenFrontend, asm_metadata, asm_validation_error
+from loom_recursion import recursive_edges
 
 
 class Frontend(_CodegenFrontend):
@@ -55,6 +56,7 @@ def _emit(frontend, node):
     if h == "record": return "{" + ",".join(f"{fld[0]!r}:{_emit(frontend, fld[1])}" for fld in node[1:] if isinstance(fld, list)) + "}"
     if h == "get": return f"({_emit(frontend, node[1])}[{node[2]!r}])"
     if h == "fn": return f"(lambda {','.join(frontend.pname(p) for p in node[1])}: {_emit(frontend, node[2:][-1])})"
+    if h == "depthN": return f"_depth({node[1]}, lambda: {_emit_seq(frontend, node[2:])})"
     if h == 'seamN': return f"_metered_seam({sorted(set(node[2])-{'Pure'})!r}, {node[1]}, lambda: {_emit_seq(frontend, frontend.roleclauses(node[3:])[3])})"
     if h in ("seam", "seam1"): return f"_seam({sorted(set(node[1])-{'Pure'})!r}, lambda: {_emit(frontend, node[2:][-1])})"   # seam SANDBOXES the body: push its granted row so foreign/ffi code is cap-gated exactly like the interpreter
     if h in ("resource", "prov", "declassify"): return _emit(frontend, node[2:][-1])   # value-transparent (effects/prov are static layers)
@@ -84,7 +86,8 @@ def _emit(frontend, node):
 
 def compile_py(program_src, frontend):
     """Compile a CHECKED LOOM program to portable Python source (one def per defx). Rejects if it fails the checker."""
-    fns, errs = frontend.check(frontend.parse(program_src))
+    program = frontend.parse(program_src)
+    fns, errs = frontend.check(program)
     if errs: raise frontend.error("; ".join(errs))
     lines = ["_sd = [0]", "_h = {}", f"_INT_MIN={frontend.int_min}; _INT_MOD={frontend.int_mod}",
              "def _i31(n): return ((n-_INT_MIN)%_INT_MOD)+_INT_MIN",
@@ -98,17 +101,26 @@ def compile_py(program_src, frontend):
             "def _rand():\n    _meter_take('Rand')\n    return _route('rand', (), lambda: ('Rand', 0))",
              "_caps = []",
              "_meters = []",
+             "_depths = []",
+             "_calls = []",
+             f"_recursive_edges = {recursive_edges(fns)!r}",
              "def _cap_ok(e): return (not _caps) or (e in _caps[-1])",
              "def _meter_frame(k, row):\n    if not isinstance(k, int) or k < 0: raise Exception('meter frame: quantum must be a non-negative integer')\n    return {e: k for e in row if e != 'Pure'}",
              "def _meter_take(e):\n    active = [frame for frame in _meters if e in frame]\n    if any(frame[e] <= 0 for frame in active): raise Exception('meter exhausted: '+e+' quantum exceeded before effect request')\n    for frame in active: frame[e] -= 1",
+             "def _depth_take():\n    if any(n <= 0 for n in _depths): raise Exception('call budget exhausted before recursive call')\n    for i in range(len(_depths)): _depths[i] -= 1",
+             "def _depth(k, thunk):\n    if not isinstance(k, int) or k < 0: raise Exception('call budget: quantum must be a non-negative integer')\n    _depths.append(k)\n    try: return thunk()\n    finally: _depths.pop()",
+             "def _named_call(name, thunk):\n    caller = _calls[-1] if _calls else None\n    if (caller, name) in _recursive_edges: _depth_take()\n    _calls.append(name)\n    try: return thunk()\n    finally: _calls.pop()",
              "def _seam(row, thunk):\n    _caps.append(set(row))\n    try: return thunk()\n    finally: _caps.pop()",
              "def _metered_seam(row, k, thunk):\n    _caps.append(set(row)); _meters.append(_meter_frame(k, row))\n    try: return thunk()\n    finally:\n        _meters.pop(); _caps.pop()",
              "_FOREIGN = {'logger': (lambda a: (a[0], print('foreign:'+str(a[0])) if (_cap_ok('IO') and _sd[0]==0) else None)[0]), 'lib': (lambda a: a[0] if a else 0), 'x': (lambda a: a[0] if a else 0), 'other': (lambda a: a[0] if a else 0)}",
              "def _ffi(name, args):\n    _meter_take('FFI')\n    return _FOREIGN[name](args)"]   # FFI codegen: cap stack (seam SANDBOX) + foreign registry -> ffi mirrors the interpreter (foreign I/O fires only if its seam granted it)
-    for top in frontend.parse(program_src):
+    for top in program:
         if isinstance(top, list) and top and top[0] == "defx":
             fn = top[3]; ps = ",".join(frontend.pname(p) for p in fn[1]); body = _emit(frontend, fn[2:][-1]) if fn[2:] else "None"
-            lines.append(f"def {top[1]}({ps}): return {body}")
+            private = "__loom_body_" + str(top[1])
+            lines.append(f"def {private}({ps}): return {body}")
+            forwarded = ",".join(frontend.pname(p) for p in fn[1])
+            lines.append(f"def {top[1]}({ps}): return _named_call({str(top[1])!r}, lambda: {private}({forwarded}))")
     return "\n".join(lines)
 
 def run_compiled(program_src, call_src, frontend):
@@ -169,6 +181,7 @@ def _emit_js(frontend, node):
     if h == "record": return "({" + ",".join(f"{fld[0]!r}:{_emit_js(frontend, fld[1])}" for fld in node[1:] if isinstance(fld, list)) + "})"
     if h == "get": return f"({_emit_js(frontend, node[1])}[{node[2]!r}])"
     if h == "fn": return f"(({','.join(frontend.pname(p) for p in node[1])})=>{_emit_js(frontend, node[2:][-1])})"
+    if h == "depthN": return f"_depth({node[1]}, ()=>({_emit_js_seq(frontend, node[2:])}))"
     if h == 'seamN': return f"_metered_seam({sorted(set(node[2])-{'Pure'})!r}, {node[1]}, ()=>({_emit_js_seq(frontend, frontend.roleclauses(node[3:])[3])}))"
     if h in ("seam", "seam1"): return f"_seam({sorted(set(node[1])-{'Pure'})!r}, ()=>({_emit_js(frontend, node[2:][-1])}))"   # seam SANDBOXES the body (JS): cap-gate foreign code like the interpreter
     if h in ("resource", "prov", "declassify"): return _emit_js(frontend, node[2:][-1])
@@ -198,7 +211,8 @@ def _emit_js(frontend, node):
 
 def compile_js(program_src, frontend):
     """Compile a CHECKED LOOM program to portable JavaScript source (one function per defx)."""
-    fns, errs = frontend.check(frontend.parse(program_src))
+    program = frontend.parse(program_src)
+    fns, errs = frontend.check(program)
     if errs: raise frontend.error("; ".join(errs))
     lines = ["let _sd=0; let _h={};",
              "function _i31(n){ return (n<<1)>>1; }",
@@ -211,17 +225,26 @@ def compile_js(program_src, frontend):
              "function _net(u){ _meter_take('Net'); return _route('net',[u], ()=>['Net',u]); }", "function _alloc(n){ _meter_take('Alloc'); return _route('alloc',[n], ()=>Array.from({length:n},(_,i)=>i)); }", "function _rand(){ _meter_take('Rand'); return _route('rand',[], ()=>['Rand',0]); }",
              "let _caps=[];",
              "let _meters=[];",
+             "let _depths=[];",
+             "let _calls=[];",
+             "const _recursive_edges=new Set(" + repr([str(a) + "\0" + str(b) for a, b in sorted(recursive_edges(fns))]) + ");",
              "function _cap_ok(e){ return (_caps.length===0)||_caps[_caps.length-1].has(e); }",
              "function _meter_frame(k,row){ if(!Number.isInteger(k)||k<0) throw new Error('meter frame: quantum must be a non-negative integer'); return Object.fromEntries(row.filter(e=>e!=='Pure').map(e=>[e,k])); }",
              "function _meter_take(e){ const active=_meters.filter(frame=>Object.prototype.hasOwnProperty.call(frame,e)); if(active.some(frame=>frame[e]<=0)) throw new Error('meter exhausted: '+e+' quantum exceeded before effect request'); for(const frame of active) frame[e]--; }",
+             "function _depth_take(){ if(_depths.some(n=>n<=0)) throw new Error('call budget exhausted before recursive call'); for(let i=0;i<_depths.length;i++) _depths[i]--; }",
+             "function _depth(k,thunk){ if(!Number.isInteger(k)||k<0) throw new Error('call budget: quantum must be a non-negative integer'); _depths.push(k); try{ return thunk(); } finally{ _depths.pop(); } }",
+             "function _named_call(name,thunk){ const caller=_calls.length?_calls[_calls.length-1]:null; if(_recursive_edges.has(String(caller)+'\\0'+name)) _depth_take(); _calls.push(name); try{ return thunk(); } finally{ _calls.pop(); } }",
              "function _seam(row,thunk){ _caps.push(new Set(row)); try{ return thunk(); } finally{ _caps.pop(); } }",
              "function _metered_seam(row,k,thunk){ _caps.push(new Set(row)); _meters.push(_meter_frame(k,row)); try{ return thunk(); } finally{ _meters.pop(); _caps.pop(); } }",
              "const _FOREIGN={ logger:(a)=>{ if(_cap_ok('IO')&&_sd===0) console.log('foreign:'+String(a[0])); return a[0]; }, lib:(a)=>((a.length>0)?a[0]:0), x:(a)=>((a.length>0)?a[0]:0), other:(a)=>((a.length>0)?a[0]:0) };",
              "function _ffi(name,args){ _meter_take('FFI'); return _FOREIGN[name](args); }"]  # FFI codegen (JS): cap stack + foreign registry -> ffi mirrors the interpreter
-    for top in frontend.parse(program_src):
+    for top in program:
         if isinstance(top, list) and top and top[0] == "defx":
             fn = top[3]; ps = ",".join(frontend.pname(p) for p in fn[1]); body = _emit_js(frontend, fn[2:][-1]) if fn[2:] else "null"
-            lines.append(f"function {top[1]}({ps}){{ return {body}; }}")
+            private = "__loom_body_" + str(top[1])
+            lines.append(f"function {private}({ps}){{ return {body}; }}")
+            forwarded = ",".join(frontend.pname(p) for p in fn[1])
+            lines.append(f"function {top[1]}({ps}){{ return _named_call({str(top[1])!r},()=>{private}({forwarded})); }}")
     return "\n".join(lines)
 
 def run_js(program_src, call_src, frontend):
@@ -237,7 +260,10 @@ def run_js(program_src, call_src, frontend):
     call_ast = frontend.parse(call_src); frontend.check_call_literals(call_ast)
     js = compile_js(program_src, frontend) + "\nconsole.log('__R__'+JSON.stringify(" + _emit_js(frontend, call_ast[0]) + "))"
     r = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=15)
-    if r.returncode != 0: raise frontend.error("node: " + r.stderr.strip()[:200])
+    if r.returncode != 0:
+        stderr = r.stderr.strip()
+        detail = next((line.strip() for line in stderr.splitlines() if "Error:" in line), stderr)
+        raise frontend.error("node: " + detail[:200])
     lines = r.stdout.splitlines(); val = None; out = []
     for ln in lines:
         if ln.startswith("__R__"): val = _norm(_json.loads(ln[5:]))

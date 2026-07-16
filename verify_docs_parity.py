@@ -17,6 +17,7 @@ PLAY_HTML = ROOT / "docs" / "play.html"
 WASM_ABI_DOC = ROOT / "docs" / "wasm_abi_v1.md"
 QUANTITY_DOC = ROOT / "docs" / "wasm_quantity_mediation.md"
 METER_FRAME_DOC = ROOT / "docs" / "meter_frame_v1.md"
+CALL_BUDGET_DOC = ROOT / "docs" / "call_budget_frame_v1.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
 
 
@@ -42,6 +43,7 @@ def _check_playground_loader() -> None:
         "k === 6",
         "n++ > 2048",
         'name: "WASM · heap meter"',
+        'name: "WASM · call budget"',
         'globalValue("loom_heap_limit")',
         'globalValue("loom_heap_used")',
         'globalValue("loom_heap_static_used")',
@@ -114,11 +116,13 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "437 self-verifying checks",
-        ">437</div>",
+        "443 self-verifying checks",
+        ">443</div>",
     )
     forbidden = (
         "415 self-verifying checks",
+        "437 self-verifying checks",
+        ">437</div>",
         "436 self-verifying checks",
         ">436</div>",
         "433 self-verifying checks",
@@ -302,6 +306,23 @@ def _check_secret_credential_policy_doc() -> None:
         raise SystemExit("docs parity: secret credential safety policy drift: missing " + ", ".join(missing))
 
 
+def _check_call_budget_doc() -> None:
+    text = CALL_BUDGET_DOC.read_text()
+    words = " ".join(text.split())
+    required = (
+        "LOOM Call Budget Frame v1",
+        "`(depthN K BODY...)`",
+        "recursive strongly connected component",
+        "checked before any frame is decremented",
+        "does not prove that a program terminates",
+        "`depthN` charges named recursive call edges",
+        "not imported, exported, or part of the public host ABI",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: call budget contract drift: missing " + ", ".join(missing))
+
+
 def _run_injected_citadel() -> int:
     spec = importlib.util.spec_from_file_location("loom", DOCS_LOOM)
     if spec is None or spec.loader is None:
@@ -340,6 +361,7 @@ def main() -> int:
     _check_wasm_abi_doc()
     _check_quantity_mediation_doc()
     _check_meter_frame_doc()
+    _check_call_budget_doc()
     _check_secret_credential_policy_doc()
     _check_pyodide_import_boundary()
     result = _run_injected_citadel()

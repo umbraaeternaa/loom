@@ -115,6 +115,10 @@ def _ucount(frontend, node, fns, penv):
     head = node[0]
     if head == "fn":
         return out
+    if head == "depthN":
+        for item in node[2:]:
+            add(_ucount(frontend, item, fns, penv))
+        return out
     if head == "use":
         return {node[1]: 1}
     if head == "resource":
@@ -258,6 +262,10 @@ def _ncount(frontend, node, fns, penv, cenv=None, active=None):
         return out
     head = node[0]
     if head == "fn":
+        return out
+    if head == "depthN":
+        for item in node[2:]:
+            add(_ncount(frontend, item, fns, penv, cenv, active))
         return out
     if head == "seamN":
         return _ncount(frontend, ["seam"] + node[2:], fns, penv, cenv, active)
@@ -616,6 +624,14 @@ def infer(frontend, node, fns, errs, penv=None):
     head = node[0]
     if head == "fn":
         return set()
+    if head == "depthN":
+        quantum = node[1] if len(node) > 1 and isinstance(node[1], int) else -1
+        if quantum < 0 or quantum >= _NCAP:
+            errs.append(f"call budget has invalid quantum {quantum} (expected 0..{_NCAP - 1})")
+        eff = set()
+        for expr in node[2:]:
+            eff |= infer(frontend, expr, fns, errs, penv)
+        return eff
     if head == "ffi":
         eff = set()
         for arg in node[2:]:

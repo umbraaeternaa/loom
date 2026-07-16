@@ -28,11 +28,14 @@ _MISS = object()                                        # sentinel for scoped sa
 
 class _RuntimeState:
     """Mutable runtime capability state scoped to one run_call() invocation."""
-    __slots__ = ("caps", "meters")
+    __slots__ = ("caps", "meters", "depths", "calls", "recursive_edges")
 
     def __init__(self):
         self.caps = []
         self.meters = []
+        self.depths = []
+        self.calls = []
+        self.recursive_edges = set()
 
 
 class _CheckerState:
@@ -79,6 +82,11 @@ def _meter_take(eff):
     if any(frame[eff] <= 0 for frame in active):
         raise LoomError(f"meter exhausted: {eff} quantum exceeded before effect request")
     for frame in active: frame[eff] -= 1
+def _depth_take():
+    frames = _runtime_state().depths
+    if any(remaining <= 0 for remaining in frames):
+        raise LoomError("call budget exhausted before recursive call")
+    for index in range(len(frames)): frames[index] -= 1
 def _foreign_logger(args, out):                        # opaque foreign code that WANTS IO; emits ONLY if IO was granted
     if _cap_ok("IO"): out.append("foreign:" + str(args[0]))
     return args[0]
@@ -217,6 +225,54 @@ def platent(p):                                                 # fn-param's lat
     if isinstance(p, list) and p and p[0] == "lin": return None
     return set(p[1:]) if isinstance(p, list) else None
 def _is_symbol(node): return isinstance(node, str) and type(node) is not str
+
+def _named_calls(node, names):
+    out = set()
+    if not isinstance(node, list) or not node or node[0] == "fn": return out
+    h = node[0]
+    if h == "record":
+        for field in node[1:]:
+            if isinstance(field, list) and len(field) >= 2: out |= _named_calls(field[1], names)
+        return out
+    if h == "get": return _named_calls(node[1], names)
+    if h == "variant": return _named_calls(node[2], names)
+    if h == "match":
+        calls = _named_calls(node[1], names)
+        for arm in node[2:]:
+            if isinstance(arm, list) and len(arm) >= 2: calls |= _named_calls(arm[1], names)
+        return calls
+    if h == "let":
+        calls = _named_calls(node[1][1], names)
+        for child in node[2:]: calls |= _named_calls(child, names)
+        return calls
+    if _is_symbol(h) and h in names: out.add(h)
+    if isinstance(h, list): out |= _named_calls(h, names)
+    for child in node[1:]: out |= _named_calls(child, names)
+    return out
+
+def _recursive_edges(fns):
+    names = set(fns)
+    graph = {name: set().union(*(_named_calls(expr, names) for expr in info["fn"][2:])) if info["fn"][2:] else set() for name, info in fns.items()}
+    index = 0; indices = {}; low = {}; stack = []; on_stack = set(); components = []
+    def visit(name):
+        nonlocal index
+        indices[name] = low[name] = index; index += 1; stack.append(name); on_stack.add(name)
+        for target in graph[name]:
+            if target not in indices: visit(target); low[name] = min(low[name], low[target])
+            elif target in on_stack: low[name] = min(low[name], indices[target])
+        if low[name] == indices[name]:
+            component = set()
+            while True:
+                member = stack.pop(); on_stack.remove(member); component.add(member)
+                if member == name: break
+            components.append(component)
+    for name in graph:
+        if name not in indices: visit(name)
+    edges = set()
+    for component in components:
+        if len(component) > 1 or any(name in graph[name] for name in component):
+            edges |= {(source, target) for source in component for target in graph[source] if target in component}
+    return edges
 def is_var(e): return _is_symbol(e) and e not in EFFECTS and e[:1].islower()  # lowercase token = effect variable
 def is_fn_expr(e, fns, penv):                                    # does this expression denote a function?
     return (isinstance(e, list) and len(e) > 0 and e[0] == "fn") or (_is_symbol(e) and (e in fns or e in penv))
@@ -374,6 +430,9 @@ def _ucount(node, fns, penv):
     if not isinstance(node, list) or not node: return out
     h = node[0]
     if h == "fn": return out                            # a lambda literal is latent (counted when called)
+    if h == "depthN":
+        for x in node[2:]: add(_ucount(x, fns, penv))
+        return out
     if h == "use": return {node[1]: 1}                  # consume a LINEAR resource once (keyed by its name)
     if h == "resource":                                 # (resource r body..) — r is scoped; count then drop at the edge
         for x in node[2:]: add(_ucount(x, fns, penv))
@@ -465,6 +524,9 @@ def _ncount(node, fns, penv, cenv=None, active=None):
     if not isinstance(node, list) or not node: return out
     h = node[0]
     if h == 'fn': return out
+    if h == 'depthN':
+        for x in node[2:]: add(_ncount(x, fns, penv, cenv, active))
+        return out
     if h == 'seamN': return _ncount(['seam'] + node[2:], fns, penv, cenv, active)
     if h in ('seam', 'seam1'):
         for x in _roleclauses(node[2:])[3]: add(_ncount(x, fns, penv, cenv, active))
@@ -735,6 +797,12 @@ def infer(node, fns, errs, penv=None):
     if not isinstance(node, list) or not node: return set()
     h = node[0]
     if h == "fn": return set()                          # DEFINING a lambda performs nothing (its cost is at the call)
+    if h == "depthN":
+        K = node[1] if len(node) > 1 and isinstance(node[1], int) else -1
+        if K < 0 or K >= _NCAP: errs.append(f"call budget has invalid quantum {K} (expected 0..{_NCAP - 1})")
+        inner = set()
+        for x in node[2:]: inner |= infer(x, fns, errs, penv)
+        return inner
     if h == "ffi":                                      # (ffi name arg..) — effect-OPAQUE foreign call; '?' = unbounded
         eff = set()                                     # foreign authority. Only a SEAM (the FFI contract) may cover it,
         for a in node[2:]: eff |= infer(a, fns, errs, penv)  # so the seam's granted row IS the capability handed across.
@@ -1073,12 +1141,22 @@ def call_fn(val, args, fns, out, handlers):
     if isinstance(val, Closure):
         loc = {**val.env, **dict(zip([pname(p) for p in val.params], args))}; body = val.body
     elif _is_symbol(val) and val in fns:
-        fn = fns[val]["fn"]; loc = dict(zip([pname(p) for p in fn[1]], args)); body = fn[2:]
+        return _call_named(val, args, fns, out, handlers)
     else:
         raise LoomError(f"not a function: {val}")
     r = None
     for b in body: r = ev(b, loc, fns, out, handlers)
     return r
+
+def _call_named(name, args, fns, out, handlers):
+    state = _runtime_state(); caller = state.calls[-1] if state.calls else None
+    if (caller, name) in state.recursive_edges: _depth_take()
+    state.calls.append(name)
+    try:
+        fn = fns[name]["fn"]; loc = dict(zip([pname(p) for p in fn[1]], args)); r = None
+        for body in fn[2:]: r = ev(body, loc, fns, out, handlers)
+        return r
+    finally: state.calls.pop()
 
 
 def ev(node, env, fns, out, handlers=None):
@@ -1088,6 +1166,15 @@ def ev(node, env, fns, out, handlers=None):
     if type(node) is str: return node
     h = node[0]
     if h == "fn": return Closure(node[1], node[2:], env)   # a lambda literal evaluates to a closure over env
+    if h == "depthN":
+        K = node[1] if len(node) > 1 else None
+        if not isinstance(K, int) or K < 0: raise LoomError("call budget: quantum must be a non-negative integer")
+        state = _runtime_state(); state.depths.append(K)
+        try:
+            r = None
+            for x in node[2:]: r = ev(x, env, fns, out, handlers)
+            return r
+        finally: state.depths.pop()
     if h == 'seamN':                                   # portable runtime quantity frame; checker remains the static first gate
         state = _runtime_state()
         state.caps.append(set(node[2]) - {"Pure"})
@@ -1231,22 +1318,19 @@ def ev(node, env, fns, out, handlers=None):
         return ("Rand", 0)                              # deterministic opaque value — the point is effect-tracking, not real RNG
     fv = None                                           # resolve the head to a function: name, var->name, or closure
     if _is_symbol(h):
-        if h in fns: fv = fns[h]
+        if h in fns: fv = h
         else:
             g = env.get(h)
-            if _is_symbol(g) and g in fns: fv = fns[g]
+            if _is_symbol(g) and g in fns: fv = g
             elif isinstance(g, Closure): fv = g
     elif isinstance(h, list):                           # ((fn ..) args) — apply the result of an expression
         hv = ev(h, env, fns, out, handlers)
-        fv = hv if isinstance(hv, Closure) else (fns[hv] if _is_symbol(hv) and hv in fns else None)
+        fv = hv if isinstance(hv, Closure) else (hv if _is_symbol(hv) and hv in fns else None)
     if isinstance(fv, Closure):
         loc = {**fv.env, **dict(zip([pname(p) for p in fv.params], a))}; r = None
         for b in fv.body: r = ev(b, loc, fns, out, handlers)
         return r
-    if isinstance(fv, dict):
-        fn = fv["fn"]; loc = {**env, **dict(zip([pname(p) for p in fn[1]], a))}; r = None
-        for b in fn[2:]: r = ev(b, loc, fns, out, handlers)
-        return r
+    if _is_symbol(fv) and fv in fns: return _call_named(fv, a, fns, out, handlers)
     raise LoomError(f"unknown form: {h}")
 
 
@@ -1254,7 +1338,8 @@ def run_call(program_src, call_src):
     """Static-check a program, then evaluate one call against it. Rejects if it fails the effect checker."""
     fns, errs = check(parse(program_src))
     if errs: raise LoomError("; ".join(errs))
-    token = _RUNTIME_STATE.set(_RuntimeState())
+    state = _RuntimeState(); state.recursive_edges = _recursive_edges(fns)
+    token = _RUNTIME_STATE.set(state)
     try:
         out = []
         call_ast = parse(call_src); _check_call_literals(call_ast)
@@ -1303,6 +1388,7 @@ def _emit(node):
     if h == "record": return "{" + ",".join(f"{fld[0]!r}:{_emit(fld[1])}" for fld in node[1:] if isinstance(fld, list)) + "}"
     if h == "get": return f"({_emit(node[1])}[{node[2]!r}])"
     if h == "fn": return f"(lambda {','.join(pname(p) for p in node[1])}: {_emit(node[2:][-1])})"
+    if h == "depthN": return f"_depth({node[1]}, lambda: {_emit_seq(node[2:])})"
     if h == 'seamN': return f"_metered_seam({sorted(set(node[2])-{'Pure'})!r}, {node[1]}, lambda: {_emit_seq(_roleclauses(node[3:])[3])})"
     if h in ("seam", "seam1"): return f"_seam({sorted(set(node[1])-{'Pure'})!r}, lambda: {_emit(node[2:][-1])})"   # seam SANDBOXES the body: push its granted row so foreign/ffi code is cap-gated exactly like the interpreter
     if h in ("resource", "prov", "declassify"): return _emit(node[2:][-1])   # value-transparent (effects/prov are static layers)
@@ -1332,7 +1418,7 @@ def _emit(node):
 
 def compile_py(program_src):
     """Compile a CHECKED LOOM program to portable Python source (one def per defx). Rejects if it fails the checker."""
-    fns, errs = check(parse(program_src))
+    program = parse(program_src); fns, errs = check(program)
     if errs: raise LoomError("; ".join(errs))
     lines = ["_sd = [0]", "_h = {}", f"_INT_MIN={INT_MIN}; _INT_MOD={_INT_MOD}",
              "def _i31(n): return ((n-_INT_MIN)%_INT_MOD)+_INT_MIN",
@@ -1346,17 +1432,23 @@ def compile_py(program_src):
             "def _rand():\n    _meter_take('Rand')\n    return _route('rand', (), lambda: ('Rand', 0))",
              "_caps = []",
              "_meters = []",
+             "_depths = []", "_calls = []", f"_recursive_edges = {_recursive_edges(fns)!r}",
              "def _cap_ok(e): return (not _caps) or (e in _caps[-1])",
              "def _meter_frame(k, row):\n    if not isinstance(k, int) or k < 0: raise Exception('meter frame: quantum must be a non-negative integer')\n    return {e: k for e in row if e != 'Pure'}",
              "def _meter_take(e):\n    active = [frame for frame in _meters if e in frame]\n    if any(frame[e] <= 0 for frame in active): raise Exception('meter exhausted: '+e+' quantum exceeded before effect request')\n    for frame in active: frame[e] -= 1",
+             "def _depth_take():\n    if any(n <= 0 for n in _depths): raise Exception('call budget exhausted before recursive call')\n    for i in range(len(_depths)): _depths[i] -= 1",
+             "def _depth(k, thunk):\n    if not isinstance(k, int) or k < 0: raise Exception('call budget: quantum must be a non-negative integer')\n    _depths.append(k)\n    try: return thunk()\n    finally: _depths.pop()",
+             "def _named_call(name, thunk):\n    caller = _calls[-1] if _calls else None\n    if (caller, name) in _recursive_edges: _depth_take()\n    _calls.append(name)\n    try: return thunk()\n    finally: _calls.pop()",
              "def _seam(row, thunk):\n    _caps.append(set(row))\n    try: return thunk()\n    finally: _caps.pop()",
              "def _metered_seam(row, k, thunk):\n    _caps.append(set(row)); _meters.append(_meter_frame(k, row))\n    try: return thunk()\n    finally:\n        _meters.pop(); _caps.pop()",
              "_FOREIGN = {'logger': (lambda a: (a[0], print('foreign:'+str(a[0])) if (_cap_ok('IO') and _sd[0]==0) else None)[0]), 'lib': (lambda a: a[0] if a else 0), 'x': (lambda a: a[0] if a else 0), 'other': (lambda a: a[0] if a else 0)}",
              "def _ffi(name, args):\n    _meter_take('FFI')\n    return _FOREIGN[name](args)"]   # FFI codegen: cap stack (seam SANDBOX) + foreign registry -> ffi mirrors the interpreter (foreign I/O fires only if its seam granted it)
-    for top in parse(program_src):
+    for top in program:
         if isinstance(top, list) and top and top[0] == "defx":
             fn = top[3]; ps = ",".join(pname(p) for p in fn[1]); body = _emit(fn[2:][-1]) if fn[2:] else "None"
-            lines.append(f"def {top[1]}({ps}): return {body}")
+            private = "__loom_body_" + str(top[1]); forwarded = ",".join(pname(p) for p in fn[1])
+            lines.append(f"def {private}({ps}): return {body}")
+            lines.append(f"def {top[1]}({ps}): return _named_call({str(top[1])!r}, lambda: {private}({forwarded}))")
     return "\n".join(lines)
 
 def run_compiled(program_src, call_src):
@@ -1411,6 +1503,7 @@ def _emit_js(node):
     if h == "record": return "({" + ",".join(f"{fld[0]!r}:{_emit_js(fld[1])}" for fld in node[1:] if isinstance(fld, list)) + "})"
     if h == "get": return f"({_emit_js(node[1])}[{node[2]!r}])"
     if h == "fn": return f"(({','.join(pname(p) for p in node[1])})=>{_emit_js(node[2:][-1])})"
+    if h == "depthN": return f"_depth({node[1]}, ()=>({_emit_js_seq(node[2:])}))"
     if h == 'seamN': return f"_metered_seam({sorted(set(node[2])-{'Pure'})!r}, {node[1]}, ()=>({_emit_js_seq(_roleclauses(node[3:])[3])}))"
     if h in ("seam", "seam1"): return f"_seam({sorted(set(node[1])-{'Pure'})!r}, ()=>({_emit_js(node[2:][-1])}))"   # seam SANDBOXES the body (JS): cap-gate foreign code like the interpreter
     if h in ("resource", "prov", "declassify"): return _emit_js(node[2:][-1])
@@ -1440,7 +1533,7 @@ def _emit_js(node):
 
 def compile_js(program_src):
     """Compile a CHECKED LOOM program to portable JavaScript source (one function per defx)."""
-    fns, errs = check(parse(program_src))
+    program = parse(program_src); fns, errs = check(program)
     if errs: raise LoomError("; ".join(errs))
     lines = ["let _sd=0; let _h={};",
              "function _i31(n){ return (n<<1)>>1; }",
@@ -1453,17 +1546,24 @@ def compile_js(program_src):
              "function _net(u){ _meter_take('Net'); return _route('net',[u], ()=>['Net',u]); }", "function _alloc(n){ _meter_take('Alloc'); return _route('alloc',[n], ()=>Array.from({length:n},(_,i)=>i)); }", "function _rand(){ _meter_take('Rand'); return _route('rand',[], ()=>['Rand',0]); }",
              "let _caps=[];",
              "let _meters=[];",
+             "let _depths=[];", "let _calls=[];",
+             "const _recursive_edges=new Set(" + repr([str(a) + "\0" + str(b) for a, b in sorted(_recursive_edges(fns))]) + ");",
              "function _cap_ok(e){ return (_caps.length===0)||_caps[_caps.length-1].has(e); }",
              "function _meter_frame(k,row){ if(!Number.isInteger(k)||k<0) throw new Error('meter frame: quantum must be a non-negative integer'); return Object.fromEntries(row.filter(e=>e!=='Pure').map(e=>[e,k])); }",
              "function _meter_take(e){ const active=_meters.filter(frame=>Object.prototype.hasOwnProperty.call(frame,e)); if(active.some(frame=>frame[e]<=0)) throw new Error('meter exhausted: '+e+' quantum exceeded before effect request'); for(const frame of active) frame[e]--; }",
+             "function _depth_take(){ if(_depths.some(n=>n<=0)) throw new Error('call budget exhausted before recursive call'); for(let i=0;i<_depths.length;i++) _depths[i]--; }",
+             "function _depth(k,thunk){ if(!Number.isInteger(k)||k<0) throw new Error('call budget: quantum must be a non-negative integer'); _depths.push(k); try{ return thunk(); } finally{ _depths.pop(); } }",
+             "function _named_call(name,thunk){ const caller=_calls.length?_calls[_calls.length-1]:null; if(_recursive_edges.has(String(caller)+'\\0'+name)) _depth_take(); _calls.push(name); try{ return thunk(); } finally{ _calls.pop(); } }",
              "function _seam(row,thunk){ _caps.push(new Set(row)); try{ return thunk(); } finally{ _caps.pop(); } }",
              "function _metered_seam(row,k,thunk){ _caps.push(new Set(row)); _meters.push(_meter_frame(k,row)); try{ return thunk(); } finally{ _meters.pop(); _caps.pop(); } }",
              "const _FOREIGN={ logger:(a)=>{ if(_cap_ok('IO')&&_sd===0) console.log('foreign:'+String(a[0])); return a[0]; }, lib:(a)=>a.length?a[0]:0, x:(a)=>a.length?a[0]:0, other:(a)=>a.length?a[0]:0 };",
              "function _ffi(name,args){ _meter_take('FFI'); return _FOREIGN[name](args); }"]  # FFI codegen (JS): cap stack + foreign registry -> ffi mirrors the interpreter
-    for top in parse(program_src):
+    for top in program:
         if isinstance(top, list) and top and top[0] == "defx":
             fn = top[3]; ps = ",".join(pname(p) for p in fn[1]); body = _emit_js(fn[2:][-1]) if fn[2:] else "null"
-            lines.append(f"function {top[1]}({ps}){{ return {body}; }}")
+            private = "__loom_body_" + str(top[1]); forwarded = ",".join(pname(p) for p in fn[1])
+            lines.append(f"function {private}({ps}){{ return {body}; }}")
+            lines.append(f"function {top[1]}({ps}){{ return _named_call({str(top[1])!r},()=>{private}({forwarded})); }}")
     return "\n".join(lines)
 
 def run_js(program_src, call_src):
@@ -1479,7 +1579,10 @@ def run_js(program_src, call_src):
     call_ast = parse(call_src); _check_call_literals(call_ast)
     js = compile_js(program_src) + "\nconsole.log('__R__'+JSON.stringify(" + _emit_js(call_ast[0]) + "))"
     r = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=15)
-    if r.returncode != 0: raise LoomError("node: " + r.stderr.strip()[:200])
+    if r.returncode != 0:
+        stderr = r.stderr.strip()
+        detail = next((line.strip() for line in stderr.splitlines() if "Error:" in line), stderr)
+        raise LoomError("node: " + detail[:200])
     lines = r.stdout.splitlines(); val = None; out = []
     for ln in lines:
         if ln.startswith("__R__"): val = _norm(_json.loads(ln[5:]))
@@ -1553,6 +1656,8 @@ def _wasm_require_cap(effid):
 def _wasm_meter_take(ctx, eff):
     return (b"\x23" + _leb_u(10) + _wasm_const(EFFECT_IDS[eff])
             + b"\x10" + _leb_u(ctx.meter_take_id + _WASM_IMPORTS) + b"\x1a")
+def _wasm_depth_take(ctx):
+    return b"\x23" + _leb_u(11) + b"\x10" + _leb_u(ctx.depth_take_id + _WASM_IMPORTS) + b"\x1a"
 
 def _wasm_transparent_body(node):
     head = node[0]
@@ -1651,6 +1756,11 @@ def _emit_wasm_node(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, s
             out += _emit_wasm(ctx, b, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ncall, handled_effs, with_handlers, metered_effs)
             if i + 1 < len(node[2:]): out += b"\x1a"
         return out
+    if h == "depthN":
+        out = (b"\x23" + _leb_u(11) + b"\x23" + _leb_u(11) + _wasm_const(node[1])
+               + b"\x10" + _leb_u(ctx.depth_push_id + _WASM_IMPORTS) + b"\x24" + _leb_u(11))
+        out += _emit_wasm_seq(ctx, node[2:], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers, metered_effs)
+        return out + b"\x21" + _leb_u(lmap["hd"]) + b"\x24" + _leb_u(11) + b"\x20" + _leb_u(lmap["hd"])
     if h == "seamN":
         body = _roleclauses(node[3:])[3]
         out = b"\x41" + _leb_s(_wasm_capmask(node[2])) + b"\x10" + _leb_u(_WASM_I_PUSH_CAPS) + b"\x1a"
@@ -1777,7 +1887,9 @@ def _emit_wasm_node(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, s
             out += _emit_wasm(ctx, a, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
         return out + b"\x10" + _leb_u(apply_id + _WASM_IMPORTS)
     if h in fmap:                                                       # call $fn  (first-order / recursive)
-        return b"".join(_emit_wasm(ctx, a, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) for a in node[1:]) + b"\x10" + _leb_u(fmap[h] + _WASM_IMPORTS)
+        args = b"".join(_emit_wasm(ctx, a, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) for a in node[1:])
+        charge = _wasm_depth_take(ctx) if (ctx.current_fn, h) in ctx.recursive_edges else b""
+        return args + charge + b"\x10" + _leb_u(fmap[h] + _WASM_IMPORTS)
     raise LoomError("wasm: form not yet in the WASM backend: " + str(h))
 
 def _wasm_defxs(program_src):
@@ -2048,6 +2160,7 @@ class _WasmContext:
     """All program-specific WASM state, isolated per compilation."""
     __slots__ = ("defs", "top", "closures", "closure_by_id", "order", "topdefs",
                  "helper_base", "apply_arities", "apply_ids", "apply1_id", "meter_push_id", "meter_take_id",
+                 "depth_push_id", "depth_take_id", "recursive_edges", "current_fn",
                  "variant_id", "alloc_id", "resource_use_id", "tags", "fields", "resources", "foreigns",
                  "strings", "string_layout", "hp_init", "node_path_by_id", "span_by_path", "_metered_effs")
 
@@ -2067,11 +2180,13 @@ class _WasmContext:
         )
         self.meter_push_id = self.helper_base + 8
         self.meter_take_id = self.helper_base + 9
+        self.depth_push_id = self.helper_base + 10
+        self.depth_take_id = self.helper_base + 11
         self.apply_ids = {
-            arity: self.helper_base + 10 + i
+            arity: self.helper_base + 12 + i
             for i, arity in enumerate(self.apply_arities)
         }
-        self.apply1_id = self.apply_ids.get(1, self.helper_base + 10)
+        self.apply1_id = self.apply_ids.get(1, self.helper_base + 12)
         self.variant_id = self.helper_base + 4
         self.alloc_id = self.helper_base + 5
         self.resource_use_id = self.helper_base + 6
@@ -2083,6 +2198,8 @@ class _WasmContext:
         self.strings = _wasm_strings(program_src)
         self.string_layout, self.hp_init = _wasm_string_layout(self.strings)
         self.node_path_by_id, self.span_by_path = _wasm_source_maps(program_src, self.defs)
+        self.recursive_edges = _recursive_edges({t[1]: {"fn": t[3]} for t in self.defs})
+        self.current_fn = None
 
 def compile_wasm(program_src):
     """Compile checked LOOM to a real WebAssembly module.
@@ -2099,6 +2216,7 @@ def compile_wasm(program_src):
     tags, fields = ctx.tags, ctx.fields
     funcs = []                                              # (name, arity, n_locals, code, params)
     for t in ds:
+        ctx.current_fn = t[1]
         fn = t[3]; params = [pname(p) for p in fn[1]]; names = []; flags = {"match": False}
         for b in fn[2:]: _wasm_locals(b, names, flags)
         seen = list(dict.fromkeys(["hd"] + names))
@@ -2109,6 +2227,7 @@ def compile_wasm(program_src):
         funcs.append((t[1], len(params), nloc, _emit_wasm(ctx, fn[2:][-1] if fn[2:] else 0, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, set(pname(p) for p in fn[1] if platent(p) is not None), None, None) + b"\x0b", params))
     lambda_funcs = []
     for spec in order:
+        ctx.current_fn = None
         fn = spec["node"]; params = spec["captures"] + [pname(p) for p in fn[1]]
         names = []; flags = {"match": False}
         for b in fn[2:]: _wasm_locals(b, names, flags)
@@ -2179,12 +2298,12 @@ def compile_wasm(program_src):
             code = case
         return code
     def _sec(sid, c): return bytes([sid]) + _leb_u(len(c)) + c
-    ar = sorted(set(apply_arities) | {a for _, a, _, _, _ in funcs} | {a for _, a, _, _, _, _ in lambda_funcs} | {2, 3})  # add helper arities
+    ar = sorted(set(apply_arities) | {a for _, a, _, _, _ in funcs} | {a for _, a, _, _, _, _ in lambda_funcs} | {1, 2, 3})  # add helper arities
     ti = {a: i for i, a in enumerate(ar)}   # arity-2 type covers $cons/get; arity-3 covers $rec
     tc = _leb_u(len(ar)) + b"".join(b"\x60" + _leb_u(a) + b"\x7f" * a + b"\x01\x7f" for a in ar)   # type: (i32*)->i32
-    fc = _leb_u(len(funcs) + len(lambda_funcs) + 10 + len(apply_arities)) + b"".join(_leb_u(ti[a]) for _, a, _, _, _ in funcs) + b"".join(_leb_u(ti[a]) for _, a, _, _, _, _ in lambda_funcs) + _leb_u(ti[3]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[1]) + _leb_u(ti[1]) + _leb_u(ti[3]) + _leb_u(ti[2]) + b"".join(_leb_u(ti[arity + 1]) for arity in apply_arities)
+    fc = _leb_u(len(funcs) + len(lambda_funcs) + 12 + len(apply_arities)) + b"".join(_leb_u(ti[a]) for _, a, _, _, _ in funcs) + b"".join(_leb_u(ti[a]) for _, a, _, _, _, _ in lambda_funcs) + _leb_u(ti[3]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[1]) + _leb_u(ti[1]) + _leb_u(ti[3]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[1]) + b"".join(_leb_u(ti[arity + 1]) for arity in apply_arities)
     mc = _leb_u(1) + b"\x00" + _leb_u(1)                    # 1 memory, min 1 page (64 KiB heap)
-    gc = (_leb_u(11)
+    gc = (_leb_u(12)
           + b"\x7f\x01" + _wasm_const(ctx.hp_init) + b"\x0b"                       # mutable i32 $hp = static-data end
           + b"\x7f\x00" + _wasm_const(_WASM_ABI_VERSION) + b"\x0b"                  # immutable raw ABI version
           + b"\x7f\x00" + _wasm_const(65536) + b"\x0b"                              # immutable raw heap limit
@@ -2195,7 +2314,8 @@ def compile_wasm(program_src):
           + b"\x7f\x01" + _wasm_const(0) + b"\x0b"                                  # mutable variant object count
           + b"\x7f\x01" + _wasm_const(0) + b"\x0b"                                  # mutable effect-box object count
           + b"\x7f\x01" + _wasm_const(0) + b"\x0b"
-          + b"\x7f\x01" + _wasm_const(0) + b"\x0b")                                 # private active meter-frame pointer
+          + b"\x7f\x01" + _wasm_const(0) + b"\x0b"
+          + b"\x7f\x01" + _wasm_const(0) + b"\x0b")                                 # private meter/depth frame pointers
     ic = (_leb_u(8)
           + _leb_u(len("env")) + b"env" + _leb_u(len("push_handler")) + b"push_handler" + b"\x00" + _leb_u(ti[2])
           + _leb_u(len("env")) + b"env" + _leb_u(len("pop_handler")) + b"pop_handler" + b"\x00" + _leb_u(ti[1])
@@ -2224,7 +2344,7 @@ def compile_wasm(program_src):
         ec += _leb_u(len(name)) + name + b"\x03" + _leb_u(index)
     for i, t in enumerate(ds):
         nb = t[1].encode(); ec += _leb_u(len(nb)) + nb + b"\x00" + _leb_u(i + _WASM_IMPORTS)         # export func
-    cc = _leb_u(len(funcs) + len(lambda_funcs) + 10 + len(apply_arities))
+    cc = _leb_u(len(funcs) + len(lambda_funcs) + 12 + len(apply_arities))
     for _, _, nloc, code, _ in funcs:
         loc = (_leb_u(1) + _leb_u(nloc) + b"\x7f") if nloc else _leb_u(0)                           # let-locals (i32)
         e = loc + code; cc += _leb_u(len(e)) + e
@@ -2281,6 +2401,14 @@ def compile_wasm(program_src):
                        b"\x20\x00\x20\x01\x41\x02\x74\x6a\x28\x02\x08\x41\x01\x6b\x36\x02\x08\x0b"
                        b"\x41\x00\x0b\x0b")
     e = _leb_u(0) + meter_take_code; cc += _leb_u(len(e)) + e
+    depth_push_code = (_wasm_const(8) + b"\x10" + _leb_u(reserve_i + _WASM_IMPORTS) + b"\x21\x02"
+                       + b"\x20\x02\x20\x00\x36\x02\x00" + b"\x20\x02\x20\x01\x36\x02\x04" + b"\x20\x02\x0b")
+    e = (_leb_u(1) + _leb_u(1) + b"\x7f") + depth_push_code; cc += _leb_u(len(e)) + e
+    depth_take_code = (b"\x20\x00\x45\x04\x7f\x41\x00\x05"
+                       b"\x20\x00\x28\x02\x04\x45\x04\x40\x00\x0b"
+                       b"\x20\x00\x28\x02\x00\x10" + _leb_u(ctx.depth_take_id + _WASM_IMPORTS) + b"\x1a"
+                       b"\x20\x00\x20\x00\x28\x02\x04\x41\x01\x6b\x36\x02\x04\x41\x00\x0b\x0b")
+    e = _leb_u(0) + depth_take_code; cc += _leb_u(len(e)) + e
     for arity in apply_arities:
         apply_code = _apply_cases(
             [{"id": i, "name": t[1], "captures": [], "arity": len(t[3][1]), "kind": "top"} for i, t in enumerate(ds) if len(t[3][1]) == arity] +
@@ -2332,6 +2460,9 @@ def emit_wat(program_src):
         def meter_take(eff):
             uses_heap[0] = True
             return [ind + "global.get $__loom_meter_frame", ind + "i32.const " + str(EFFECT_IDS[eff]), ind + "call $__loom_meter_take", ind + "drop"]
+        def depth_take():
+            uses_heap[0] = True
+            return [ind + "global.get $__loom_depth_frame", ind + "call $__loom_depth_take", ind + "drop"]
         if isinstance(node, int): return [ind + "i32.const " + str(node << 1) + "  ;; int " + str(node)]
         if _is_symbol(node):
             if node in ctx.topdefs:
@@ -2381,6 +2512,13 @@ def emit_wat(program_src):
                 o += w(b, ind, handled_effs, with_handlers, ncall, child_path(j + 2))
                 if j + 1 < len(node[2:]): o += [ind + "drop"]
             return o
+        if h == "depthN":
+            uses_heap[0] = True
+            o = [ind + "global.get $__loom_depth_frame  ;; save parent call-budget frame",
+                 ind + "global.get $__loom_depth_frame", ind + "i32.const " + str(node[1]) + "  ;; depthN quantum",
+                 ind + "call $__loom_depth_push", ind + "global.set $__loom_depth_frame"]
+            o += seq(node[2:])
+            return o + [ind + "local.set $hd", ind + "global.set $__loom_depth_frame  ;; restore parent call-budget frame", ind + "local.get $hd"]
         if h == "seamN":
             body = _roleclauses(node[3:])[3]
             uses_heap[0] = True
@@ -2502,10 +2640,12 @@ def emit_wat(program_src):
         if h in fmap:
             o = []
             for i, a in enumerate(node[1:], 1): o += w(a, ind, handled_effs, with_handlers, callable_env, child_path(i))
+            if (ctx.current_fn, h) in ctx.recursive_edges: o += depth_take()
             return o + [ind + "call $" + h]
         raise LoomError("wat: form not yet in the WASM backend: " + str(h))
     bodies = []
     for t in ds:
+        ctx.current_fn = t[1]
         fn = t[3]; pn = [pname(p) for p in fn[1]]; sig = " ".join("(param $" + p + " i32)" for p in pn)
         nm = ["hd"]; flags = {"match": False}
         for b in fn[2:]: _wasm_locals(b, nm, flags)
@@ -2516,6 +2656,7 @@ def emit_wat(program_src):
         bodies.append([head] + w(fn[2:][-1] if fn[2:] else 0, "    ", None, None, callable_env)
                       + ["  )", '  (export "' + t[1] + '" (func $' + t[1] + "))"])
     for spec in order:
+        ctx.current_fn = None
         fn = spec["node"]; params = spec["captures"] + [pname(p) for p in fn[1]]; sig = " ".join("(param $" + p + " i32)" for p in params)
         nm = ["hd"]; flags = {"match": False}
         for b in fn[2:]: _wasm_locals(b, nm, flags)
@@ -2534,6 +2675,7 @@ def emit_wat(program_src):
              "  (global $loom_heap_effects (mut i32) (i32.const 0))",
              "  (global $loom_heap_resources (mut i32) (i32.const 0))",
              "  (global $__loom_meter_frame (mut i32) (i32.const 0))",
+             "  (global $__loom_depth_frame (mut i32) (i32.const 0))",
              '  (export "loom_abi_version" (global $loom_abi_version))',
              '  (export "loom_heap_limit" (global $loom_heap_limit))',
              '  (export "loom_heap_used" (global $loom_heap_used))',
@@ -2587,6 +2729,22 @@ def emit_wat(program_src):
                   "        local.get $frame  local.get $effect  i32.const 2  i32.shl  i32.add  i32.load offset=8  i32.const 1  i32.sub",
                   "        i32.store offset=8",
                   "      end",
+                  "      i32.const 0",
+                  "    end)",
+                  "  (func $__loom_depth_push (param $parent i32) (param $quantum i32) (result i32) (local $t i32)",
+                  "    i32.const 8  call $reserve  local.set $t",
+                  "    local.get $t  local.get $parent  i32.store",
+                  "    local.get $t  local.get $quantum  i32.store offset=4",
+                  "    local.get $t)",
+                  "  (func $__loom_depth_take (param $frame i32) (result i32)",
+                  "    local.get $frame  i32.eqz",
+                  "    if (result i32)",
+                  "      i32.const 0",
+                  "    else",
+                  "      local.get $frame  i32.load offset=4  i32.eqz",
+                  "      if  unreachable  end",
+                  "      local.get $frame  i32.load  call $__loom_depth_take  drop",
+                  "      local.get $frame  local.get $frame  i32.load offset=4  i32.const 1  i32.sub  i32.store offset=4",
                   "      i32.const 0",
                   "    end)",
                   "  (func $rec (param $next i32) (param $fid i32) (param $val i32) (result i32) (local $t i32)",
@@ -3600,7 +3758,7 @@ def build_about():
     return {
         "schema": "loom-about/v1",
         "language": "LOOM",
-        "citadel_checks": 437,
+        "citadel_checks": 443,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "i31_bits": INT_BITS,
         "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],

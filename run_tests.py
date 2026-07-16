@@ -394,6 +394,13 @@ CASES = [
     ("D27 metered: under-declared row still caught", '(defx f (Net) (fn (u) (seamN 2 (Pure) (net u))))', False),
     ("D27 metered: per-effect quantum holds", '(defx f (Net IO) (fn (u) (seamN 2 (Net IO) (net u) (net u) (print u))))', True),
     ("D27 metered: nested seam cannot launder amplification", '(defx f (Net) (fn (u) (seamN 1 (Net) (seam (Net) (net u) (net u)))))', False),
+    # --- grown 2026-07-16: D29 -- CALL BUDGET FRAME (depthN K). This is a runtime-enforced bound on named recursive
+    #     SCC edges, separate from effect quantity. It never treats an annotation as a proof and never opens seamN recursion.
+    ("D29 depth: finite recursive budget", '(defx fac () (fn (n) (if (< n 1) 1 (* n (fac (- n 1)))))) (defx f () (fn () (depthN 6 (fac 6))))', True),
+    ("D29 depth: zero budget is lawful", '(defx f () (fn () (depthN 0 7)))', True),
+    ("D29 depth: negative refused", '(defx f () (fn () (depthN -1 7)))', False),
+    ("D29 depth: ceiling refused", '(defx f () (fn () (depthN 1024 7)))', False),
+    ("D29 depth: does not launder meter recursion", '(defx hit (Net) (fn (n) (if (= n 0) 0 (let (x (net n)) (hit (- n 1)))))) (defx f (Net) (fn () (depthN 2 (seamN 2 (Net) (hit 2)))))', False),
     # --- grown 2026-06-26 (pass 3): D27 — GRADED foreign trust via component-bound ATTESTATION. D26 strips ALL foreign
     #     output to ai (binary). A seam clause (vouch ROLE WHO COMP) lets a NON-AI authority WHO sign a SPECIFIC foreign
     #     component COMP, so (ffi COMP ..) directly in that seam body carries WHO's anchor instead of the strip — making
@@ -1058,6 +1065,46 @@ def main(argv=None):
             print("       indirect meter failures: " + ", ".join(indirect_meter_failures))
     except Exception as e:
         print(f"  FAIL backend(WASM) seamN static boundary: {e}")
+    try:                                               # depthN charges named recursive SCC edges in every backend without host ABI changes
+        depth_program = '(defx fac () (fn (n) (if (< n 1) 1 (* n (fac (- n 1)))))) (defx t () (fn () (depthN 6 (fac 6))))'
+        mutual_program = '(defx even () (fn (n) (if (= n 0) 1 (odd (- n 1))))) (defx odd () (fn (n) (if (= n 0) 0 (even (- n 1))))) (defx t () (fn () (depthN 4 (even 4))))'
+        nested_program = '(defx down () (fn (n) (if (= n 0) 0 (down (- n 1))))) (defx t () (fn () (depthN 5 (depthN 4 (down 4)))))'
+        depth_values = []
+        for program in (depth_program, mutual_program, nested_program):
+            results = [run_call(program, "(t)"), run_compiled(program, "(t)"), run_wasm(program, "(t)")]
+            if __import__("shutil").which("node"):
+                results.append(run_js(program, "(t)"))
+            depth_values.append(results)
+        trap_program = '(defx down () (fn (n) (if (= n 0) 0 (down (- n 1))))) (defx t () (fn () (depthN 2 (down 3))))'
+        depth_traps = []
+        for runner in (run_call, run_compiled, run_wasm) + ((run_js,) if __import__("shutil").which("node") else ()):
+            try:
+                runner(trap_program, "(t)")
+                depth_traps.append(False)
+            except Exception as error:
+                depth_traps.append("call budget exhausted" in str(error) or "unreachable" in str(error))
+        depth_wat = emit_wat(depth_program)
+        from loom_recursion import recursive_edges as _recursive_edges
+        alias_program = '(defx inc () (fn (x) (+ x 1))) (defx dec () (fn (x) (- x 1))) (defx t () (fn () ((if 1 inc dec) 4)))'
+        alias_runtime_ok = run_call(alias_program, "(t)") == (5, [])
+        field_fns, field_errors = check(parse('(defx fac () (fn (n) n)) (defx t () (fn () (record (fac 1))))'))
+        graph_edges = getattr(_loom, "_recursive_edges", _recursive_edges)
+        field_graph_ok = not field_errors and graph_edges(field_fns) == set()
+        depth_budget_ok = (
+            all(all(result == results[0] for result in results[1:]) for results in depth_values)
+            and [results[0][0] for results in depth_values] == [720, 1, 0]
+            and all(depth_traps)
+            and "call $__loom_depth_push" in depth_wat
+            and "call $__loom_depth_take" in depth_wat
+            and "global.set $__loom_depth_frame" in depth_wat
+            and not any("__loom_depth" in line for line in depth_wat.splitlines() if "(import " in line)
+            and alias_runtime_ok
+            and field_graph_ok
+        )
+        ok += depth_budget_ok
+        print(f"  {'ok  ' if depth_budget_ok else 'FAIL'} backend(all): depthN private Call Budget Frame v1")
+    except Exception as e:
+        print(f"  FAIL backend(all) depthN call budget: {e}")
     try:                                               # i31 overflow semantics must match on every execution backend
         import shutil as _num_sh
         pnum = '(defx bounds () (fn () (record (add (+ 1073741823 1)) (sub (- -1073741824 1)) (mul (* 1073741823 2)) (wide (* 1073741823 1073741823)))))'
@@ -2713,7 +2760,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 437
+            and about_json["citadel_checks"] == 443
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
@@ -2870,7 +2917,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 437/437 citadel checks" in quick
+            and "PASS -- 443/443 citadel checks" in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
             and "loom examples" in quick
@@ -3565,7 +3612,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 437/437 citadel checks" in rdoc
+            and "PASS -- 443/443 citadel checks" in rdoc
             and "loom examples --format json" in rdoc
             and "loom doctor --dry-run --format json" in rdoc
             and "python3 verify_docs_parity.py" in rdoc
@@ -3615,7 +3662,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 134   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 135   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

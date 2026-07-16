@@ -124,6 +124,14 @@ const EXAMPLES = [
   (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))))
 
 (defx main () (fn () (fib 10)))` },
+  { name: "WASM · call budget", note: "→ 720 / WAT / WASM",
+    src: `; depthN is a real runtime call budget, not a trusted annotation.
+; Each recursive SCC edge consumes one unit before the callee is entered.
+
+(defx fac () (fn (n)
+  (if (< n 1) 1 (* n (fac (- n 1))))))
+
+(defx main () (fn () (depthN 6 (fac 6))))` },
   { name: "WASM · list-sum", note: "→ WAT",
     src: `; Integer LISTS now compile to WebAssembly too — a real heap in
 ; linear memory. Run it (→ 15), or Compile → WAT to see the $cons allocator.

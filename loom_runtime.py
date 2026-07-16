@@ -4,6 +4,7 @@
 from contextvars import ContextVar
 
 from loom_frontend import RuntimeFrontend as _RuntimeFrontend, asm_metadata, asm_validation_error
+from loom_recursion import recursive_edges
 
 
 class Frontend(_RuntimeFrontend):
@@ -12,11 +13,14 @@ class Frontend(_RuntimeFrontend):
 
 class _RuntimeState:
     """Mutable runtime capability state scoped to one run_call() invocation."""
-    __slots__ = ("caps", "meters")
+    __slots__ = ("caps", "meters", "depths", "calls", "recursive_edges")
 
     def __init__(self):
         self.caps = []
         self.meters = []
+        self.depths = []
+        self.calls = []
+        self.recursive_edges = set()
 
 
 class Closure:
@@ -62,6 +66,27 @@ def _meter_take(frontend, eff):
         frame[eff] -= 1
 
 
+def _depth_take(frontend):
+    frames = _runtime_state().depths
+    if any(remaining <= 0 for remaining in frames):
+        raise frontend.error("call budget exhausted before recursive call")
+    for index in range(len(frames)):
+        frames[index] -= 1
+
+
+def _call_named(frontend, name, args, fns, out, handlers):
+    state = _runtime_state()
+    caller = state.calls[-1] if state.calls else None
+    if (caller, name) in state.recursive_edges:
+        _depth_take(frontend)
+    state.calls.append(name)
+    try:
+        fn = fns[name]["fn"]
+        return _eval_seq(frontend, fn[2:], _bind_params(frontend, fn[1], args), fns, out, handlers)
+    finally:
+        state.calls.pop()
+
+
 def _foreign_logger(args, out):
     if _cap_ok("IO"):
         out.append("foreign:" + str(args[0]))
@@ -98,8 +123,7 @@ def call_fn(frontend, val, args, fns, out, handlers):
     if isinstance(val, Closure):
         return _eval_seq(frontend, val.body, _bind_params(frontend, val.params, args, val.env), fns, out, handlers)
     if _is_symbol(val) and val in fns:
-        fn = fns[val]["fn"]
-        return _eval_seq(frontend, fn[2:], _bind_params(frontend, fn[1], args), fns, out, handlers)
+        return _call_named(frontend, val, args, fns, out, handlers)
     raise frontend.error(f"not a function: {val}")
 
 
@@ -114,6 +138,16 @@ def ev(frontend, node, env, fns, out, handlers=None):
     head = node[0]
     if head == "fn":
         return Closure(node[1], node[2:], env)
+    if head == "depthN":
+        quantum = node[1] if len(node) > 1 else None
+        if not isinstance(quantum, int) or quantum < 0:
+            raise frontend.error("call budget: quantum must be a non-negative integer")
+        state = _runtime_state()
+        state.depths.append(quantum)
+        try:
+            return _eval_seq(frontend, node[2:], env, fns, out, handlers)
+        finally:
+            state.depths.pop()
     if head == "seamN":
         state = _runtime_state()
         frame = _meter_frame(frontend, node[1], node[2])
@@ -260,21 +294,20 @@ def ev(frontend, node, env, fns, out, handlers=None):
     fn_value = None
     if _is_symbol(head):
         if head in fns:
-            fn_value = fns[head]
+            fn_value = head
         else:
             target = env.get(head)
             if _is_symbol(target) and target in fns:
-                fn_value = fns[target]
+                fn_value = target
             elif isinstance(target, Closure):
                 fn_value = target
     elif isinstance(head, list):
         target = ev(frontend, head, env, fns, out, handlers)
-        fn_value = target if isinstance(target, Closure) else (fns[target] if _is_symbol(target) and target in fns else None)
+        fn_value = target if isinstance(target, Closure) else (target if _is_symbol(target) and target in fns else None)
     if isinstance(fn_value, Closure):
         return _eval_seq(frontend, fn_value.body, _bind_params(frontend, fn_value.params, args, fn_value.env), fns, out, handlers)
-    if isinstance(fn_value, dict):
-        fn = fn_value["fn"]
-        return _eval_seq(frontend, fn[2:], _bind_params(frontend, fn[1], args, env), fns, out, handlers)
+    if _is_symbol(fn_value) and fn_value in fns:
+        return _call_named(frontend, fn_value, args, fns, out, handlers)
     raise frontend.error(f"unknown form: {head}")
 
 
@@ -283,7 +316,9 @@ def run_call(program_src, call_src, frontend):
     fns, errs = frontend.check(frontend.parse(program_src))
     if errs:
         raise frontend.error("; ".join(errs))
-    token = _RUNTIME_STATE.set(_RuntimeState())
+    state = _RuntimeState()
+    state.recursive_edges = recursive_edges(fns)
+    token = _RUNTIME_STATE.set(state)
     try:
         out = []
         call_ast = frontend.parse(call_src)

@@ -67,6 +67,9 @@ do not encode the numeric `seamN K` quantum as a host-visible counter in ABI v1.
 Generated modules also carry a compiler-emitted linked meter frame for effects
 inside a metered seam. Its private global pointer and raw heap records do not add
 host imports, exports, public object layouts, or ABI obligations.
+Generated modules may also carry a separate linked call-budget frame for
+`(depthN K ...)`. It is charged before direct named recursive SCC edges and is
+likewise private: it adds no host import, export, or ABI obligation.
 The foreign ID passed to `host_ffi` is module-local metadata assigned by first
 occurrence of the foreign component name inside one compiled module. Repeated
 uses of the same foreign name in one module use the same raw ID; distinct names
@@ -201,6 +204,9 @@ builds, with no closure/layout state inherited across modules.
   `applyN`, recursion, handlers, and FFI. The numeric quantum `K` is not a
   host-visible ABI counter; host-visible diagnostics and future heap growth are
   outside ABI v1.
+- Call-budget regions such as `depthN K` lower to a separate private linked
+  frame. Named recursive SCC edges charge it before callee entry; its quantum
+  and frame pointer are not host-visible ABI state.
 - The current allocator does not grow memory. Generated modules declare one 64 KiB page
   and contain no `memory.grow` path. Before each runtime heap
   allocation, `$reserve` checks `hp + size <= loom_heap_limit` and also

@@ -6,6 +6,7 @@ provided explicitly through Frontend, avoiding imports and circular loading.
 """
 
 from loom_frontend import WasmFrontend as _WasmFrontend, asm_metadata, asm_validation_error
+from loom_recursion import recursive_edges
 
 
 class Frontend(_WasmFrontend):
@@ -78,6 +79,10 @@ def _wasm_require_cap(effid):
 def _wasm_meter_take(ctx, eff):
     return (b"\x23" + _leb_u(10) + _wasm_const(EFFECT_IDS[eff])
             + b"\x10" + _leb_u(ctx.meter_take_id + _WASM_IMPORTS) + b"\x1a")
+
+def _wasm_depth_take(ctx):
+    return (b"\x23" + _leb_u(11)
+            + b"\x10" + _leb_u(ctx.depth_take_id + _WASM_IMPORTS) + b"\x1a")
 
 def _wasm_transparent_body(frontend, node):
     head = node[0]
@@ -179,6 +184,12 @@ def _emit_wasm_node(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, s
             out += _emit_wasm(ctx, b, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, ncall, handled_effs, with_handlers, metered_effs)
             if i + 1 < len(node[2:]): out += b"\x1a"
         return out
+    if h == "depthN":
+        out = (b"\x23" + _leb_u(11)
+               + b"\x23" + _leb_u(11) + _wasm_const(node[1])
+               + b"\x10" + _leb_u(ctx.depth_push_id + _WASM_IMPORTS) + b"\x24" + _leb_u(11))
+        out += _emit_wasm_seq(ctx, node[2:], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers, metered_effs)
+        return out + b"\x21" + _leb_u(lmap["hd"]) + b"\x24" + _leb_u(11) + b"\x20" + _leb_u(lmap["hd"])
     if h == "seamN":
         body = frontend.roleclauses(node[3:])[3]
         out = b"\x41" + _leb_s(_wasm_capmask(node[2])) + b"\x10" + _leb_u(_WASM_I_PUSH_CAPS) + b"\x1a"
@@ -305,7 +316,9 @@ def _emit_wasm_node(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, s
             out += _emit_wasm(ctx, a, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
         return out + b"\x10" + _leb_u(apply_id + _WASM_IMPORTS)
     if h in fmap:                                                       # call $fn  (first-order / recursive)
-        return b"".join(_emit_wasm(ctx, a, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) for a in node[1:]) + b"\x10" + _leb_u(fmap[h] + _WASM_IMPORTS)
+        args = b"".join(_emit_wasm(ctx, a, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) for a in node[1:])
+        charge = _wasm_depth_take(ctx) if (ctx.current_fn, h) in ctx.recursive_edges else b""
+        return args + charge + b"\x10" + _leb_u(fmap[h] + _WASM_IMPORTS)
     raise frontend.error("wasm: form not yet in the WASM backend: " + str(h))
 
 def _wasm_defxs(program_src, frontend):
@@ -576,6 +589,7 @@ class _WasmContext:
     """All program-specific WASM state, isolated per compilation."""
     __slots__ = ("frontend", "defs", "top", "closures", "closure_by_id", "order", "topdefs",
                  "helper_base", "apply_arities", "apply_ids", "apply1_id", "meter_push_id", "meter_take_id",
+                 "depth_push_id", "depth_take_id", "recursive_edges", "current_fn",
                  "variant_id", "alloc_id", "resource_use_id", "tags", "fields", "resources", "foreigns",
                  "strings", "string_layout", "hp_init", "node_path_by_id", "span_by_path", "_metered_effs")
 
@@ -596,11 +610,13 @@ class _WasmContext:
         )
         self.meter_push_id = self.helper_base + 8
         self.meter_take_id = self.helper_base + 9
+        self.depth_push_id = self.helper_base + 10
+        self.depth_take_id = self.helper_base + 11
         self.apply_ids = {
-            arity: self.helper_base + 10 + i
+            arity: self.helper_base + 12 + i
             for i, arity in enumerate(self.apply_arities)
         }
-        self.apply1_id = self.apply_ids.get(1, self.helper_base + 10)
+        self.apply1_id = self.apply_ids.get(1, self.helper_base + 12)
         self.variant_id = self.helper_base + 4
         self.alloc_id = self.helper_base + 5
         self.resource_use_id = self.helper_base + 6
@@ -612,6 +628,9 @@ class _WasmContext:
         self.strings = _wasm_strings(program_src, frontend)
         self.string_layout, self.hp_init = _wasm_string_layout(self.strings)
         self.node_path_by_id, self.span_by_path = _wasm_source_maps(program_src, frontend, self.defs)
+        graph_fns = {t[1]: {"fn": t[3]} for t in self.defs}
+        self.recursive_edges = recursive_edges(graph_fns)
+        self.current_fn = None
 
 def compile_wasm(program_src, frontend):
     """Compile checked LOOM to a real WebAssembly module.
@@ -635,9 +654,11 @@ def compile_wasm(program_src, frontend):
         for j, nm in enumerate(seen): lmap[nm] = len(params) + j
         si = len(params) + len(seen)                        # one shared scrutinee temp per function (used by match)
         nloc = len(seen) + (1 if flags["match"] else 0)
+        ctx.current_fn = t[1]
         funcs.append((t[1], len(params), nloc, _emit_wasm(ctx, fn[2:][-1] if fn[2:] else 0, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, set(frontend.pname(p) for p in fn[1] if frontend.platent(p) is not None), None, None) + b"\x0b", params))
     lambda_funcs = []
     for spec in order:
+        ctx.current_fn = None
         fn = spec["node"]; params = spec["captures"] + [frontend.pname(p) for p in fn[1]]
         names = []; flags = {"match": False}
         for b in fn[2:]: _wasm_locals(b, names, flags)
@@ -708,12 +729,12 @@ def compile_wasm(program_src, frontend):
             code = case
         return code
     def _sec(sid, c): return bytes([sid]) + _leb_u(len(c)) + c
-    ar = sorted(set(apply_arities) | {a for _, a, _, _, _ in funcs} | {a for _, a, _, _, _, _ in lambda_funcs} | {2, 3})  # add helper arities
+    ar = sorted(set(apply_arities) | {a for _, a, _, _, _ in funcs} | {a for _, a, _, _, _, _ in lambda_funcs} | {1, 2, 3})  # add helper arities
     ti = {a: i for i, a in enumerate(ar)}   # arity-2 type covers $cons/get; arity-3 covers $rec
     tc = _leb_u(len(ar)) + b"".join(b"\x60" + _leb_u(a) + b"\x7f" * a + b"\x01\x7f" for a in ar)   # type: (i32*)->i32
-    fc = _leb_u(len(funcs) + len(lambda_funcs) + 10 + len(apply_arities)) + b"".join(_leb_u(ti[a]) for _, a, _, _, _ in funcs) + b"".join(_leb_u(ti[a]) for _, a, _, _, _, _ in lambda_funcs) + _leb_u(ti[3]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[1]) + _leb_u(ti[1]) + _leb_u(ti[3]) + _leb_u(ti[2]) + b"".join(_leb_u(ti[arity + 1]) for arity in apply_arities)
+    fc = _leb_u(len(funcs) + len(lambda_funcs) + 12 + len(apply_arities)) + b"".join(_leb_u(ti[a]) for _, a, _, _, _ in funcs) + b"".join(_leb_u(ti[a]) for _, a, _, _, _, _ in lambda_funcs) + _leb_u(ti[3]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[1]) + _leb_u(ti[1]) + _leb_u(ti[3]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[1]) + b"".join(_leb_u(ti[arity + 1]) for arity in apply_arities)
     mc = _leb_u(1) + b"\x00" + _leb_u(1)                    # 1 memory, min 1 page (64 KiB heap)
-    gc = (_leb_u(11)
+    gc = (_leb_u(12)
           + b"\x7f\x01" + _wasm_const(ctx.hp_init) + b"\x0b"                       # mutable i32 $hp = static-data end
           + b"\x7f\x00" + _wasm_const(WASM_ABI_VERSION) + b"\x0b"                  # immutable raw ABI version
           + b"\x7f\x00" + _wasm_const(65536) + b"\x0b"                              # immutable raw heap limit
@@ -724,7 +745,8 @@ def compile_wasm(program_src, frontend):
           + b"\x7f\x01" + _wasm_const(0) + b"\x0b"                                  # mutable variant object count
           + b"\x7f\x01" + _wasm_const(0) + b"\x0b"                                  # mutable effect-box object count
           + b"\x7f\x01" + _wasm_const(0) + b"\x0b"                                  # mutable resource-use object count
-          + b"\x7f\x01" + _wasm_const(0) + b"\x0b")                                 # private active meter-frame pointer
+          + b"\x7f\x01" + _wasm_const(0) + b"\x0b"                                  # private active meter-frame pointer
+          + b"\x7f\x01" + _wasm_const(0) + b"\x0b")                                 # private active call-budget frame pointer
     ic = (_leb_u(8)
           + _leb_u(len("env")) + b"env" + _leb_u(len("push_handler")) + b"push_handler" + b"\x00" + _leb_u(ti[2])
           + _leb_u(len("env")) + b"env" + _leb_u(len("pop_handler")) + b"pop_handler" + b"\x00" + _leb_u(ti[1])
@@ -753,7 +775,7 @@ def compile_wasm(program_src, frontend):
         ec += _leb_u(len(name)) + name + b"\x03" + _leb_u(index)
     for i, t in enumerate(ds):
         nb = t[1].encode(); ec += _leb_u(len(nb)) + nb + b"\x00" + _leb_u(i + _WASM_IMPORTS)         # export func
-    cc = _leb_u(len(funcs) + len(lambda_funcs) + 10 + len(apply_arities))
+    cc = _leb_u(len(funcs) + len(lambda_funcs) + 12 + len(apply_arities))
     for _, _, nloc, code, _ in funcs:
         loc = (_leb_u(1) + _leb_u(nloc) + b"\x7f") if nloc else _leb_u(0)                           # let-locals (i32)
         e = loc + code; cc += _leb_u(len(e)) + e
@@ -811,6 +833,17 @@ def compile_wasm(program_src, frontend):
                        b"\x20\x00\x20\x01\x41\x02\x74\x6a\x28\x02\x08\x41\x01\x6b\x36\x02\x08\x0b"
                        b"\x41\x00\x0b\x0b")
     e = _leb_u(0) + meter_take_code; cc += _leb_u(len(e)) + e
+    depth_push_code = (_wasm_const(8) + b"\x10" + _leb_u(reserve_i + _WASM_IMPORTS) + b"\x21\x02"
+                       + b"\x20\x02\x20\x00\x36\x02\x00"
+                       + b"\x20\x02\x20\x01\x36\x02\x04"
+                       + b"\x20\x02\x0b")
+    e = (_leb_u(1) + _leb_u(1) + b"\x7f") + depth_push_code; cc += _leb_u(len(e)) + e
+    depth_take_code = (b"\x20\x00\x45\x04\x7f\x41\x00\x05"
+                       b"\x20\x00\x28\x02\x04\x45\x04\x40\x00\x0b"
+                       b"\x20\x00\x28\x02\x00\x10" + _leb_u(ctx.depth_take_id + _WASM_IMPORTS) + b"\x1a"
+                       b"\x20\x00\x20\x00\x28\x02\x04\x41\x01\x6b\x36\x02\x04"
+                       b"\x41\x00\x0b\x0b")
+    e = _leb_u(0) + depth_take_code; cc += _leb_u(len(e)) + e
     for arity in apply_arities:
         apply_code = _apply_cases(
             [{"id": i, "name": t[1], "captures": [], "arity": len(t[3][1]), "kind": "top"} for i, t in enumerate(ds) if len(t[3][1]) == arity] +
@@ -863,6 +896,9 @@ def emit_wat(program_src, frontend):
             uses_heap[0] = True
             return [ind + "global.get $__loom_meter_frame", ind + "i32.const " + str(EFFECT_IDS[eff]),
                     ind + "call $__loom_meter_take", ind + "drop"]
+        def depth_take():
+            uses_heap[0] = True
+            return [ind + "global.get $__loom_depth_frame", ind + "call $__loom_depth_take", ind + "drop"]
         if isinstance(node, int): return [ind + "i32.const " + str(node << 1) + "  ;; int " + str(node)]
         if _is_symbol(node):
             if node in ctx.topdefs:
@@ -914,6 +950,13 @@ def emit_wat(program_src, frontend):
                 o += w(b, ind, handled_effs, with_handlers, ncall, child_path(j + 2))
                 if j + 1 < len(node[2:]): o += [ind + "drop"]
             return o
+        if h == "depthN":
+            uses_heap[0] = True
+            o = [ind + "global.get $__loom_depth_frame  ;; save parent call-budget frame",
+                 ind + "global.get $__loom_depth_frame", ind + "i32.const " + str(node[1]) + "  ;; depthN quantum",
+                 ind + "call $__loom_depth_push", ind + "global.set $__loom_depth_frame"]
+            o += seq(node[2:])
+            return o + [ind + "local.set $hd", ind + "global.set $__loom_depth_frame  ;; restore parent call-budget frame", ind + "local.get $hd"]
         if h == "seamN":
             body = frontend.roleclauses(node[3:])[3]
             uses_heap[0] = True
@@ -1036,10 +1079,13 @@ def emit_wat(program_src, frontend):
         if h in fmap:
             o = []
             for i, a in enumerate(node[1:], 1): o += w(a, ind, handled_effs, with_handlers, callable_env, child_path(i))
+            if (ctx.current_fn, h) in ctx.recursive_edges:
+                o += depth_take()
             return o + [ind + "call $" + h]
         raise frontend.error("wat: form not yet in the WASM backend: " + str(h))
     bodies = []
     for t in ds:
+        ctx.current_fn = t[1]
         fn = t[3]; pn = [frontend.pname(p) for p in fn[1]]; sig = " ".join("(param $" + p + " i32)" for p in pn)
         nm = ["hd"]; flags = {"match": False}
         for b in fn[2:]: _wasm_locals(b, nm, flags)
@@ -1050,6 +1096,7 @@ def emit_wat(program_src, frontend):
         bodies.append([head] + w(fn[2:][-1] if fn[2:] else 0, "    ", None, None, callable_env)
                       + ["  )", '  (export "' + t[1] + '" (func $' + t[1] + "))"])
     for spec in order:
+        ctx.current_fn = None
         fn = spec["node"]; params = spec["captures"] + [frontend.pname(p) for p in fn[1]]; sig = " ".join("(param $" + p + " i32)" for p in params)
         nm = ["hd"]; flags = {"match": False}
         for b in fn[2:]: _wasm_locals(b, nm, flags)
@@ -1068,6 +1115,7 @@ def emit_wat(program_src, frontend):
              "  (global $loom_heap_effects (mut i32) (i32.const 0))",
              "  (global $loom_heap_resources (mut i32) (i32.const 0))",
              "  (global $__loom_meter_frame (mut i32) (i32.const 0))",
+             "  (global $__loom_depth_frame (mut i32) (i32.const 0))",
              '  (export "loom_abi_version" (global $loom_abi_version))',
              '  (export "loom_heap_limit" (global $loom_heap_limit))',
              '  (export "loom_heap_used" (global $loom_heap_used))',
@@ -1121,6 +1169,22 @@ def emit_wat(program_src, frontend):
                   "        local.get $frame  local.get $effect  i32.const 2  i32.shl  i32.add  i32.load offset=8  i32.const 1  i32.sub",
                   "        i32.store offset=8",
                   "      end",
+                  "      i32.const 0",
+                  "    end)",
+                  "  (func $__loom_depth_push (param $parent i32) (param $quantum i32) (result i32) (local $t i32)",
+                  "    i32.const 8  call $reserve  local.set $t",
+                  "    local.get $t  local.get $parent  i32.store",
+                  "    local.get $t  local.get $quantum  i32.store offset=4",
+                  "    local.get $t)",
+                  "  (func $__loom_depth_take (param $frame i32) (result i32)",
+                  "    local.get $frame  i32.eqz",
+                  "    if (result i32)",
+                  "      i32.const 0",
+                  "    else",
+                  "      local.get $frame  i32.load offset=4  i32.eqz",
+                  "      if  unreachable  end",
+                  "      local.get $frame  i32.load  call $__loom_depth_take  drop",
+                  "      local.get $frame  local.get $frame  i32.load offset=4  i32.const 1  i32.sub  i32.store offset=4",
                   "      i32.const 0",
                   "    end)",
                   "  (func $rec (param $next i32) (param $fid i32) (param $val i32) (result i32) (local $t i32)",
