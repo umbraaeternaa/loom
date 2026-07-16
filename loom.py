@@ -138,7 +138,7 @@ def run_call(program_src, call_src):
 # ---- PORTABLE CODEGEN: implementation lives in loom_codegen.py; public facade stays stable. ----
 import loom_codegen as _loom_codegen
 
-_CODEGEN_FRONTEND = _loom_codegen.Frontend(parse, check, pname, LoomError, OP, _check_call_literals, INT_MIN, _INT_MOD)
+_CODEGEN_FRONTEND = _loom_codegen.Frontend(parse, check, pname, LoomError, OP, _check_call_literals, INT_MIN, _INT_MOD, _roleclauses)
 
 def _emit(node):
     return _loom_codegen._emit(_CODEGEN_FRONTEND, node)

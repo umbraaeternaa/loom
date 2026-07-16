@@ -261,6 +261,7 @@ def _check_meter_frame_doc() -> None:
         "traps before changing any counter",
         "`IO`, `Net`, `Alloc`, `Rand`, and `FFI`",
         "reference interpreter implements Meter Frame v1",
+        "Python and JavaScript generated backends implement the same frame",
         "production checker remains fail-closed",
         "changes no WASM ABI v1 imports, exports, object layouts, or host",
     )

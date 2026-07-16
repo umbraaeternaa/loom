@@ -108,12 +108,13 @@ class BackendFrontend:
 
 
 class CodegenFrontend(BackendFrontend):
-    __slots__ = ("int_min", "int_mod")
+    __slots__ = ("int_min", "int_mod", "roleclauses")
 
-    def __init__(self, parse, check, pname, error, op, check_call_literals, int_min, int_mod):
+    def __init__(self, parse, check, pname, error, op, check_call_literals, int_min, int_mod, roleclauses):
         super().__init__(parse, check, pname, error, op, check_call_literals)
         self.int_min = int_min
         self.int_mod = int_mod
+        self.roleclauses = roleclauses
 
 
 class WasmFrontend(BackendFrontend):

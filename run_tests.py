@@ -1155,6 +1155,13 @@ def main(argv=None):
                  ('(defx fb () (fn (x) (seam (Pure) (ffi "logger" x))))', "(fb 5)"),             # FFI codegen FLAGSHIP: seam grants NOTHING -> foreign I/O SANDBOXED to silence on every backend
                  ('(defx fv () (fn (x) (trust (seam (Pure) (vouch auditor alice "lib") (ffi "lib" x)))))', "(fv 5)"),  # attested opaque foreign component: accepted statically, pure at runtime, identity payload everywhere
                  ('(defx fm () (fn (x) (trust (seamN 2 (Pure) (vouch auditor alice "lib") (ffi "lib" x)))))', "(fm 5)"),  # metered attested opaque foreign component keeps the same backend/runtime value path
+                 ('(defx f (IO) (fn () (seamN 1 (IO) (print 7))))', "(f)"),
+                 ('(defx f (IO) (fn () (seamN 2 (IO) (print 1) (print 2))))', "(f)"),
+                 ('(defx f (Net) (fn () (seamN 1 (Net) (net 7))))', "(f)"),
+                 ('(defx f (Alloc) (fn () (seamN 1 (Alloc) (alloc 3))))', "(f)"),
+                 ('(defx f (Rand) (fn () (seamN 1 (Rand) (rand))))', "(f)"),
+                 ('(defx f (FFI) (fn () (seamN 1 (FFI) (ffi "lib" 7))))', "(f)"),
+                 ('(defx f (Net) (fn () (seamN 2 (Net) (let (x (seamN 1 (Net) (net 1))) (net 2)))))', "(f)"),
                  ('(defx f (Rand) (fn () (seam (Rand) (rand))))', "(f)"),                       # EFFECT op rand -> "<rand>"
                  ('(defx f () (fn () (handle (IO) (print 5))))', "(f)"),                        # HANDLE discharges IO -> value 5, output SUPPRESSED []
                  ('(defx mock () (fn (u) u)) (defx f () (fn () (with Net mock (net 5))))', "(f)"),  # WITH reinterprets Net via a pure mock -> (net 5) routes to mock => 5, no net
@@ -1163,6 +1170,33 @@ def main(argv=None):
         for prog, call in pairs:
             cval, cout = run_compiled(prog, call); ival, iout = run_call(prog, call)
             if (cval, cout) != (ival, iout): allok = False; print(f"  FAIL codegen: {call} compiled=({cval},{cout}) interp=({ival},{iout})")
+        import contextlib, io
+        py_source = compile_py('(defx t () (fn () 0))')
+        py_ns = {}; exec(py_source, py_ns)
+        py_errors = []; py_unwind = []
+        py_probes = [
+            lambda: py_ns['_metered_seam'](['IO'], 1, lambda: (py_ns['_p'](1), py_ns['_p'](2))),
+            lambda: py_ns['_metered_seam'](['Net'], 1, lambda: (py_ns['_metered_seam'](['Net'], 1, lambda: py_ns['_net'](1)), py_ns['_net'](2))),
+            lambda: py_ns['_handle'](lambda: py_ns['_metered_seam'](['IO'], 1, lambda: (py_ns['_p'](1), py_ns['_p'](2)))),
+            lambda: py_ns['_with']('net', lambda u: u, lambda: py_ns['_metered_seam'](['Net'], 1, lambda: (py_ns['_net'](1), py_ns['_net'](2)))),
+            lambda: py_ns['_metered_seam'](['Alloc'], 1, lambda: (py_ns['_alloc'](0), py_ns['_alloc'](0))),
+            lambda: py_ns['_metered_seam'](['Rand'], 1, lambda: (py_ns['_rand'](), py_ns['_rand']())),
+            lambda: py_ns['_metered_seam'](['FFI'], 1, lambda: (py_ns['_ffi']('lib', [1]), py_ns['_ffi']('lib', [2]))),
+        ]
+        py_out = io.StringIO()
+        with contextlib.redirect_stdout(py_out):
+            for probe in py_probes:
+                try: probe()
+                except Exception as exc: py_errors.append(str(exc))
+                py_unwind.append((len(py_ns['_caps']), len(py_ns['_meters']), py_ns['_sd'][0], dict(py_ns['_h'])))
+        py_meter_ok = (
+            "_metered_seam" in py_source and "_meter_take('FFI')" in py_source
+            and len(py_errors) == len(py_probes)
+            and all("meter exhausted" in error for error in py_errors)
+            and py_out.getvalue().splitlines() == ["1"]
+            and all(snapshot == (0, 0, 0, {}) for snapshot in py_unwind)
+        )
+        allok = allok and py_meter_ok
         ok += allok
         print(f"  {'ok  ' if allok else 'FAIL'} backend: compiled Python == interpreter, value+output ({len(pairs)} programs)")
     except Exception as e:
@@ -1176,6 +1210,30 @@ def main(argv=None):
             for prog, call in pairs:
                 jval, jout = run_js(prog, call); ival, iout = run_call(prog, call)
                 if (jval, jout) != (ival, iout): jok = False; print(f"  FAIL js: {call} node=({jval},{jout}) interp=({ival},{iout})")
+            js_probe = compile_js('(defx t () (fn () 0))') + r'''
+const _probes=[
+ ()=>_metered_seam(['IO'],1,()=>{_p(1);_p(2);}),
+ ()=>_metered_seam(['Net'],1,()=>{_metered_seam(['Net'],1,()=>_net(1));_net(2);}),
+ ()=>_handle(()=>_metered_seam(['IO'],1,()=>{_p(1);_p(2);})),
+ ()=>_with('net',(u)=>u,()=>_metered_seam(['Net'],1,()=>{_net(1);_net(2);})),
+ ()=>_metered_seam(['Alloc'],1,()=>{_alloc(0);_alloc(0);}),
+ ()=>_metered_seam(['Rand'],1,()=>{_rand();_rand();}),
+ ()=>_metered_seam(['FFI'],1,()=>{_ffi('lib',[1]);_ffi('lib',[2]);})
+];
+const _errors=[],_unwind=[];
+for(const probe of _probes){ try{ probe(); }catch(e){ _errors.push(e.message); } _unwind.push([_caps.length,_meters.length,_sd,Object.keys(_h).length]); }
+console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
+'''
+            js_result = subprocess.run(["node", "-e", js_probe], capture_output=True, text=True, timeout=15)
+            js_lines = js_result.stdout.splitlines()
+            js_meter = json.loads(js_lines[-1][5:]) if js_lines and js_lines[-1].startswith("__M__") else {}
+            js_meter_ok = (
+                js_result.returncode == 0 and js_lines[:-1] == ["1"]
+                and len(js_meter.get("errors", [])) == 7
+                and all("meter exhausted" in error for error in js_meter.get("errors", []))
+                and all(snapshot == [0, 0, 0, 0] for snapshot in js_meter.get("unwind", []))
+            )
+            jok = jok and js_meter_ok
             ok += jok
             print(f"  {'ok  ' if jok else 'FAIL'} backend(JS): Node value+output == interpreter ({len(pairs)} programs)")
         else:
@@ -3122,6 +3180,7 @@ def main(argv=None):
             and "LOOM Portable Meter Frame v1" in mdoc
             and "charges every active frame" in mdoc
             and "traps before changing any counter" in mdoc
+            and "Python and JavaScript generated backends implement the same frame" in mdoc
             and "production checker remains fail-closed" in mdoc
             and "changes no WASM ABI v1 imports, exports, object layouts, or host" in mdoc
         )
@@ -3466,7 +3525,7 @@ def main(argv=None):
             and "Experimental or bounded" in rdoc
             and "does not magically confine arbitrary external tools" in rdoc_words
             and "Native operator signing is intentionally outside the public language runtime." in rdoc
-            and "Portable Meter Frame v1 is implemented by the reference interpreter." in rdoc_words
+            and "Portable Meter Frame v1 is implemented by the reference interpreter and the generated Python and JavaScript backends." in rdoc_words
             and "`seamN` lowers to an internal direct-effect runtime meter" in rdoc_words
             and "Release verification checklist" in rdoc
             and "python3 loom.py release-check" in rdoc

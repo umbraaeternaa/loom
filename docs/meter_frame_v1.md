@@ -34,11 +34,12 @@ are charged under the frames active when those effects occur.
 ## Backend And Checker Status
 
 - The reference interpreter implements Meter Frame v1.
-- The Python and JavaScript generated backends are pending.
+- The Python and JavaScript generated backends implement the same frame,
+  atomic-charge, handler, nesting, and unwind rules.
 - WASM implements direct scoped effects; indirect calls, closures, `applyN`,
   recursion, and handler parity are pending.
 - The production checker remains fail-closed for indirect metered paths until
-  every execution backend implements this contract.
+  WASM implements this contract across its indirect runtime paths.
 
 Meter Frame v1 changes no WASM ABI v1 imports, exports, object layouts, or host
 obligations. Host-visible meter state or diagnostics require a separate ABI

@@ -1235,6 +1235,12 @@ def run_call(program_src, call_src):
 
 # ---- BACKEND: compile CHECKED LOOM to portable target source (v0 target = Python; same emit pattern -> JS/C/WASM).
 # "AI proposes -> the compiler DISPOSES -> and EMITS verified code that runs anywhere." Covers the computational core.
+def _emit_seq(nodes):
+    parts = [_emit(node) for node in nodes]
+    if not parts: return "None"
+    if len(parts) == 1: return parts[0]
+    return "(" + ",".join(parts) + ")[-1]"
+
 def _emit(node):
     if isinstance(node, int): return str(node)
     if type(node) is str: return repr(node)                            # string literal
@@ -1267,7 +1273,7 @@ def _emit(node):
     if h == "record": return "{" + ",".join(f"{fld[0]!r}:{_emit(fld[1])}" for fld in node[1:] if isinstance(fld, list)) + "}"
     if h == "get": return f"({_emit(node[1])}[{node[2]!r}])"
     if h == "fn": return f"(lambda {','.join(pname(p) for p in node[1])}: {_emit(node[2:][-1])})"
-    if h == 'seamN': return _emit(['seam'] + node[2:])   # D27 meter compiles as a seam (the quantum is a static-only check)
+    if h == 'seamN': return f"_metered_seam({sorted(set(node[2])-{'Pure'})!r}, {node[1]}, lambda: {_emit_seq(_roleclauses(node[3:])[3])})"
     if h in ("seam", "seam1"): return f"_seam({sorted(set(node[1])-{'Pure'})!r}, lambda: {_emit(node[2:][-1])})"   # seam SANDBOXES the body: push its granted row so foreign/ffi code is cap-gated exactly like the interpreter
     if h in ("resource", "prov", "declassify"): return _emit(node[2:][-1])   # value-transparent (effects/prov are static layers)
     if h == "by": return _emit(node[3:][-1])                           # value-transparent (role tag is a static layer)
@@ -1302,17 +1308,21 @@ def compile_py(program_src):
              "def _i31(n): return ((n-_INT_MIN)%_INT_MOD)+_INT_MIN",
              "def _route(name, args, default):\n    if name in _h:\n        f = _h.pop(name)\n        try: return f(*args)\n        finally: _h[name] = f\n    return default()",
              "def _with(name, hf, thunk):\n    had = name in _h; prev = _h.get(name)\n    _h[name] = hf\n    try: return thunk()\n    finally:\n        if had: _h[name] = prev\n        else: _h.pop(name, None)",
-             "def _p(x): return _route('print', (x,), lambda: (print(x) if _sd[0]==0 else None) or x)",
+             "def _p(x):\n    _meter_take('IO')\n    return _route('print', (x,), lambda: (print(x) if _sd[0]==0 else None) or x)",
              "def _handle(t):\n    _sd[0]+=1\n    try: return t()\n    finally: _sd[0]-=1",
              "def _nm(t):\n    raise Exception('no match arm for '+str(t))",
-             "def _net(u): return _route('net', (u,), lambda: ('Net', u))",
-             "def _alloc(n): return _route('alloc', (n,), lambda: list(range(n)))",
-             "def _rand(): return _route('rand', (), lambda: ('Rand', 0))",
+            "def _net(u):\n    _meter_take('Net')\n    return _route('net', (u,), lambda: ('Net', u))",
+            "def _alloc(n):\n    _meter_take('Alloc')\n    return _route('alloc', (n,), lambda: list(range(n)))",
+            "def _rand():\n    _meter_take('Rand')\n    return _route('rand', (), lambda: ('Rand', 0))",
              "_caps = []",
+             "_meters = []",
              "def _cap_ok(e): return (not _caps) or (e in _caps[-1])",
-             "def _seam(row, thunk): _caps.append(set(row)); _r = thunk(); _caps.pop(); return _r",
+             "def _meter_frame(k, row):\n    if not isinstance(k, int) or k < 0: raise Exception('meter frame: quantum must be a non-negative integer')\n    return {e: k for e in row if e != 'Pure'}",
+             "def _meter_take(e):\n    active = [frame for frame in _meters if e in frame]\n    if any(frame[e] <= 0 for frame in active): raise Exception('meter exhausted: '+e+' quantum exceeded before effect request')\n    for frame in active: frame[e] -= 1",
+             "def _seam(row, thunk):\n    _caps.append(set(row))\n    try: return thunk()\n    finally: _caps.pop()",
+             "def _metered_seam(row, k, thunk):\n    _caps.append(set(row)); _meters.append(_meter_frame(k, row))\n    try: return thunk()\n    finally:\n        _meters.pop(); _caps.pop()",
              "_FOREIGN = {'logger': (lambda a: (a[0], print('foreign:'+str(a[0])) if (_cap_ok('IO') and _sd[0]==0) else None)[0]), 'lib': (lambda a: a[0] if a else 0), 'x': (lambda a: a[0] if a else 0), 'other': (lambda a: a[0] if a else 0)}",
-             "def _ffi(name, args): return _FOREIGN[name](args)"]   # FFI codegen: cap stack (seam SANDBOX) + foreign registry -> ffi mirrors the interpreter (foreign I/O fires only if its seam granted it)
+             "def _ffi(name, args):\n    _meter_take('FFI')\n    return _FOREIGN[name](args)"]   # FFI codegen: cap stack (seam SANDBOX) + foreign registry -> ffi mirrors the interpreter (foreign I/O fires only if its seam granted it)
     for top in parse(program_src):
         if isinstance(top, list) and top and top[0] == "defx":
             fn = top[3]; ps = ",".join(pname(p) for p in fn[1]); body = _emit(fn[2:][-1]) if fn[2:] else "None"
@@ -1330,6 +1340,12 @@ def run_compiled(program_src, call_src):
 
 
 # ---- SECOND TARGET: JavaScript. Same emit pattern -> a DIFFERENT platform (browser / Node / any OS) => cross-platform. ----
+def _emit_js_seq(nodes):
+    parts = [_emit_js(node) for node in nodes]
+    if not parts: return "null"
+    if len(parts) == 1: return parts[0]
+    return "(" + ",".join(parts) + ")"
+
 def _emit_js(node):
     if isinstance(node, int): return str(node)
     if type(node) is str: return repr(node)
@@ -1365,7 +1381,7 @@ def _emit_js(node):
     if h == "record": return "({" + ",".join(f"{fld[0]!r}:{_emit_js(fld[1])}" for fld in node[1:] if isinstance(fld, list)) + "})"
     if h == "get": return f"({_emit_js(node[1])}[{node[2]!r}])"
     if h == "fn": return f"(({','.join(pname(p) for p in node[1])})=>{_emit_js(node[2:][-1])})"
-    if h == 'seamN': return _emit_js(['seam'] + node[2:])   # D27 meter compiles as a seam (JS)
+    if h == 'seamN': return f"_metered_seam({sorted(set(node[2])-{'Pure'})!r}, {node[1]}, ()=>({_emit_js_seq(_roleclauses(node[3:])[3])}))"
     if h in ("seam", "seam1"): return f"_seam({sorted(set(node[1])-{'Pure'})!r}, ()=>({_emit_js(node[2:][-1])}))"   # seam SANDBOXES the body (JS): cap-gate foreign code like the interpreter
     if h in ("resource", "prov", "declassify"): return _emit_js(node[2:][-1])
     if h == "by": return _emit_js(node[3:][-1])
@@ -1401,15 +1417,19 @@ def compile_js(program_src):
              "function _imul(a,b){ return _i31(Math.imul(a,b)); }",
              "function _route(name,args,d){ if(name in _h){ let f=_h[name]; delete _h[name]; try{ return f(...args); } finally{ _h[name]=f; } } return d(); }",
              "function _with(name,hf,thunk){ let had=(name in _h), prev=_h[name]; _h[name]=hf; try{ return thunk(); } finally{ if(had) _h[name]=prev; else delete _h[name]; } }",
-             "function _p(x){ return _route('print',[x], ()=>{ if(_sd===0) console.log(x); return x; }); }",
+             "function _p(x){ _meter_take('IO'); return _route('print',[x], ()=>{ if(_sd===0) console.log(x); return x; }); }",
              "function _handle(t){ _sd++; try{ return t(); } finally{ _sd--; } }",
              "function _nm(t){ throw new Error('no match arm for '+t); }",
-             "function _net(u){ return _route('net',[u], ()=>['Net',u]); }", "function _alloc(n){ return _route('alloc',[n], ()=>Array.from({length:n},(_,i)=>i)); }", "function _rand(){ return _route('rand',[], ()=>['Rand',0]); }",
+             "function _net(u){ _meter_take('Net'); return _route('net',[u], ()=>['Net',u]); }", "function _alloc(n){ _meter_take('Alloc'); return _route('alloc',[n], ()=>Array.from({length:n},(_,i)=>i)); }", "function _rand(){ _meter_take('Rand'); return _route('rand',[], ()=>['Rand',0]); }",
              "let _caps=[];",
+             "let _meters=[];",
              "function _cap_ok(e){ return (_caps.length===0)||_caps[_caps.length-1].has(e); }",
-             "function _seam(row,thunk){ _caps.push(new Set(row)); let _r=thunk(); _caps.pop(); return _r; }",
+             "function _meter_frame(k,row){ if(!Number.isInteger(k)||k<0) throw new Error('meter frame: quantum must be a non-negative integer'); return Object.fromEntries(row.filter(e=>e!=='Pure').map(e=>[e,k])); }",
+             "function _meter_take(e){ const active=_meters.filter(frame=>Object.prototype.hasOwnProperty.call(frame,e)); if(active.some(frame=>frame[e]<=0)) throw new Error('meter exhausted: '+e+' quantum exceeded before effect request'); for(const frame of active) frame[e]--; }",
+             "function _seam(row,thunk){ _caps.push(new Set(row)); try{ return thunk(); } finally{ _caps.pop(); } }",
+             "function _metered_seam(row,k,thunk){ _caps.push(new Set(row)); _meters.push(_meter_frame(k,row)); try{ return thunk(); } finally{ _meters.pop(); _caps.pop(); } }",
              "const _FOREIGN={ logger:(a)=>{ if(_cap_ok('IO')&&_sd===0) console.log('foreign:'+String(a[0])); return a[0]; }, lib:(a)=>a.length?a[0]:0, x:(a)=>a.length?a[0]:0, other:(a)=>a.length?a[0]:0 };",
-             "function _ffi(name,args){ return _FOREIGN[name](args); }"]  # FFI codegen (JS): cap stack + foreign registry -> ffi mirrors the interpreter
+             "function _ffi(name,args){ _meter_take('FFI'); return _FOREIGN[name](args); }"]  # FFI codegen (JS): cap stack + foreign registry -> ffi mirrors the interpreter
     for top in parse(program_src):
         if isinstance(top, list) and top and top[0] == "defx":
             fn = top[3]; ps = ",".join(pname(p) for p in fn[1]); body = _emit_js(fn[2:][-1]) if fn[2:] else "null"
