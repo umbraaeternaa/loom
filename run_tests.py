@@ -401,6 +401,22 @@ CASES = [
     ("D29 depth: negative refused", '(defx f () (fn () (depthN -1 7)))', False),
     ("D29 depth: ceiling refused", '(defx f () (fn () (depthN 1024 7)))', False),
     ("D29 depth: does not launder meter recursion", '(defx hit (Net) (fn (n) (if (= n 0) 0 (let (x (net n)) (hit (- n 1)))))) (defx f (Net) (fn () (depthN 2 (seamN 2 (Net) (hit 2)))))', False),
+    # --- grown 2026-07-18: D30 -- STATIC RECURSIVE DESCENT PROOF. A top-level proof request is checked, never trusted.
+    #     It certifies named recursive SCC descent through guarded i31 subtraction or nonempty-list tail, while hidden
+    #     closure/HOF dispatch, wraparound, growth, and cycles without a strict edge remain fail-closed.
+    ("D30 descent: guarded i31 recursion proven", '(prove (descent fac)) (defx fac () (fn (n) (if (< n 1) 1 (* n (fac (- n 1))))))', True),
+    ("D30 descent: nonempty list tail proven", '(prove (descent suml)) (defx suml () (fn (xs) (if (empty xs) 0 (+ (head xs) (suml (tail xs))))))', True),
+    ("D30 descent: mutual cycle has strict edge", '(prove (descent even)) (defx even () (fn (xs) (odd xs))) (defx odd () (fn (xs) (if (empty xs) 0 (even (tail xs)))))', True),
+    ("D30 descent: equality guard cannot prove lower bound", '(prove (descent down)) (defx down () (fn (n) (if (= n 0) 0 (down (- n 1)))))', False),
+    ("D30 descent: i31 wraparound refused", '(prove (descent down)) (defx down () (fn (n) (if (< n -1073741824) 0 (down (- n 1)))))', False),
+    ("D30 descent: unguarded tail is only weak", '(prove (descent walk)) (defx walk () (fn (xs) (walk (tail xs))))', False),
+    ("D30 descent: list growth refused", '(prove (descent grow)) (defx grow () (fn (xs) (grow (cons 1 xs))))', False),
+    ("D30 descent: unresolved HOF dispatch refused", '(prove (descent map)) (defx map (e) (fn ((f e) xs) (if (empty xs) (list) (cons (f (head xs)) (map f (tail xs))))))', False),
+    ("D30 descent: recursive function escape refused", '(prove (descent f)) (defx f () (fn (xs) (if (empty xs) 0 (let (g f) (let (z (f (tail xs))) (g (tail xs)))))))', False),
+    ("D30 descent: let shadow cannot inherit guard", '(prove (descent f)) (defx f () (fn (n) (if (< n 1) 0 (let (n -1073741824) (f (- n 1))))))', False),
+    ("D30 descent: match binding cannot inherit guard", '(prove (descent f)) (defx f () (fn (xs) (if (empty xs) 0 (match (variant Some (list 1)) ((Some xs) (f (tail xs)))))))', False),
+    ("D30 descent: malformed proof refused", '(prove (descent)) (defx f () (fn (x) x))', False),
+    ("D30 descent: unknown target refused", '(prove (descent missing)) (defx f () (fn (x) x))', False),
     # --- grown 2026-06-26 (pass 3): D27 — GRADED foreign trust via component-bound ATTESTATION. D26 strips ALL foreign
     #     output to ai (binary). A seam clause (vouch ROLE WHO COMP) lets a NON-AI authority WHO sign a SPECIFIC foreign
     #     component COMP, so (ffi COMP ..) directly in that seam body carries WHO's anchor instead of the strip — making
@@ -1069,8 +1085,9 @@ def main(argv=None):
         depth_program = '(defx fac () (fn (n) (if (< n 1) 1 (* n (fac (- n 1)))))) (defx t () (fn () (depthN 6 (fac 6))))'
         mutual_program = '(defx even () (fn (n) (if (= n 0) 1 (odd (- n 1))))) (defx odd () (fn (n) (if (= n 0) 0 (even (- n 1))))) (defx t () (fn () (depthN 4 (even 4))))'
         nested_program = '(defx down () (fn (n) (if (= n 0) 0 (down (- n 1))))) (defx t () (fn () (depthN 5 (depthN 4 (down 4)))))'
+        proof_program = '(prove (descent fac)) (defx fac () (fn (n) (if (< n 1) 1 (* n (fac (- n 1)))))) (defx t () (fn () (fac 6)))'
         depth_values = []
-        for program in (depth_program, mutual_program, nested_program):
+        for program in (depth_program, mutual_program, nested_program, proof_program):
             results = [run_call(program, "(t)"), run_compiled(program, "(t)"), run_wasm(program, "(t)")]
             if __import__("shutil").which("node"):
                 results.append(run_js(program, "(t)"))
@@ -1088,11 +1105,13 @@ def main(argv=None):
         alias_program = '(defx inc () (fn (x) (+ x 1))) (defx dec () (fn (x) (- x 1))) (defx t () (fn () ((if 1 inc dec) 4)))'
         alias_runtime_ok = run_call(alias_program, "(t)") == (5, [])
         field_fns, field_errors = check(parse('(defx fac () (fn (n) n)) (defx t () (fn () (record (fac 1))))'))
+        proof_fns, proof_errors = check(parse(proof_program))
+        proof_metadata_ok = not proof_errors and proof_fns["fac"].get("descent", {}).get("measure") == {"fac": "n"}
         graph_edges = getattr(_loom, "_recursive_edges", _recursive_edges)
         field_graph_ok = not field_errors and graph_edges(field_fns) == set()
         depth_budget_ok = (
             all(all(result == results[0] for result in results[1:]) for results in depth_values)
-            and [results[0][0] for results in depth_values] == [720, 1, 0]
+            and [results[0][0] for results in depth_values] == [720, 1, 0, 720]
             and all(depth_traps)
             and "call $__loom_depth_push" in depth_wat
             and "call $__loom_depth_take" in depth_wat
@@ -1100,6 +1119,7 @@ def main(argv=None):
             and not any("__loom_depth" in line for line in depth_wat.splitlines() if "(import " in line)
             and alias_runtime_ok
             and field_graph_ok
+            and proof_metadata_ok
         )
         ok += depth_budget_ok
         print(f"  {'ok  ' if depth_budget_ok else 'FAIL'} backend(all): depthN private Call Budget Frame v1")
@@ -2760,7 +2780,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 443
+            and about_json["citadel_checks"] == 456
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
@@ -2917,7 +2937,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 443/443 citadel checks" in quick
+            and "PASS -- 456/456 citadel checks" in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
             and "loom examples" in quick
@@ -3600,6 +3620,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "must not own mutable `_WASM_*` compiler tables" in mbdoc
             and "parallel builds" in mbdoc
             and "legacy module-global `_WASM_*` compiler tables do not return" in mbdoc
+            and "`loom_recursion.py` | shared named-call graph, recursive-SCC edges, and static descent certificates" in mbdoc
         )
         ok += module_boundary_doc_ok
         print(f"  {'ok  ' if module_boundary_doc_ok else 'FAIL'} docs: module boundaries pinned")
@@ -3607,12 +3628,13 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         print(f"  FAIL module boundaries doc pin: {e}")
     try:                                               # public release readiness says what is stable, bounded, and not claimed
         rdoc = Path(__file__).with_name("docs").joinpath("release_readiness.md").read_text()
+        descent_doc = Path(__file__).with_name("docs").joinpath("recursive_descent_certificate_v1.md").read_text()
         readme = Path(__file__).with_name("README.md").read_text()
         rdoc_words = " ".join(rdoc.split())
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 443/443 citadel checks" in rdoc
+            and "PASS -- 456/456 citadel checks" in rdoc
             and "loom examples --format json" in rdoc
             and "loom doctor --dry-run --format json" in rdoc
             and "python3 verify_docs_parity.py" in rdoc
@@ -3625,6 +3647,9 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "Portable Meter Frame v1 is implemented by the reference interpreter, the generated Python and JavaScript backends, and WASM." in rdoc_words
             and "Checker Meter Summary v1 admits finite statically resolved calls" in rdoc_words
             and "Recursion and unresolved higher-order dispatch remain fail-closed." in rdoc_words
+            and "`(prove (descent NAME...))` separately requests a checker-issued recursive descent certificate" in rdoc_words
+            and "The weak-edge subgraph must be acyclic." in descent_doc
+            and "recursive Meter Summary into a fixed finite quantity" in " ".join(descent_doc.split())
             and "`seamN` lowers to an internal linked runtime meter" in rdoc_words
             and "Release verification checklist" in rdoc
             and "python3 loom.py release-check" in rdoc

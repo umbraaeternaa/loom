@@ -15,6 +15,7 @@ import re
 import sys
 import unicodedata
 from contextvars import ContextVar
+from itertools import product
 from pathlib import Path
 
 EFFECTS = {"Pure", "IO", "Net", "Alloc", "FFI", "Rand"}   # Rand = nondeterminism (randomness / wall-clock)
@@ -273,6 +274,166 @@ def _recursive_edges(fns):
         if len(component) > 1 or any(name in graph[name] for name in component):
             edges |= {(source, target) for source in component for target in graph[source] if target in component}
     return edges
+
+def _recursive_component(fns, target):
+    edges = _recursive_edges(fns)
+    if not any(target in edge for edge in edges): return None
+    component = {target}; changed = True
+    while changed:
+        changed = False
+        for source, callee in edges:
+            if source in component or callee in component:
+                before = len(component); component |= {source, callee}
+                changed |= len(component) != before
+    return component
+
+def _copy_descent_facts(facts):
+    return {"nonempty": set(facts["nonempty"]), "lower": dict(facts["lower"]), "shadowed": set(facts["shadowed"])}
+
+def _descent_shadow(facts, names):
+    out = _copy_descent_facts(facts)
+    for name in names:
+        out["nonempty"].discard(name); out["lower"].pop(name, None); out["shadowed"].add(name)
+    return out
+
+def _descent_pattern_names(pattern):
+    return {item for item in pattern[1:] if _is_symbol(item)} if isinstance(pattern, list) else set()
+
+def _descent_branch_facts(condition, truth, facts):
+    out = _copy_descent_facts(facts)
+    if not isinstance(condition, list) or len(condition) not in (2, 3): return out
+    h = condition[0]
+    if h == "empty" and len(condition) == 2 and _is_symbol(condition[1]) and not truth:
+        out["nonempty"].add(condition[1]); return out
+    if len(condition) != 3: return out
+    left, right = condition[1], condition[2]; name = None; lower = None
+    if h == "<" and not truth and _is_symbol(left) and isinstance(right, int): name, lower = left, right
+    elif h == "<" and truth and isinstance(left, int) and _is_symbol(right): name, lower = right, left + 1
+    elif h == ">" and truth and _is_symbol(left) and isinstance(right, int): name, lower = left, right + 1
+    elif h == ">" and not truth and isinstance(left, int) and _is_symbol(right): name, lower = right, left
+    if name is not None: out["lower"][name] = max(out["lower"].get(name, INT_MIN), lower)
+    return out
+
+def _descent_call_sites(node, names, facts=None):
+    facts = facts or {"nonempty": set(), "lower": {}, "shadowed": set()}; out = []
+    if not isinstance(node, list) or not node: return out
+    h = node[0]
+    if h == "fn": return out
+    if h == "record":
+        for field in node[1:]:
+            if isinstance(field, list) and len(field) >= 2: out += _descent_call_sites(field[1], names, facts)
+        return out
+    if h == "get": return _descent_call_sites(node[1], names, facts)
+    if h == "variant": return _descent_call_sites(node[2], names, facts)
+    if h == "match":
+        out += _descent_call_sites(node[1], names, facts)
+        for arm in node[2:]:
+            if isinstance(arm, list) and len(arm) >= 2: out += _descent_call_sites(arm[1], names, _descent_shadow(facts, _descent_pattern_names(arm[0])))
+        return out
+    if h == "let":
+        out += _descent_call_sites(node[1][1], names, facts)
+        body_facts = _descent_shadow(facts, {node[1][0]} if _is_symbol(node[1][0]) else set())
+        for child in node[2:]: out += _descent_call_sites(child, names, body_facts)
+        return out
+    if h == "resource" and len(node) >= 2:
+        spec = node[1]; bound = spec[0] if isinstance(spec, list) and spec else spec
+        body_facts = _descent_shadow(facts, {bound} if _is_symbol(bound) else set())
+        for child in node[2:]: out += _descent_call_sites(child, names, body_facts)
+        return out
+    if h == "if" and len(node) >= 4:
+        out += _descent_call_sites(node[1], names, facts)
+        out += _descent_call_sites(node[2], names, _descent_branch_facts(node[1], True, facts))
+        out += _descent_call_sites(node[3], names, _descent_branch_facts(node[1], False, facts))
+        return out
+    if _is_symbol(h) and h in names: out.append((h, node[1:], _copy_descent_facts(facts)))
+    if isinstance(h, list): out += _descent_call_sites(h, names, facts)
+    for child in node[1:]: out += _descent_call_sites(child, names, facts)
+    return out
+
+def _contains_component_symbol(node, component):
+    if _is_symbol(node): return node in component
+    return isinstance(node, list) and any(_contains_component_symbol(child, component) for child in node)
+
+def _contains_component_value(node, component):
+    if _is_symbol(node): return node in component
+    if not isinstance(node, list) or not node: return False
+    h = node[0]
+    if h == "fn": return any(_contains_component_symbol(child, component) for child in node[2:])
+    if h == "record": return any(_contains_component_value(field[1], component) for field in node[1:] if isinstance(field, list) and len(field) >= 2)
+    if h == "get": return _contains_component_value(node[1], component)
+    if h == "variant": return _contains_component_value(node[2], component)
+    if h == "match": return _contains_component_value(node[1], component) or any(_contains_component_value(arm[1], component) for arm in node[2:] if isinstance(arm, list) and len(arm) >= 2)
+    if h == "let": return _contains_component_value(node[1][1], component) or any(_contains_component_value(child, component) for child in node[2:])
+    if _is_symbol(h) and h in component: return any(_contains_component_value(child, component) for child in node[1:])
+    if isinstance(h, list) and _contains_component_value(h, component): return True
+    return any(_contains_component_value(child, component) for child in node[1:])
+
+def _invokes_function_param(node, function_params):
+    if not isinstance(node, list) or not node or node[0] == "fn": return False
+    if _is_symbol(node[0]) and node[0] in function_params: return True
+    return any(_invokes_function_param(child, function_params) for child in node if isinstance(child, list))
+
+def _tail_depth(node, name):
+    depth = 0
+    while isinstance(node, list) and len(node) == 2 and node[0] == "tail": depth += 1; node = node[1]
+    return depth if depth and node == name else 0
+
+def _descent_relation(argument, caller_param, facts):
+    if caller_param in facts["shadowed"]: return None
+    if argument == caller_param: return "weak"
+    if _tail_depth(argument, caller_param): return "strict" if caller_param in facts["nonempty"] else "weak"
+    if isinstance(argument, list) and len(argument) == 3 and argument[0] == "-" and argument[1] == caller_param and isinstance(argument[2], int) and argument[2] > 0:
+        lower = facts["lower"].get(caller_param)
+        if lower is not None and lower - argument[2] >= INT_MIN: return "strict"
+    return None
+
+def _descent_acyclic(nodes, edges):
+    graph = {name: set() for name in nodes}
+    for source, target in edges: graph[source].add(target)
+    visiting = set(); visited = set()
+    def visit(name):
+        if name in visiting: return False
+        if name in visited: return True
+        visiting.add(name)
+        if not all(visit(target) for target in graph[name]): return False
+        visiting.remove(name); visited.add(name); return True
+    return all(visit(name) for name in nodes)
+
+def _descent_certificate(fns, target):
+    component = _recursive_component(fns, target)
+    if component is None: return False, f"{target}: descent proof requires a recursive named-call component", None
+    for name in component:
+        body = fns[name]["fn"][2:]
+        if any(_contains_component_value(expr, component) for expr in body): return False, f"{target}: recursive component function escapes direct call position", None
+        fn_params = {p[0] for p in fns[name]["params"] if isinstance(p, list) and p and p[0] != "lin"}
+        if any(_invokes_function_param(expr, fn_params) for expr in body): return False, f"{target}: recursive component contains unresolved higher-order dispatch", None
+    candidates = {}
+    for name in component:
+        params = fns[name]["params"]
+        candidates[name] = [(index, p) for index, p in enumerate(params) if _is_symbol(p) and index == max(i for i, item in enumerate(params) if item == p)]
+    for name in component:
+        if not candidates[name]: return False, f"{target}: recursive function {name} has no value parameter to measure", None
+    sites = {}
+    for name in component:
+        sites[name] = []
+        for expr in fns[name]["fn"][2:]: sites[name] += _descent_call_sites(expr, component)
+    names = sorted(component); choices = 1
+    for name in names: choices *= len(candidates[name])
+    if choices > 4096: return False, f"{target}: descent measure search exceeds 4096 assignments", None
+    for selected in product(*(candidates[name] for name in names)):
+        measure = dict(zip(names, selected)); weak_edges = []; valid = True
+        for source in names:
+            _, caller_param = measure[source]
+            for callee, args, facts in sites[source]:
+                target_index, _ = measure[callee]
+                relation = _descent_relation(args[target_index], caller_param, facts) if target_index < len(args) else None
+                if relation is None: valid = False; break
+                if relation == "weak": weak_edges.append((source, callee))
+            if not valid: break
+        if valid and _descent_acyclic(component, weak_edges):
+            certificate = {"component": names, "measure": {name: str(measure[name][1]) for name in names}}
+            return True, "", certificate
+    return False, f"{target}: no well-founded parameter descent covers every recursive cycle", None
 def is_var(e): return _is_symbol(e) and e not in EFFECTS and e[:1].islower()  # lowercase token = effect variable
 def is_fn_expr(e, fns, penv):                                    # does this expression denote a function?
     return (isinstance(e, list) and len(e) > 0 and e[0] == "fn") or (_is_symbol(e) and (e in fns or e in penv))
@@ -1055,6 +1216,12 @@ def _check_program(program):
             _checker_state().policy["confine"].append((top[1], top[2]))
         elif isinstance(top, list) and len(top) >= 2 and top[0] == "seal":   # D22: (seal EFF) -- complete-mediation: refuse a static-only discharge
             _checker_state().policy["seal"].add(top[1])
+    proof_requests = []; proof_errors = []
+    for top in program:
+        if isinstance(top, list) and top and top[0] == "prove":
+            if len(top) != 2 or not isinstance(top[1], list) or len(top[1]) < 2 or top[1][0] != "descent" or not all(_is_symbol(name) for name in top[1][1:]):
+                proof_errors.append("malformed proof directive (expected (prove (descent function...)))")
+            else: proof_requests.extend(top[1][1:])
     fns = {}
     for top in program:
         if isinstance(top, list) and top and top[0] == "defx":
@@ -1078,7 +1245,13 @@ def _check_program(program):
         for n, i in fns.items():
             i["preq"] = _prov_reqs(i["fn"][2:], {pname(p) for p in i["params"]}, fns)
     _obl = {n for n, i in fns.items() if i["preq"]}     # obligation-bearing fns: may ONLY be called directly (else refused)
-    errors = _int_literal_errors(program)
+    errors = _int_literal_errors(program) + proof_errors
+    for target in proof_requests:
+        if target not in fns:
+            errors.append(f"descent proof names unknown function '{target}'"); continue
+        ok, message, certificate = _descent_certificate(fns, target)
+        if not ok: errors.append(message); continue
+        for name in certificate["component"]: fns[name]["descent"] = certificate
     for n, i in fns.items():
         _checker_state().policy["params"] = {pname(p) for p in i["params"]}     # D22: params of THIS fn -> a (trust raw-param) defers to its callers
         for b in i["fn"][2:]: infer(b, fns, errors, i["penv"])   # collect seam/handle/with/lambda/unresolved violations + discharge obligations
@@ -3758,7 +3931,7 @@ def build_about():
     return {
         "schema": "loom-about/v1",
         "language": "LOOM",
-        "citadel_checks": 443,
+        "citadel_checks": 456,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "i31_bits": INT_BITS,
         "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],

@@ -8,6 +8,7 @@ provided explicitly through Frontend, avoiding imports and circular loading.
 from contextvars import ContextVar
 
 from loom_frontend import asm_metadata, asm_validation_error
+from loom_recursion import descent_certificate
 
 
 class Frontend:
@@ -934,6 +935,17 @@ def _check_program(frontend, program):
             state.policy["confine"].append((top[1], top[2]))
         elif isinstance(top, list) and len(top) >= 2 and top[0] == "seal":
             state.policy["seal"].add(top[1])
+    proof_requests = []
+    proof_errors = []
+    for top in program:
+        if isinstance(top, list) and top and top[0] == "prove":
+            if (
+                len(top) != 2 or not isinstance(top[1], list) or len(top[1]) < 2
+                or top[1][0] != "descent" or not all(_is_symbol(name) for name in top[1][1:])
+            ):
+                proof_errors.append("malformed proof directive (expected (prove (descent function...)))")
+            else:
+                proof_requests.extend(top[1][1:])
     fns = {}
     for top in program:
         if isinstance(top, list) and top and top[0] == "defx":
@@ -960,7 +972,17 @@ def _check_program(frontend, program):
         for _, info in fns.items():
             info["preq"] = _prov_reqs(frontend, info["fn"][2:], {frontend.pname(param) for param in info["params"]}, fns)
     obligated = {name for name, info in fns.items() if info["preq"]}
-    errors = frontend.int_literal_errors(program)
+    errors = frontend.int_literal_errors(program) + proof_errors
+    for target in proof_requests:
+        if target not in fns:
+            errors.append(f"descent proof names unknown function '{target}'")
+            continue
+        ok, message, certificate = descent_certificate(fns, target)
+        if not ok:
+            errors.append(message)
+            continue
+        for name in certificate["component"]:
+            fns[name]["descent"] = certificate
     for name, info in fns.items():
         state.policy["params"] = {frontend.pname(param) for param in info["params"]}
         for expr in info["fn"][2:]:

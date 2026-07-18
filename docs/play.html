@@ -132,6 +132,15 @@ const EXAMPLES = [
   (if (< n 1) 1 (* n (fac (- n 1))))))
 
 (defx main () (fn () (depthN 6 (fac 6))))` },
+  { name: "Proof · recursive descent", note: "→ 720 / certified",
+    src: `; This is a proof request, not an annotation the compiler trusts.
+; The checker proves guarded i31 descent before the directive can be accepted.
+
+(prove (descent fac))
+(defx fac () (fn (n)
+  (if (< n 1) 1 (* n (fac (- n 1))))))
+
+(defx main () (fn () (fac 6)))` },
   { name: "WASM · list-sum", note: "→ WAT",
     src: `; Integer LISTS now compile to WebAssembly too — a real heap in
 ; linear memory. Run it (→ 15), or Compile → WAT to see the $cons allocator.
