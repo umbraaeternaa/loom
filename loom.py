@@ -7,6 +7,8 @@
 # a pure fn => networked code becomes provably pure). Plus control flow (if/let), recursion, and first-class
 # functions with ROW-POLYMORPHISM + anonymous LAMBDAS/CLOSURES. A tiny s-expr language + static effect checker
 # + interpreter. Grown nightly by the organism, verified by run_tests.py — the language only ever grows GREEN.
+import hashlib
+import json
 EFFECTS = {"Pure", "IO", "Net", "Alloc", "FFI", "Rand"}   # Rand = nondeterminism (randomness / wall-clock)
 # checker vocab MUST stay == interpreter (ev) vocab — no form the checker knows that the runtime can't run.
 BUILTIN_EFF = {"print": {"IO"}, "net": {"Net"}, "alloc": {"Alloc"}, "rand": {"Rand"}}
@@ -173,6 +175,73 @@ def compile_wasm(program_src):
 
 def verify_wasm_trust_receipt(program_src, wasm_bytes):
     return _loom_wasm.verify_trust_receipt(program_src, wasm_bytes, _WASM_FRONTEND)
+
+
+def _artifact_json(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _artifact_validation(binding, findings):
+    return {
+        "schema": "loom-gate-wasm-artifact-validation/v1",
+        "valid": not findings,
+        "advisory": True,
+        "binding": binding if not findings else None,
+        "findings": findings,
+    }
+
+
+def build_wasm_artifact_binding(manifest, program_src, wasm_bytes):
+    """Build a read-only Gate binding for one exact source/WASM/receipt artifact."""
+    validation = validate_manifest(manifest)
+    if not validation["valid"]:
+        return _artifact_validation(None, list(validation["findings"]))
+    verification = verify_wasm_trust_receipt(program_src, wasm_bytes)
+    if not verification["valid"]:
+        return _artifact_validation(None, [{"path": "wasm", "code": "invalid-trust-receipt", "message": finding} for finding in verification["findings"]])
+    receipt = verification["receipt"]
+    receipt_bytes = _artifact_json(receipt).encode("utf-8")
+    binding = {
+        "schema": "loom-gate-wasm-artifact/v1",
+        "manifest_sha256": validation["manifest_sha256"],
+        "source_sha256": hashlib.sha256(program_src.encode("utf-8")).hexdigest(),
+        "wasm_sha256": hashlib.sha256(bytes(wasm_bytes)).hexdigest(),
+        "trust_receipt_sha256": hashlib.sha256(receipt_bytes).hexdigest(),
+        "wasm_abi_version": receipt["abi_version"],
+    }
+    return _artifact_validation(binding, [])
+
+
+def verify_wasm_artifact_binding(binding, manifest, program_src, wasm_bytes):
+    """Verify an artifact binding against the supplied manifest, source, and WASM bytes."""
+    findings = []
+    validation = validate_manifest(manifest)
+    findings.extend(validation["findings"])
+    expected_keys = {"schema", "manifest_sha256", "source_sha256", "wasm_sha256", "trust_receipt_sha256", "wasm_abi_version"}
+    if not isinstance(binding, dict):
+        findings.append({"path": "binding", "code": "expected-object", "message": "artifact binding must be an object"})
+        return _artifact_validation(None, findings)
+    for key in sorted(set(binding) - expected_keys):
+        findings.append({"path": "binding." + key, "code": "unknown-field", "message": "unknown artifact binding field"})
+    for key in sorted(expected_keys - set(binding)):
+        findings.append({"path": "binding." + key, "code": "missing-field", "message": "missing artifact binding field"})
+    if binding.get("schema") != "loom-gate-wasm-artifact/v1":
+        findings.append({"path": "binding.schema", "code": "unsupported-schema", "message": "expected loom-gate-wasm-artifact/v1"})
+    verification = verify_wasm_trust_receipt(program_src, wasm_bytes)
+    findings.extend({"path": "wasm", "code": "invalid-trust-receipt", "message": finding} for finding in verification["findings"])
+    if not findings:
+        receipt = verification["receipt"]
+        expected = {
+            "schema": "loom-gate-wasm-artifact/v1",
+            "manifest_sha256": validation["manifest_sha256"],
+            "source_sha256": hashlib.sha256(program_src.encode("utf-8")).hexdigest(),
+            "wasm_sha256": hashlib.sha256(bytes(wasm_bytes)).hexdigest(),
+            "trust_receipt_sha256": hashlib.sha256(_artifact_json(receipt).encode("utf-8")).hexdigest(),
+            "wasm_abi_version": receipt["abi_version"],
+        }
+        if binding != expected:
+            findings.append({"path": "binding", "code": "artifact-mismatch", "message": "artifact binding does not match the supplied manifest, source, or WASM"})
+    return _artifact_validation(None if findings else binding, findings)
 
 def emit_wat(program_src):
     return _loom_wasm.emit_wat(program_src, _WASM_FRONTEND)

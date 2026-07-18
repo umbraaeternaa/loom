@@ -108,6 +108,9 @@ WASM modules also carry a deterministic `loom.trust.v1` custom section with the
 checker-visible trust/provenance form inventory and source digest. It is
 inspectable metadata, not a signature, proof certificate, or runtime capability
 grant; the contract is specified in [`docs/wasm_trust_provenance_v1.md`](docs/wasm_trust_provenance_v1.md).
+The separate [`WASM artifact binding v1`](docs/gate_wasm_artifact_v1.md) binds
+the exact source, WASM bytes, trust receipt, and Gate manifest hash without
+replacing operator approval.
 
 Certified recursion can also use [`Proven Value Bounds v1`](docs/proven_value_bounds_v1.md):
 the checker derives conservative i31 and list-length upper bounds through

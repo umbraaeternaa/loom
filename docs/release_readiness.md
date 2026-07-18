@@ -42,8 +42,8 @@ experimental, and what LOOM does not claim yet.
   WebAssembly, and WAT.
 - LOOM Gate advisory contracts: manifest validation, policy decision,
   redacted diagnostics, observation, CI evidence, signed operator approval,
-  claim/plan/attempt/finish lifecycle, secret-lane receipts, and native issuer
-  handoff contracts.
+  claim/plan/attempt/finish lifecycle, secret-lane receipts, native issuer
+  handoff contracts, and read-only WASM artifact binding.
 - Deterministic property fuzz smoke is part of the citadel.
 
 ## Experimental or bounded

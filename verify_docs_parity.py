@@ -22,6 +22,7 @@ RECURRENCE_DOC = ROOT / "docs" / "quantitative_recurrence_summary_v1.md"
 BOUNDS_DOC = ROOT / "docs" / "proven_value_bounds_v1.md"
 CONTEXTUAL_BOUNDS_DOC = ROOT / "docs" / "contextual_value_bounds_v2.md"
 WASM_TRUST_DOC = ROOT / "docs" / "wasm_trust_provenance_v1.md"
+WASM_ARTIFACT_DOC = ROOT / "docs" / "gate_wasm_artifact_v1.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
 
 
@@ -416,6 +417,29 @@ def _check_wasm_trust_doc() -> None:
         raise SystemExit("docs parity: WASM trust/provenance receipt contract drift: missing " + ", ".join(missing))
 
 
+def _check_wasm_artifact_doc() -> None:
+    text = WASM_ARTIFACT_DOC.read_text()
+    words = " ".join(text.split())
+    required = (
+        "LOOM Gate WASM artifact binding v1",
+        "loom.build_wasm_artifact_binding(manifest, source, wasm_bytes)",
+        "loom-gate-wasm-artifact-validation/v1",
+        "loom-gate-wasm-artifact/v1",
+        "manifest_sha256",
+        "source_sha256",
+        "wasm_sha256",
+        "trust_receipt_sha256",
+        "loom.verify_wasm_artifact_binding(binding, manifest, source, wasm_bytes)",
+        "content-addressing, not a signature",
+        "does not execute WASM",
+        "Existing closed Gate manifest v1/v2 schemas are unchanged",
+        "Operator signing remains a separate Gate approval contract",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: WASM artifact binding contract drift: missing " + ", ".join(missing))
+
+
 def _run_injected_citadel() -> int:
     spec = importlib.util.spec_from_file_location("loom", DOCS_LOOM)
     if spec is None or spec.loader is None:
@@ -459,6 +483,7 @@ def main() -> int:
     _check_bounds_doc()
     _check_contextual_bounds_doc()
     _check_wasm_trust_doc()
+    _check_wasm_artifact_doc()
     _check_secret_credential_policy_doc()
     _check_pyodide_import_boundary()
     result = _run_injected_citadel()

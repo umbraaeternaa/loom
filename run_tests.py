@@ -1999,6 +1999,13 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             else: candidate["repositories"][0]["expected_head"] = "not-a-commit"
             invalid_cases.append(_loom.validate_manifest(candidate))
         codes = [{finding["code"] for finding in result["findings"]} for result in invalid_cases]
+        artifact_src = '(defx t () (fn () (trust 1 (prov human 7))))'
+        artifact_wasm = compile_wasm(artifact_src)
+        artifact_result = _loom.build_wasm_artifact_binding(manifest, artifact_src, artifact_wasm)
+        artifact_binding = artifact_result["binding"]
+        tampered_binding = dict(artifact_binding or {})
+        tampered_binding["wasm_sha256"] = "0" * 64
+        tampered_artifact = _loom.verify_wasm_artifact_binding(tampered_binding, manifest, artifact_src, artifact_wasm)
         manifest_contract_ok = (
             valid["valid"] is True
             and valid["advisory"] is True
@@ -2011,6 +2018,14 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "unknown-field" in codes[1]
             and "unsafe-path" in codes[2]
             and "invalid-git-head" in codes[3]
+            and artifact_result["schema"] == "loom-gate-wasm-artifact-validation/v1"
+            and artifact_result["valid"] is True
+            and artifact_binding["manifest_sha256"] == valid["manifest_sha256"]
+            and len(artifact_binding["source_sha256"]) == 64
+            and len(artifact_binding["wasm_sha256"]) == 64
+            and len(artifact_binding["trust_receipt_sha256"]) == 64
+            and tampered_artifact["valid"] is False
+            and any(item["code"] == "artifact-mismatch" for item in tampered_artifact["findings"])
         )
         ok += manifest_contract_ok
         print(f"  {'ok  ' if manifest_contract_ok else 'FAIL'} gate: deterministic fail-closed task manifest v1")
