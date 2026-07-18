@@ -3215,7 +3215,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "489-wasm-trust-provenance-v1")' in play
+            and 'bundleUrl.searchParams.set("v", "489-gate-artifact-workflow-v2")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -3355,8 +3355,11 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             'id="bWorkflow"' in play
             and "Gate workflow" in play
             and "function renderGateWorkflow(workflow)" in play
-            and "loom.build_gate_workflow(_manifest)" in play
-            and "loom-gate-workflow/v1" in play
+            and "loom.build_gate_workflow_v2(_manifest)" in play
+            and "loom-gate-workflow/v2" in play
+            and "artifact lane:" in play
+            and "artifact-evidence" in play
+            and "receipt contract:" in play
             and "Review and plan a bounded LOOM code change" in play
             and "allowed now: operator approval request only" in play
             and "blocked until approval:" in play

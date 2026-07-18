@@ -320,11 +320,18 @@ function renderGateDiagnostics(diagnostics){
   return s;
 }
 function renderGateWorkflow(workflow){
-  let s = "<span class='v-eff'>loom-gate-workflow/v1</span>\n";
+  const workflowSchema = workflow.schema === "loom-gate-workflow/v2" ? "loom-gate-workflow/v2" : (workflow.schema || "loom-gate-workflow/v1");
+  const artifactStepId = "artifact-evidence";
+  let s = "<span class='v-eff'>" + esc(workflowSchema) + "</span>\n";
   s += "decision: <span class='" + (workflow.decision === "reject" ? "v-bad" : "v-ok") + "'>" + esc(workflow.decision) + "</span>\n";
   if (workflow.agent) s += "agent: <span class='v-key'>" + esc(workflow.agent.id + " (" + workflow.agent.role + ")") + "</span>\n";
   if (workflow.task_summary) s += "task: " + esc(workflow.task_summary) + "\n";
   if (workflow.actions && workflow.actions.length) s += "requested actions: " + esc(workflow.actions.join(", ")) + "\n";
+  if (workflow.artifact_evidence) {
+    s += "artifact lane: <span class='v-key'>" + esc(workflow.artifact_evidence.kind) + "</span> · " +
+         (workflow.artifact_evidence.required ? "required" : "optional") + "\n";
+    s += "receipt contract: <span class='v-key'>" + esc(workflow.artifact_evidence.receipt_api) + "</span>\n";
+  }
   const steps = workflow.steps || [];
   const stepIds = steps.map(step => step.id);
   if (!workflow.valid) {
@@ -344,7 +351,7 @@ function renderGateWorkflow(workflow){
   s += "<span class='gate-note'>route only: this panel does not execute shell/network/tools or approve anything</span>\n";
   if (steps.length) {
     s += "steps:\n";
-    for (const step of steps) s += "  " + esc(step.id + ": " + step.description) + "\n";
+    for (const step of steps) s += "  " + esc((step.id === artifactStepId ? artifactStepId : step.id) + ": " + step.description) + "\n";
   }
   return s;
 }
@@ -397,7 +404,7 @@ async function boot(){
     pyodide = await loadPyodide();
     setStatus("loading LOOM…");
     const bundleUrl = new URL("./loom.py", location.href);
-  bundleUrl.searchParams.set("v", "489-wasm-trust-provenance-v1");
+  bundleUrl.searchParams.set("v", "489-gate-artifact-workflow-v2");
     const response = await fetch(bundleUrl, {cache: "no-store"});
     if (!response.ok) throw new Error("LOOM bundle HTTP " + response.status);
     const code = await response.text();
@@ -715,7 +722,7 @@ _manifest = {
     "actions": ["read", "process"],
     "evidence_required": [],
 }
-_r = json.dumps(loom.build_gate_workflow(_manifest))
+_r = json.dumps(loom.build_gate_workflow_v2(_manifest))
 _r
 `);
     show(renderGateWorkflow(workflow));
