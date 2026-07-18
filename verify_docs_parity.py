@@ -20,6 +20,7 @@ METER_FRAME_DOC = ROOT / "docs" / "meter_frame_v1.md"
 CALL_BUDGET_DOC = ROOT / "docs" / "call_budget_frame_v1.md"
 RECURRENCE_DOC = ROOT / "docs" / "quantitative_recurrence_summary_v1.md"
 BOUNDS_DOC = ROOT / "docs" / "proven_value_bounds_v1.md"
+CONTEXTUAL_BOUNDS_DOC = ROOT / "docs" / "contextual_value_bounds_v2.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
 
 
@@ -27,7 +28,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "480-proven-value-bounds-v1")',
+        'bundleUrl.searchParams.set("v", "488-contextual-value-bounds-v2")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -120,8 +121,8 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "480 self-verifying checks",
-        ">480</div>",
+        "488 self-verifying checks",
+        ">488</div>",
     )
     forbidden = (
         "456 self-verifying checks",
@@ -370,6 +371,25 @@ def _check_bounds_doc() -> None:
         raise SystemExit("docs parity: proven value bounds contract drift: missing " + ", ".join(missing))
 
 
+def _check_contextual_bounds_doc() -> None:
+    text = CONTEXTUAL_BOUNDS_DOC.read_text()
+    words = " ".join(text.split())
+    required = (
+        "LOOM Contextual Value Bounds v2",
+        "normative static-checker contract",
+        "direct calls to named functions with value parameters",
+        "callee's value parameters are shadowed and rebound",
+        "callable parameters, closures, or unresolved higher-order dispatch",
+        "effectful, foreign, random, or otherwise unknown arguments",
+        "fixed direct-call depth cap",
+        "remains unbounded",
+        "No source annotation, runtime counter, backend change, public WASM ABI change",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: contextual value bounds contract drift: missing " + ", ".join(missing))
+
+
 def _run_injected_citadel() -> int:
     spec = importlib.util.spec_from_file_location("loom", DOCS_LOOM)
     if spec is None or spec.loader is None:
@@ -411,6 +431,7 @@ def main() -> int:
     _check_call_budget_doc()
     _check_recurrence_doc()
     _check_bounds_doc()
+    _check_contextual_bounds_doc()
     _check_secret_credential_policy_doc()
     _check_pyodide_import_boundary()
     result = _run_injected_citadel()

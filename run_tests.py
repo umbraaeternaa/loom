@@ -12,6 +12,20 @@ import loom as _loom
 from loom_frontend import ASM_INTRINSICS
 from loom import parse, parse_spans, tokenize, tokenize_spans, check, run_call, compile_py, run_compiled, run_js, compile_js, compile_wasm, run_wasm, emit_wat, LoomError, _WASM_ABI_VERSION
 
+def _context_chain_source(depth=65):
+    parts = [
+        '(prove (descent hit))',
+        '(defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1))))))',
+    ]
+    for index in range(depth):
+        target = 'hit' if index == 0 else f'w{index - 1}'
+        parts.append(f'(defx w{index} (Net) (fn (n) ({target} n)))')
+    parts.append(f'(defx f (Net) (fn () (seamN 1023 (Net) (w{depth - 1} 2))))')
+    return ' '.join(parts)
+
+
+_D33_CONTEXT_CHAIN = _context_chain_source()
+
 # (name, source, should_be_accepted)
 CASES = [
     ("pure square",          "(defx square () (fn (x) (* x x)))", True),
@@ -432,7 +446,7 @@ CASES = [
     ("D31 recurrence: with remains fail-closed", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (with Net (fn (u) u) (let (x (net n)) (hit (- n 1))))))) (defx f (Net) (fn () (seamN 2 (Net) (hit 2))))', False),
     # --- grown 2026-07-18: D32 -- PROVEN VALUE BOUNDS v1. The checker derives finite i31/list upper bounds through
     #     lexical lets, wrap-safe pure operations, and branch guards/joins. It adds no trusted annotation and keeps
-    #     possible wraparound, lexical shadowing, effect results, and interprocedural wrapper values fail-closed.
+    #     possible wraparound, lexical shadowing, and effect results fail-closed; named-call wrapper propagation is D33.
     ("D32 bounds: let-bound i31 rank", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx f (Net) (fn () (let (n 2) (seamN 2 (Net) (hit n)))))', True),
     ("D32 bounds: pure arithmetic rank", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx f (Net) (fn () (seamN 2 (Net) (hit (+ 1 1)))))', True),
     ("D32 bounds: branch hull upper rank", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx f (Net) (fn (c) (let (n (if c 2 3)) (seamN 3 (Net) (hit n)))))', True),
@@ -446,7 +460,18 @@ CASES = [
     ("D32 bounds: let shadow drops outer proof", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx f (Net) (fn (x) (let (n 2) (let (n x) (seamN 2 (Net) (hit n))))))', False),
     ("D32 bounds: match binding drops outer proof", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx f (Net) (fn () (let (n 2) (match (variant Some 9) ((Some n) (seamN 2 (Net) (hit n)))))))', False),
     ("D32 bounds: effect result stays unknown", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx f (Net) (fn () (let (n (net 2)) (seamN 2 (Net) (hit n)))))', False),
-    ("D32 bounds: wrapper specialization deferred", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx wrap (Net) (fn (n) (hit n))) (defx f (Net) (fn () (seamN 2 (Net) (wrap 2))))', False),
+    ("D33 contextual bounds: wrapper specialization", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx wrap (Net) (fn (n) (hit n))) (defx f (Net) (fn () (seamN 2 (Net) (wrap 2))))', True),
+    # --- grown 2026-07-18: D33 -- CONTEXTUAL VALUE BOUNDS v2. Direct named value-parameter calls may
+    #     carry a proven caller bound into the callee. Callable params, effects/FFI, recursive contexts,
+    #     and context depth beyond the fixed cap remain fail-closed.
+    ("D33 contextual bounds: literal through named wrapper", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx wrap (Net) (fn (n) (hit n))) (defx f (Net) (fn () (seamN 2 (Net) (wrap 2))))', True),
+    ("D33 contextual bounds: let alias through wrapper", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx wrap (Net) (fn (n) (let (m n) (hit m)))) (defx f (Net) (fn () (seamN 2 (Net) (wrap 2))))', True),
+    ("D33 contextual bounds: arithmetic through wrapper", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx wrap (Net) (fn (n) (hit (+ n 1)))) (defx f (Net) (fn () (seamN 3 (Net) (wrap 2))))', True),
+    ("D33 contextual bounds: interval through named call", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx wrap (Net) (fn (n) (hit n))) (defx f (Net) (fn (c) (let (n (if c 2 3)) (seamN 3 (Net) (wrap n)))))', True),
+    ("D33 contextual bounds: wrapper chain", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx w1 (Net) (fn (n) (hit n))) (defx w2 (Net) (fn (n) (w1 n))) (defx f (Net) (fn () (seamN 2 (Net) (w2 2))))', True),
+    ("D33 contextual bounds: effectful argument unknown", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx wrap (Net) (fn (n) (hit n))) (defx f (Net) (fn () (seamN 2 (Net) (wrap (net 2)))))', False),
+    ("D33 contextual bounds: HOF remains unknown", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx ap (e) (fn ((g e) n) (g n))) (defx f (Net) (fn () (seamN 2 (Net) (ap (fn (n) (hit n)) 2))))', False),
+    ("D33 contextual bounds: context cap fails closed", _D33_CONTEXT_CHAIN, False),
     # --- grown 2026-06-26 (pass 3): D27 — GRADED foreign trust via component-bound ATTESTATION. D26 strips ALL foreign
     #     output to ai (binary). A seam clause (vouch ROLE WHO COMP) lets a NON-AI authority WHO sign a SPECIFIC foreign
     #     component COMP, so (ffi COMP ..) directly in that seam body carries WHO's anchor instead of the strip — making
@@ -2831,7 +2856,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 480
+            and about_json["citadel_checks"] == 488
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
@@ -2988,7 +3013,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 480/480 citadel checks" in quick
+            and "PASS -- 488/488 citadel checks" in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
             and "loom examples" in quick
@@ -3086,7 +3111,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "480-proven-value-bounds-v1")' in play
+            and 'bundleUrl.searchParams.set("v", "488-contextual-value-bounds-v2")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -3688,7 +3713,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 480/480 citadel checks" in rdoc
+            and "PASS -- 488/488 citadel checks" in rdoc
             and "loom examples --format json" in rdoc
             and "loom doctor --dry-run --format json" in rdoc
             and "python3 verify_docs_parity.py" in rdoc

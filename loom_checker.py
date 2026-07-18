@@ -210,6 +210,7 @@ def _ucount(frontend, node, fns, penv):
 
 
 _NCAP = 1024
+_CONTEXT_CAP = 64  # bounded direct-call specialization; unresolved depth stays fail-closed
 
 
 def _nadd(a, b):
@@ -232,7 +233,7 @@ def _callable_ncount(frontend, value, fns, penv, cenv, active, venv=None):
         if value in cenv:
             return dict(cenv[value])
         if value in fns:
-            return _function_ncount(frontend, value, fns, {}, active)
+            return _function_ncount(frontend, value, fns, {}, active, {})
         if value in penv:
             return {eff: _NCAP for eff in penv[value] if not frontend.is_var(eff)}
         return {}
@@ -251,9 +252,26 @@ def _callable_ncount(frontend, value, fns, penv, cenv, active, venv=None):
     return {}
 
 
-def _function_ncount(frontend, name, fns, bound_cenv, active):
+def _call_venv(frontend, info, args, venv):
+    """Bind proven value arguments while shadowing every callee parameter."""
+    venv = venv or {}
+    local = loom_bounds.shadow(venv, {frontend.pname(param) for param in info["params"]})
+    for index, param in enumerate(info["params"]):
+        if frontend.platent(param) is None and index < len(args):
+            name = frontend.pname(param)
+            local = loom_bounds.bind(
+                local,
+                name,
+                loom_bounds.value(
+                    args[index], venv, frontend.int_min, frontend.int_max, frontend.i31,
+                ),
+            )
+    return local
+
+
+def _function_ncount(frontend, name, fns, bound_cenv, active, venv=None):
     info = fns[name]
-    if name in active:
+    if name in active or len(active) >= _CONTEXT_CAP:
         potential = set(info.get("eff", set()))
         for expr in info["fn"][2:]:
             potential |= _recursive_meter_effects(frontend, expr, fns, {name})
@@ -261,7 +279,7 @@ def _function_ncount(frontend, name, fns, bound_cenv, active):
     summary = {}
     next_active = active | {name}
     for expr in info["fn"][2:]:
-        _nmerge(frontend, summary, _ncount(frontend, expr, fns, info["penv"], bound_cenv, next_active, {}))
+        _nmerge(frontend, summary, _ncount(frontend, expr, fns, info["penv"], bound_cenv, next_active, venv or {}))
     return summary
 
 
@@ -424,9 +442,10 @@ def _ncount(frontend, node, fns, penv, cenv=None, active=None, venv=None):
             if frontend.platent(param) is not None and index + 1 < len(node):
                 bound_cenv[frontend.pname(param)] = _callable_ncount(frontend, node[index + 1], fns, penv, cenv, active, venv)
         recurrence = _recurrence_ncount(frontend, head, node[1:], fns, active, venv)
+        call_venv = _call_venv(frontend, fns[head], node[1:], venv)
         add(
             recurrence if recurrence is not None
-            else _function_ncount(frontend, head, fns, bound_cenv, active)
+            else _function_ncount(frontend, head, fns, bound_cenv, active, call_venv)
         )
     elif head in cenv:
         add(cenv[head])

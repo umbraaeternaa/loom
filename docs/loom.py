@@ -806,6 +806,7 @@ def _ucount(node, fns, penv):
 
 
 _NCAP = 1024                                                         # D27 meter ceiling: counts saturate here (>> any lawful quantum); recursion/overflow reach it
+_CONTEXT_CAP = 64                                                     # bounded direct-call specialization; unresolved depth stays fail-closed
 def _nadd(a, b): return min(a + b, _NCAP)
 def _nmul(a, b): return min(a * b, _NCAP)
 def _nmerge(target, counts):
@@ -815,7 +816,7 @@ def _callable_ncount(value, fns, penv, cenv, active, venv=None):
     venv = venv or {}
     if _is_symbol(value):
         if value in cenv: return dict(cenv[value])
-        if value in fns: return _function_ncount(value, fns, {}, active)
+        if value in fns: return _function_ncount(value, fns, {}, active, {})
         if value in penv: return {e: _NCAP for e in penv[value] if not is_var(e)}
         return {}
     if isinstance(value, list) and value and value[0] == 'fn':
@@ -824,14 +825,24 @@ def _callable_ncount(value, fns, penv, cenv, active, venv=None):
         for x in value[2:]: _nmerge(summary, _ncount(x, fns, lp, cenv, active, lv))
         return summary
     return {}
-def _function_ncount(name, fns, bound_cenv, active):
+def _call_venv(info, args, venv):
+    """Bind proven value arguments while shadowing every callee parameter."""
+    venv = venv or {}
+    local = _bound_shadow(venv, {pname(param) for param in info['params']})
+    for index, param in enumerate(info['params']):
+        if platent(param) is None and index < len(args):
+            name = pname(param)
+            local = _bound_bind(local, name, _bound_value(args[index], venv))
+    return local
+
+def _function_ncount(name, fns, bound_cenv, active, venv=None):
     info = fns[name]
-    if name in active:
+    if name in active or len(active) >= _CONTEXT_CAP:
         potential = set(info.get('eff', set()))
         for x in info['fn'][2:]: potential |= _recursive_meter_effects(x, fns, {name})
         return {e: _NCAP for e in potential if e in EFFECTS}
     summary = {}
-    for x in info['fn'][2:]: _nmerge(summary, _ncount(x, fns, info['penv'], bound_cenv, active | {name}, {}))
+    for x in info['fn'][2:]: _nmerge(summary, _ncount(x, fns, info['penv'], bound_cenv, active | {name}, venv or {}))
     return summary
 def _recursive_meter_effects(node, fns, seen):
     if not isinstance(node, list) or not node: return set()
@@ -921,7 +932,8 @@ def _ncount(node, fns, penv, cenv=None, active=None, venv=None):
         for i, p in enumerate(fns[h]['params']):
             if platent(p) is not None and i + 1 < len(node): bc[pname(p)] = _callable_ncount(node[i + 1], fns, penv, cenv, active, venv)
         recurrence = _recurrence_ncount(h, node[1:], fns, active, venv)
-        add(recurrence if recurrence is not None else _function_ncount(h, fns, bc, active))
+        call_venv = _call_venv(fns[h], node[1:], venv)
+        add(recurrence if recurrence is not None else _function_ncount(h, fns, bc, active, call_venv))
     elif h in cenv: add(cenv[h])
     elif penv and h in penv:
         for e in penv[h]:
@@ -4240,7 +4252,7 @@ def build_about():
     return {
         "schema": "loom-about/v1",
         "language": "LOOM",
-        "citadel_checks": 480,
+        "citadel_checks": 488,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "i31_bits": INT_BITS,
         "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],

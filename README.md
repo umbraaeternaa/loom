@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 480 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 488 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 480/480 citadel checks
+PASS — 488/488 citadel checks
 ```
 
 ## The idea in one screen
@@ -108,6 +108,10 @@ Certified recursion can also use [`Proven Value Bounds v1`](docs/proven_value_bo
 the checker derives conservative i31 and list-length upper bounds through
 lexical `let`, safe pure expressions, and guarded paths. Unknown values and
 possible wraparound remain fail-closed.
+
+Direct named wrappers can carry those proofs across value parameters under the
+bounded [`Contextual Value Bounds v2`](docs/contextual_value_bounds_v2.md)
+contract; higher-order and effectful arguments remain fail-closed.
 
 - [`loom.py`](loom.py) — parser, effect checker, interpreter, and stable backend facade.
   Module-boundary policy is pinned in [`docs/module_boundaries.md`](docs/module_boundaries.md).
