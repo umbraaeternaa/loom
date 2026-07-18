@@ -2124,6 +2124,25 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         rejected_cross_surface = _loom.build_wasm_compiler_evidence(manifest, artifact_src, artifact_wasm, other_components)
         rejected_compiler_source = _loom.build_wasm_compiler_evidence(manifest, artifact_src.replace("human 7", "human 8"), artifact_wasm, compiler_components)
         rejected_compiler_wasm = _loom.build_wasm_compiler_evidence(manifest, artifact_src, tampered_body_wasm, compiler_components)
+        compiler_receipt_result = _loom.build_wasm_compiler_receipt(
+            manifest, artifact_observation, artifact_src, artifact_wasm, compiler_components
+        )
+        compiler_receipt = compiler_receipt_result["receipt"]
+        verified_compiler_receipt = _loom.verify_wasm_compiler_receipt(
+            compiler_receipt, manifest, artifact_observation, artifact_src, artifact_wasm, compiler_components
+        )
+        tampered_compiler_receipt = json.loads(json.dumps(compiler_receipt))
+        tampered_compiler_receipt["compiler_evidence"]["profile_sha256"] = "0" * 64
+        tampered_compiler_receipt["receipt_sha256"] = hashlib.sha256(_loom._artifact_json({
+            key: value for key, value in tampered_compiler_receipt.items() if key != "receipt_sha256"
+        }).encode("utf-8")).hexdigest()
+        rejected_compiler_receipt = _loom.verify_wasm_compiler_receipt(
+            tampered_compiler_receipt, manifest, artifact_observation, artifact_src, artifact_wasm, compiler_components
+        )
+        rejected_changed_component_receipt = _loom.verify_wasm_compiler_receipt(
+            compiler_receipt, manifest, artifact_observation, artifact_src, artifact_wasm, changed_components
+        )
+        compiler_workflow = _loom.build_gate_workflow_v3(manifest)
         manifest_contract_ok = (
             valid["valid"] is True
             and valid["advisory"] is True
@@ -2202,6 +2221,28 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and rejected_compiler_source["valid"] is False
             and rejected_compiler_wasm["valid"] is False
             and any(item["code"] == "wasm-source-mismatch" for item in rejected_compiler_wasm["findings"])
+            and compiler_receipt_result["schema"] == "loom-gate-receipt-v3-validation/v1"
+            and compiler_receipt_result["valid"] is True
+            and compiler_receipt["schema"] == "loom-gate-receipt/v3"
+            and compiler_receipt["artifact_evidence"] == artifact_evidence
+            and compiler_receipt["compiler_evidence"] == compiler_evidence
+            and compiler_receipt["compiler_evidence"]["artifact_binding"] == compiler_receipt["artifact_evidence"]["binding"]
+            and compiler_receipt["compiler_evidence"]["artifact_binding_sha256"] == compiler_receipt["artifact_evidence"]["binding_sha256"]
+            and len(compiler_receipt["receipt_sha256"]) == 64
+            and verified_compiler_receipt["valid"] is True
+            and rejected_compiler_receipt["valid"] is False
+            and any(item["code"] == "receipt-mismatch" for item in rejected_compiler_receipt["findings"])
+            and rejected_changed_component_receipt["valid"] is False
+            and any(item["code"] == "receipt-mismatch" for item in rejected_changed_component_receipt["findings"])
+            and compiler_workflow["schema"] == "loom-gate-workflow/v3"
+            and compiler_workflow["compiler_evidence"]["required"] is True
+            and compiler_workflow["compiler_evidence"]["surface"] == running_surface
+            and compiler_workflow["compiler_evidence"]["component_input"] == "trusted-host-exact-bytes"
+            and compiler_workflow["compiler_evidence"]["receipt_api"] == "build_wasm_compiler_receipt"
+            and [step["id"] for step in compiler_workflow["steps"]][-4:] == [
+                "artifact-evidence", "compiler-evidence", "compiler-receipt", "finish"
+            ]
+            and compiler_workflow["steps"][-4]["command"] == "loom.build_wasm_artifact_evidence(manifest, source, wasm_bytes)"
         )
         ok += manifest_contract_ok
         print(f"  {'ok  ' if manifest_contract_ok else 'FAIL'} gate: deterministic fail-closed task manifest v1")

@@ -4416,6 +4416,63 @@ def verify_wasm_artifact_receipt(receipt, manifest, observation, program_src, wa
     return _wasm_receipt_v2_validation(receipt, [])
 
 
+def _wasm_receipt_v3_validation(receipt, findings):
+    return {
+        "schema": "loom-gate-receipt-v3-validation/v1",
+        "valid": not findings,
+        "advisory": True,
+        "receipt": receipt if not findings else None,
+        "findings": findings,
+    }
+
+
+def build_wasm_compiler_receipt(manifest, observation, program_src, wasm_bytes, components):
+    """Build receipt v3 with one exact artifact and compiler-evidence identity."""
+    artifact_receipt = build_wasm_artifact_receipt(manifest, observation, program_src, wasm_bytes)
+    compiler = build_wasm_compiler_evidence(manifest, program_src, wasm_bytes, components)
+    findings = list(artifact_receipt["findings"])
+    if not compiler["valid"]:
+        findings.extend(_compiler_evidence_findings("compiler_evidence", compiler["findings"]))
+    if findings:
+        return _wasm_receipt_v3_validation(None, findings)
+    body = dict(artifact_receipt["receipt"])
+    artifact_evidence = body["artifact_evidence"]
+    compiler_evidence = compiler["evidence"]
+    if compiler_evidence["artifact_binding"] != artifact_evidence["binding"]:
+        findings.append({
+            "path": "compiler_evidence.artifact_binding",
+            "code": "compiler-artifact-binding-mismatch",
+            "message": "compiler and receipt evidence must bind the same exact artifact",
+        })
+    if compiler_evidence["artifact_binding_sha256"] != artifact_evidence["binding_sha256"]:
+        findings.append({
+            "path": "compiler_evidence.artifact_binding_sha256",
+            "code": "compiler-artifact-hash-mismatch",
+            "message": "compiler and receipt evidence must use the same artifact binding hash",
+        })
+    if findings:
+        return _wasm_receipt_v3_validation(None, findings)
+    body.pop("receipt_sha256", None)
+    body["schema"] = "loom-gate-receipt/v3"
+    body["compiler_evidence"] = compiler_evidence
+    body["receipt_sha256"] = hashlib.sha256(_artifact_json(body).encode("utf-8")).hexdigest()
+    return _wasm_receipt_v3_validation(body, [])
+
+
+def verify_wasm_compiler_receipt(receipt, manifest, observation, program_src, wasm_bytes, components):
+    """Verify receipt v3 against all exact observation, artifact, and compiler inputs."""
+    expected = build_wasm_compiler_receipt(manifest, observation, program_src, wasm_bytes, components)
+    if not expected["valid"]:
+        return expected
+    if receipt != expected["receipt"]:
+        return _wasm_receipt_v3_validation(None, [{
+            "path": "receipt",
+            "code": "receipt-mismatch",
+            "message": "WASM compiler receipt does not match the exact Gate and compiler inputs",
+        }])
+    return _wasm_receipt_v3_validation(receipt, [])
+
+
 def _gate_collection_result(observation, findings):
     return {"schema": GATE_COLLECTION_SCHEMA, "valid": not findings, "advisory": True, "read_only": True, "observation": observation if not findings else None, "findings": _gate_unique(findings)}
 
@@ -5155,6 +5212,48 @@ def build_gate_workflow_v2(manifest):
         else:
             finish_index = next((index for index, step in enumerate(workflow["steps"]) if step["id"] == "finish"), len(workflow["steps"]))
             workflow["steps"].insert(finish_index, artifact_step)
+    return workflow
+
+
+def build_gate_workflow_v3(manifest):
+    """Return the Gate route with compiler identity bound into receipt v3."""
+    workflow = build_gate_workflow_v2(manifest)
+    workflow["schema"] = "loom-gate-workflow/v3"
+    workflow["compiler_evidence"] = {
+        "schema": "loom-gate-wasm-compiler-evidence/v1",
+        "kind": "wasm-compiler",
+        "required": True,
+        "surface": _GATE_COMPILER_SURFACE,
+        "component_input": "trusted-host-exact-bytes",
+        "receipt_api": "build_wasm_compiler_receipt",
+    }
+    if workflow["valid"] and workflow["decision"] not in {"reject"}:
+        artifact_index = next(
+            (index for index, step in enumerate(workflow["steps"]) if step["id"] == "artifact-evidence"),
+            len(workflow["steps"]),
+        )
+        if artifact_index < len(workflow["steps"]):
+            workflow["steps"][artifact_index] = {
+                "id": "artifact-evidence",
+                "kind": "trusted-host",
+                "description": "Verify exact source, trust receipts, and WASM bytes before compiler attribution.",
+                "command": "loom.build_wasm_artifact_evidence(manifest, source, wasm_bytes)",
+            }
+        compiler_steps = [
+            {
+                "id": "compiler-evidence",
+                "kind": "trusted-host",
+                "description": "Bind the running compiler's closed exact-byte surface to the verified artifact.",
+                "command": "loom.build_wasm_compiler_evidence(manifest, source, wasm_bytes, components)",
+            },
+            {
+                "id": "compiler-receipt",
+                "kind": "trusted-host",
+                "description": "Build receipt v3 from the observation, artifact evidence, and compiler evidence.",
+                "command": "loom.build_wasm_compiler_receipt(manifest, observation, source, wasm_bytes, components)",
+            },
+        ]
+        workflow["steps"][artifact_index + 1:artifact_index + 1] = compiler_steps
     return workflow
 
 

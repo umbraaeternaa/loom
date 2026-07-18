@@ -75,6 +75,8 @@ the reverse.
   prove Python loader provenance.
 - Evidence is not a signature, publisher identity, or operator approval.
 - It grants no capability and does not infer identity from a Git revision.
-- Receipt v3, workflow v3, and Playground integration are not part of v1.
+- Receipt v3 and Workflow v3 compose this unchanged evidence through the
+  separate `gate_compiler_receipt_v3.md` contract; Playground issuance is not
+  part of Compiler Evidence v1.
 - Existing Gate manifest, observation, artifact, receipt, workflow, approval,
   and WASM ABI schemas are unchanged.

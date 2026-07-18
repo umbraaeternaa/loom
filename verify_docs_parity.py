@@ -26,6 +26,7 @@ WASM_TRUST_V2_DOC = ROOT / "docs" / "wasm_trust_provenance_v2.md"
 WASM_EQUIVALENCE_DOC = ROOT / "docs" / "wasm_source_equivalence_v1.md"
 COMPILER_PROVENANCE_DOC = ROOT / "docs" / "compiler_provenance_v1.md"
 COMPILER_EVIDENCE_DOC = ROOT / "docs" / "gate_compiler_evidence_v1.md"
+COMPILER_RECEIPT_DOC = ROOT / "docs" / "gate_compiler_receipt_v3.md"
 WASM_ARTIFACT_DOC = ROOT / "docs" / "gate_wasm_artifact_v1.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
 
@@ -515,12 +516,38 @@ def _check_compiler_evidence_doc() -> None:
         "standalone verifier can issue only `standalone-python` evidence",
         "does not execute the supplied WASM",
         "not a signature, publisher identity, or operator approval",
-        "Receipt v3, workflow v3, and Playground integration are not part of v1",
+        "Receipt v3 and Workflow v3 compose this unchanged evidence",
+        "Playground issuance is not part of Compiler Evidence v1",
         "Existing Gate manifest, observation, artifact, receipt, workflow, approval, and WASM ABI schemas are unchanged",
     )
     missing = [needle for needle in required if needle not in words]
     if missing:
         raise SystemExit("docs parity: compiler evidence contract drift: missing " + ", ".join(missing))
+
+
+def _check_compiler_receipt_doc() -> None:
+    text = COMPILER_RECEIPT_DOC.read_text()
+    words = " ".join(text.split())
+    required = (
+        "LOOM Gate WASM Compiler Receipt v3",
+        "normative, deterministic, advisory, and non-authorizing composition contract",
+        "loom.build_wasm_compiler_receipt(manifest, observation, source, wasm_bytes, components)",
+        "loom.verify_wasm_compiler_receipt(receipt, manifest, observation, source, wasm_bytes, components)",
+        "loom.build_gate_workflow_v3(manifest)",
+        "loom-gate-receipt-v3-validation/v1",
+        "loom-gate-receipt/v3",
+        "compiler_evidence",
+        "compiler_evidence.artifact_binding == artifact_evidence.binding",
+        "compiler_evidence.artifact_binding_sha256 == artifact_evidence.binding_sha256",
+        "artifact-evidence -> compiler-evidence -> compiler-receipt",
+        "does not collect component bytes",
+        "not a signature or publisher identity",
+        "Existing manifest v1/v2, observation v1, receipt v1/v2, workflow v1/v2",
+        "Playground issuance and a signed in-toto/SLSA envelope are outside this contract",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: compiler receipt v3 contract drift: missing " + ", ".join(missing))
 
 
 def _check_compiler_evidence_surface_parity() -> None:
@@ -551,6 +578,22 @@ def _check_compiler_evidence_surface_parity() -> None:
         raise SystemExit("docs parity: compiler evidence surface failed to build")
     modular_evidence = modular_result["evidence"]
     standalone_evidence = standalone_result["evidence"]
+    observation = {
+        "schema": "loom-gate-observation/v1",
+        "result": "completed",
+        "repositories": [],
+        "files_changed": [],
+        "actions_observed": ["read", "audit"],
+        "evidence": [{"kind": "audit", "status": "pass", "detail": "compiler receipt parity"}],
+    }
+    modular_receipt_result = modular.build_wasm_compiler_receipt(
+        manifest, observation, source, wasm, modular_components
+    )
+    standalone_receipt_result = standalone.build_wasm_compiler_receipt(
+        manifest, observation, source, wasm, standalone_components
+    )
+    modular_workflow = modular.build_gate_workflow_v3(manifest)
+    standalone_workflow = standalone.build_gate_workflow_v3(manifest)
     contract = (
         modular_evidence["surface"] == "modular-python"
         and standalone_evidence["surface"] == "standalone-python"
@@ -560,6 +603,23 @@ def _check_compiler_evidence_surface_parity() -> None:
         and modular_evidence["evidence_sha256"] != standalone_evidence["evidence_sha256"]
         and not modular.build_wasm_compiler_evidence(manifest, source, wasm, standalone_components)["valid"]
         and not standalone.build_wasm_compiler_evidence(manifest, source, wasm, modular_components)["valid"]
+        and modular_receipt_result["valid"]
+        and standalone_receipt_result["valid"]
+        and modular_receipt_result["receipt"]["schema"] == "loom-gate-receipt/v3"
+        and standalone_receipt_result["receipt"]["schema"] == "loom-gate-receipt/v3"
+        and modular_receipt_result["receipt"]["artifact_evidence"] == standalone_receipt_result["receipt"]["artifact_evidence"]
+        and modular_receipt_result["receipt"]["compiler_evidence"] == modular_evidence
+        and standalone_receipt_result["receipt"]["compiler_evidence"] == standalone_evidence
+        and modular_receipt_result["receipt"]["receipt_sha256"] != standalone_receipt_result["receipt"]["receipt_sha256"]
+        and modular.verify_wasm_compiler_receipt(
+            modular_receipt_result["receipt"], manifest, observation, source, wasm, modular_components
+        )["valid"]
+        and standalone.verify_wasm_compiler_receipt(
+            standalone_receipt_result["receipt"], manifest, observation, source, wasm, standalone_components
+        )["valid"]
+        and modular_workflow["schema"] == standalone_workflow["schema"] == "loom-gate-workflow/v3"
+        and modular_workflow["compiler_evidence"]["surface"] == "modular-python"
+        and standalone_workflow["compiler_evidence"]["surface"] == "standalone-python"
     )
     if not contract:
         raise SystemExit("docs parity: compiler evidence surface identity drift")
@@ -644,6 +704,7 @@ def main() -> int:
     _check_wasm_equivalence_doc()
     _check_compiler_provenance_doc()
     _check_compiler_evidence_doc()
+    _check_compiler_receipt_doc()
     _check_compiler_evidence_surface_parity()
     _check_wasm_artifact_doc()
     _check_secret_credential_policy_doc()
