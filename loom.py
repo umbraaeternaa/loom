@@ -169,6 +169,7 @@ import loom_wasm as _loom_wasm
 import loom_provenance as _loom_provenance
 
 _WASM_ABI_VERSION = _loom_wasm.WASM_ABI_VERSION
+_GATE_COMPILER_SURFACE = "modular-python"
 _WASM_FRONTEND = _loom_wasm.Frontend(parse, parse_spans, check, pname, LoomError, OP, _check_call_literals, platent, _roleclauses)
 
 def compile_wasm(program_src):
@@ -307,6 +308,105 @@ def verify_wasm_artifact_evidence(evidence, manifest, program_src, wasm_bytes):
             "message": "artifact evidence does not match the supplied manifest, source, or WASM",
         }])
     return _artifact_evidence_validation(evidence, [])
+
+
+def _compiler_evidence_validation(evidence, findings):
+    return {
+        "schema": "loom-gate-wasm-compiler-evidence-validation/v1",
+        "valid": not findings,
+        "advisory": True,
+        "evidence": evidence if not findings else None,
+        "findings": findings,
+    }
+
+
+def _compiler_evidence_findings(prefix, findings):
+    return [
+        {
+            "path": prefix + ("." + item["path"] if item.get("path") else ""),
+            "code": item["code"],
+            "message": item["message"],
+        }
+        for item in findings
+    ]
+
+
+def build_wasm_compiler_evidence(manifest, program_src, wasm_bytes, components):
+    """Bind this verifier's exact compiler surface to one verified WASM artifact."""
+    profile_result = build_wasm_compiler_profile(_GATE_COMPILER_SURFACE, components)
+    if not profile_result["valid"]:
+        return _compiler_evidence_validation(None, _compiler_evidence_findings("compiler_profile", profile_result["findings"]))
+    artifact_result = build_wasm_artifact_binding(manifest, program_src, wasm_bytes)
+    if not artifact_result["valid"]:
+        return _compiler_evidence_validation(None, _compiler_evidence_findings("artifact", artifact_result["findings"]))
+    equivalence = verify_wasm_source_equivalence(program_src, wasm_bytes)
+    if not equivalence["valid"]:
+        findings = [
+            {"path": "source_equivalence", "code": "wasm-source-mismatch", "message": message}
+            for message in equivalence["findings"]
+        ]
+        return _compiler_evidence_validation(None, findings)
+    profile = profile_result["profile"]
+    binding = artifact_result["binding"]
+    if profile["wasm_abi_version"] != binding["wasm_abi_version"]:
+        return _compiler_evidence_validation(None, [{
+            "path": "wasm_abi_version",
+            "code": "compiler-artifact-abi-mismatch",
+            "message": "compiler profile and artifact binding use different WASM ABI versions",
+        }])
+    evidence = {
+        "schema": "loom-gate-wasm-compiler-evidence/v1",
+        "kind": "wasm-compiler",
+        "status": "pass",
+        "surface": _GATE_COMPILER_SURFACE,
+        "compiler_profile": profile,
+        "profile_sha256": profile["profile_sha256"],
+        "artifact_binding": binding,
+        "artifact_binding_sha256": hashlib.sha256(_artifact_json(binding).encode("utf-8")).hexdigest(),
+        "source_equivalence": equivalence,
+    }
+    evidence["evidence_sha256"] = hashlib.sha256(_artifact_json(evidence).encode("utf-8")).hexdigest()
+    return _compiler_evidence_validation(evidence, [])
+
+
+def verify_wasm_compiler_evidence(evidence, manifest, program_src, wasm_bytes, components):
+    """Rebuild Compiler Evidence v1 from exact host inputs and compare it closed."""
+    expected = build_wasm_compiler_evidence(manifest, program_src, wasm_bytes, components)
+    if not expected["valid"]:
+        return expected
+    findings = []
+    expected_keys = {
+        "schema", "kind", "status", "surface", "compiler_profile", "profile_sha256",
+        "artifact_binding", "artifact_binding_sha256", "source_equivalence", "evidence_sha256",
+    }
+    if not isinstance(evidence, dict):
+        return _compiler_evidence_validation(None, [{
+            "path": "evidence", "code": "expected-object", "message": "compiler evidence must be an object",
+        }])
+    for key in sorted(set(evidence) - expected_keys, key=str):
+        findings.append({"path": "evidence." + str(key), "code": "unknown-field", "message": "unknown compiler evidence field"})
+    for key in sorted(expected_keys - set(evidence)):
+        findings.append({"path": "evidence." + key, "code": "missing-field", "message": "missing compiler evidence field"})
+    if evidence.get("schema") != "loom-gate-wasm-compiler-evidence/v1":
+        findings.append({"path": "evidence.schema", "code": "unsupported-schema", "message": "expected loom-gate-wasm-compiler-evidence/v1"})
+    if evidence.get("kind") != "wasm-compiler":
+        findings.append({"path": "evidence.kind", "code": "unsupported-kind", "message": "expected wasm-compiler"})
+    if evidence.get("status") != "pass":
+        findings.append({"path": "evidence.status", "code": "unsupported-status", "message": "expected pass"})
+    if evidence.get("surface") != _GATE_COMPILER_SURFACE:
+        findings.append({"path": "evidence.surface", "code": "compiler-surface-mismatch", "message": "evidence surface does not match the running compiler implementation"})
+    if set(evidence) >= expected_keys:
+        body = {key: evidence[key] for key in expected_keys if key != "evidence_sha256"}
+        try:
+            digest = hashlib.sha256(_artifact_json(body).encode("utf-8")).hexdigest()
+        except (TypeError, ValueError):
+            findings.append({"path": "evidence", "code": "non-canonical-evidence", "message": "compiler evidence fields must be canonical JSON values"})
+        else:
+            if evidence.get("evidence_sha256") != digest:
+                findings.append({"path": "evidence.evidence_sha256", "code": "evidence-hash-mismatch", "message": "compiler evidence hash does not match its canonical fields"})
+    if evidence != expected["evidence"]:
+        findings.append({"path": "evidence", "code": "compiler-evidence-mismatch", "message": "compiler evidence does not match the exact compiler, manifest, source, or WASM inputs"})
+    return _compiler_evidence_validation(evidence if not findings else None, findings)
 
 def emit_wat(program_src):
     return _loom_wasm.emit_wat(program_src, _WASM_FRONTEND)

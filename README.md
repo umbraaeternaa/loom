@@ -119,6 +119,9 @@ supplied module, so valid receipts cannot conceal a changed function body.
 [`Compiler Profile v1`](docs/compiler_provenance_v1.md) separately fingerprints
 the exact modular or standalone compiler bytes supplied by a trusted host; it
 does not self-attest or replace operator approval.
+[`Gate Compiler Evidence v1`](docs/gate_compiler_evidence_v1.md) binds the
+running verifier's fixed compiler surface to the exact artifact binding and
+Source Equivalence result without changing Gate receipt or workflow schemas.
 
 Certified recursion can also use [`Proven Value Bounds v1`](docs/proven_value_bounds_v1.md):
 the checker derives conservative i31 and list-length upper bounds through

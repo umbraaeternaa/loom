@@ -2094,6 +2094,36 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         tampered_receipt["artifact_evidence"]["binding"]["wasm_sha256"] = "0" * 64
         tampered_receipt_result = _loom.verify_wasm_artifact_receipt(tampered_receipt, manifest, artifact_observation, artifact_src, artifact_wasm)
         artifact_workflow = _loom.build_gate_workflow_v2(manifest)
+        loom_root = Path(__file__).resolve().parent
+        running_surface = "standalone-python" if Path(_loom.__file__).resolve() == loom_root.joinpath("docs", "loom.py") else "modular-python"
+        other_surface = "modular-python" if running_surface == "standalone-python" else "standalone-python"
+        compiler_components = _loom_provenance.collect_compiler_components(loom_root, running_surface)
+        other_components = _loom_provenance.collect_compiler_components(loom_root, other_surface)
+        compiler_evidence_result = _loom.build_wasm_compiler_evidence(manifest, artifact_src, artifact_wasm, compiler_components)
+        compiler_evidence = compiler_evidence_result["evidence"]
+        verified_compiler_evidence = _loom.verify_wasm_compiler_evidence(compiler_evidence, manifest, artifact_src, artifact_wasm, compiler_components)
+        tampered_compiler_evidence = json.loads(json.dumps(compiler_evidence))
+        tampered_compiler_evidence["profile_sha256"] = "0" * 64
+        rejected_compiler_evidence = _loom.verify_wasm_compiler_evidence(tampered_compiler_evidence, manifest, artifact_src, artifact_wasm, compiler_components)
+        tampered_compiler_surface = json.loads(json.dumps(compiler_evidence))
+        tampered_compiler_surface["surface"] = other_surface
+        tampered_compiler_surface["evidence_sha256"] = hashlib.sha256(_loom._artifact_json({
+            key: value for key, value in tampered_compiler_surface.items() if key != "evidence_sha256"
+        }).encode("utf-8")).hexdigest()
+        rejected_compiler_surface = _loom.verify_wasm_compiler_evidence(tampered_compiler_surface, manifest, artifact_src, artifact_wasm, compiler_components)
+        changed_components = dict(compiler_components)
+        changed_component_path = next(iter(changed_components))
+        changed_components[changed_component_path] += b"\n"
+        rejected_changed_compiler = _loom.verify_wasm_compiler_evidence(compiler_evidence, manifest, artifact_src, artifact_wasm, changed_components)
+        missing_compiler_components = dict(compiler_components)
+        missing_compiler_components.pop(next(iter(missing_compiler_components)))
+        rejected_missing_compiler = _loom.build_wasm_compiler_evidence(manifest, artifact_src, artifact_wasm, missing_compiler_components)
+        extra_compiler_components = dict(compiler_components)
+        extra_compiler_components["outside-surface.py"] = b"pass\n"
+        rejected_extra_compiler = _loom.build_wasm_compiler_evidence(manifest, artifact_src, artifact_wasm, extra_compiler_components)
+        rejected_cross_surface = _loom.build_wasm_compiler_evidence(manifest, artifact_src, artifact_wasm, other_components)
+        rejected_compiler_source = _loom.build_wasm_compiler_evidence(manifest, artifact_src.replace("human 7", "human 8"), artifact_wasm, compiler_components)
+        rejected_compiler_wasm = _loom.build_wasm_compiler_evidence(manifest, artifact_src, tampered_body_wasm, compiler_components)
         manifest_contract_ok = (
             valid["valid"] is True
             and valid["advisory"] is True
@@ -2144,6 +2174,34 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and artifact_workflow["artifact_evidence"]["required"] is True
             and "artifact-evidence" in [step["id"] for step in artifact_workflow["steps"]]
             and artifact_workflow["steps"][-2]["id"] == "artifact-evidence"
+            and compiler_evidence_result["schema"] == "loom-gate-wasm-compiler-evidence-validation/v1"
+            and compiler_evidence_result["valid"] is True
+            and compiler_evidence["schema"] == "loom-gate-wasm-compiler-evidence/v1"
+            and compiler_evidence["kind"] == "wasm-compiler"
+            and compiler_evidence["surface"] == running_surface
+            and compiler_evidence["compiler_profile"]["surface"] == running_surface
+            and compiler_evidence["profile_sha256"] == compiler_evidence["compiler_profile"]["profile_sha256"]
+            and compiler_evidence["artifact_binding"] == artifact_binding
+            and compiler_evidence["source_equivalence"]["valid"] is True
+            and compiler_evidence["source_equivalence"]["actual_wasm_sha256"] == artifact_binding["wasm_sha256"]
+            and len(compiler_evidence["artifact_binding_sha256"]) == 64
+            and len(compiler_evidence["evidence_sha256"]) == 64
+            and verified_compiler_evidence["valid"] is True
+            and rejected_compiler_evidence["valid"] is False
+            and any(item["code"] == "evidence-hash-mismatch" for item in rejected_compiler_evidence["findings"])
+            and rejected_compiler_surface["valid"] is False
+            and any(item["code"] == "compiler-surface-mismatch" for item in rejected_compiler_surface["findings"])
+            and rejected_changed_compiler["valid"] is False
+            and any(item["code"] == "compiler-evidence-mismatch" for item in rejected_changed_compiler["findings"])
+            and rejected_missing_compiler["valid"] is False
+            and any(item["code"] == "missing-component" for item in rejected_missing_compiler["findings"])
+            and rejected_extra_compiler["valid"] is False
+            and any(item["code"] == "unknown-component" for item in rejected_extra_compiler["findings"])
+            and rejected_cross_surface["valid"] is False
+            and any(item["code"] in {"missing-component", "unknown-component"} for item in rejected_cross_surface["findings"])
+            and rejected_compiler_source["valid"] is False
+            and rejected_compiler_wasm["valid"] is False
+            and any(item["code"] == "wasm-source-mismatch" for item in rejected_compiler_wasm["findings"])
         )
         ok += manifest_contract_ok
         print(f"  {'ok  ' if manifest_contract_ok else 'FAIL'} gate: deterministic fail-closed task manifest v1")

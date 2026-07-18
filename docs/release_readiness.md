@@ -51,7 +51,10 @@ experimental, and what LOOM does not claim yet.
   byte identity with deterministic recompilation before artifact binding.
 - Compiler Profile v1 content-addresses the exact closed modular or standalone
   compiler surface supplied by a trusted host. It remains artifact-independent
-  and non-authorizing; Gate compiler evidence is a separate future contract.
+  and non-authorizing.
+- Gate Compiler Evidence v1 binds that exact profile to Artifact Binding v1 and
+  Source Equivalence v1 while fixing identity to the running implementation
+  surface. Receipt/workflow integration remains a separate future contract.
 - Deterministic property fuzz smoke is part of the citadel.
 
 ## Experimental or bounded

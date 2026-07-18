@@ -25,6 +25,7 @@ WASM_TRUST_DOC = ROOT / "docs" / "wasm_trust_provenance_v1.md"
 WASM_TRUST_V2_DOC = ROOT / "docs" / "wasm_trust_provenance_v2.md"
 WASM_EQUIVALENCE_DOC = ROOT / "docs" / "wasm_source_equivalence_v1.md"
 COMPILER_PROVENANCE_DOC = ROOT / "docs" / "compiler_provenance_v1.md"
+COMPILER_EVIDENCE_DOC = ROOT / "docs" / "gate_compiler_evidence_v1.md"
 WASM_ARTIFACT_DOC = ROOT / "docs" / "gate_wasm_artifact_v1.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
 
@@ -496,6 +497,74 @@ def _check_compiler_provenance_doc() -> None:
         raise SystemExit("docs parity: compiler provenance contract drift: missing " + ", ".join(missing))
 
 
+def _check_compiler_evidence_doc() -> None:
+    text = COMPILER_EVIDENCE_DOC.read_text()
+    words = " ".join(text.split())
+    required = (
+        "LOOM Gate WASM Compiler Evidence v1",
+        "normative read-only compiler-to-artifact evidence contract",
+        "loom.build_wasm_compiler_evidence(manifest, source, wasm_bytes, components)",
+        "loom.verify_wasm_compiler_evidence(evidence, manifest, source, wasm_bytes, components)",
+        "loom-gate-wasm-compiler-evidence-validation/v1",
+        "loom-gate-wasm-compiler-evidence/v1",
+        "profile_sha256",
+        "artifact_binding_sha256",
+        "source_equivalence",
+        "evidence_sha256",
+        "modular verifier can issue only `modular-python` evidence",
+        "standalone verifier can issue only `standalone-python` evidence",
+        "does not execute the supplied WASM",
+        "not a signature, publisher identity, or operator approval",
+        "Receipt v3, workflow v3, and Playground integration are not part of v1",
+        "Existing Gate manifest, observation, artifact, receipt, workflow, approval, and WASM ABI schemas are unchanged",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: compiler evidence contract drift: missing " + ", ".join(missing))
+
+
+def _check_compiler_evidence_surface_parity() -> None:
+    import loom as modular
+    spec = importlib.util.spec_from_file_location("loom_docs_compiler_evidence", DOCS_LOOM)
+    if spec is None or spec.loader is None:
+        raise SystemExit("docs parity: could not load standalone compiler evidence surface")
+    standalone = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(standalone)
+    manifest = {
+        "schema": "loom-gate-manifest/v1",
+        "agent": {"id": "auditor", "role": "audit"},
+        "task": {"summary": "Compiler evidence parity", "intent": "Pin exact implementation surfaces"},
+        "repositories": [],
+        "read_paths": [str(ROOT)],
+        "write_paths": [],
+        "actions": ["read", "audit"],
+        "evidence_required": ["audit"],
+    }
+    source = "(defx main () (fn () (trust 1 (prov human 42))))"
+    wasm = modular.compile_wasm(source)
+    modular_paths = ("loom.py", "loom_parse.py", "loom_checker.py", "loom_bounds.py", "loom_recursion.py", "loom_frontend.py", "loom_wasm.py")
+    modular_components = {path: ROOT.joinpath(path).read_bytes() for path in modular_paths}
+    standalone_components = {"docs/loom.py": DOCS_LOOM.read_bytes()}
+    modular_result = modular.build_wasm_compiler_evidence(manifest, source, wasm, modular_components)
+    standalone_result = standalone.build_wasm_compiler_evidence(manifest, source, wasm, standalone_components)
+    if not modular_result["valid"] or not standalone_result["valid"]:
+        raise SystemExit("docs parity: compiler evidence surface failed to build")
+    modular_evidence = modular_result["evidence"]
+    standalone_evidence = standalone_result["evidence"]
+    contract = (
+        modular_evidence["surface"] == "modular-python"
+        and standalone_evidence["surface"] == "standalone-python"
+        and modular_evidence["artifact_binding"] == standalone_evidence["artifact_binding"]
+        and modular_evidence["source_equivalence"] == standalone_evidence["source_equivalence"]
+        and modular_evidence["profile_sha256"] != standalone_evidence["profile_sha256"]
+        and modular_evidence["evidence_sha256"] != standalone_evidence["evidence_sha256"]
+        and not modular.build_wasm_compiler_evidence(manifest, source, wasm, standalone_components)["valid"]
+        and not standalone.build_wasm_compiler_evidence(manifest, source, wasm, modular_components)["valid"]
+    )
+    if not contract:
+        raise SystemExit("docs parity: compiler evidence surface identity drift")
+
+
 def _check_wasm_artifact_doc() -> None:
     text = WASM_ARTIFACT_DOC.read_text()
     words = " ".join(text.split())
@@ -574,6 +643,8 @@ def main() -> int:
     _check_wasm_trust_v2_doc()
     _check_wasm_equivalence_doc()
     _check_compiler_provenance_doc()
+    _check_compiler_evidence_doc()
+    _check_compiler_evidence_surface_parity()
     _check_wasm_artifact_doc()
     _check_secret_credential_policy_doc()
     _check_pyodide_import_boundary()
