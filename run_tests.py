@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import loom as _loom
 from loom_frontend import ASM_INTRINSICS
-from loom import parse, parse_spans, tokenize, tokenize_spans, check, run_call, compile_py, run_compiled, run_js, compile_js, compile_wasm, run_wasm, emit_wat, LoomError, _WASM_ABI_VERSION
+from loom import parse, parse_spans, tokenize, tokenize_spans, check, run_call, compile_py, run_compiled, run_js, compile_js, compile_wasm, verify_wasm_trust_receipt, run_wasm, emit_wat, LoomError, _WASM_ABI_VERSION
 
 def _context_chain_source(depth=65):
     parts = [
@@ -1629,6 +1629,16 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and receipt["source_sha256"] == hashlib.sha256(receipt_program.encode("utf-8")).hexdigest()
             and compile_wasm(receipt_program) == receipt_wasm
             and "custom section loom.trust.v1" in emit_wat(receipt_program)
+        )
+        verified_receipt = verify_wasm_trust_receipt(receipt_program, receipt_wasm)
+        source_mismatch = verify_wasm_trust_receipt(
+            receipt_program.replace("reviewer 7", "reviewer 8"), receipt_wasm
+        )
+        trust_receipt_ok = (
+            trust_receipt_ok
+            and verified_receipt["valid"] is True
+            and source_mismatch["valid"] is False
+            and any("does not match the supplied source" in finding for finding in source_mismatch["findings"])
         )
         ok += trust_receipt_ok
         print(f"  {'ok  ' if trust_receipt_ok else 'FAIL'} backend(WASM): trust/provenance receipt section")

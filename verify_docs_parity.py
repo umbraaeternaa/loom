@@ -406,6 +406,10 @@ def _check_wasm_trust_doc() -> None:
         "Custom sections are ignored by the WebAssembly core runtime",
         "changes no ABI v1 import, export, tagged-value, heap, or effect contract",
         "runtime=transparent-after-static-check",
+        "loom.verify_wasm_trust_receipt(source, wasm_bytes)",
+        "returns a JSON-like object with `valid`, `receipt`, and `findings`",
+        "does not execute the module",
+        "does not establish that a producer owns the listed authors",
     )
     missing = [needle for needle in required if needle not in words]
     if missing:

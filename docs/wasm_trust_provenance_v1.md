@@ -56,3 +56,17 @@ signature and does not establish publisher identity.
 WAT output exposes the same boundary through a deterministic comment marker:
 `custom section loom.trust.v1` and
 `runtime=transparent-after-static-check`.
+
+## Read-only verifier
+
+The public API `loom.verify_wasm_trust_receipt(source, wasm_bytes)` returns a
+JSON-like object with `valid`, `receipt`, and `findings`. It checks the WASM
+header and section framing, rejects duplicate or malformed receipt sections,
+requires canonical JSON, reruns the LOOM source checker, and compares the
+receipt byte-for-byte with the expected receipt for that exact source.
+
+`run_wasm` performs this verification before asking Node to instantiate the
+module. The verifier does not execute the module and does not establish that a
+producer owns the listed authors or that the WASM function body is equivalent
+to the source. Those remain separate compiler, signing, and host-boundary
+claims.

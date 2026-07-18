@@ -171,6 +171,9 @@ _WASM_FRONTEND = _loom_wasm.Frontend(parse, parse_spans, check, pname, LoomError
 def compile_wasm(program_src):
     return _loom_wasm.compile_wasm(program_src, _WASM_FRONTEND)
 
+def verify_wasm_trust_receipt(program_src, wasm_bytes):
+    return _loom_wasm.verify_trust_receipt(program_src, wasm_bytes, _WASM_FRONTEND)
+
 def emit_wat(program_src):
     return _loom_wasm.emit_wat(program_src, _WASM_FRONTEND)
 

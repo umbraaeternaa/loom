@@ -2682,6 +2682,74 @@ def _trust_receipt(program_src):
     return json.dumps(receipt, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
+def _read_uleb(data, pos):
+    value = 0
+    shift = 0
+    while pos < len(data):
+        byte = data[pos]
+        pos += 1
+        value |= (byte & 0x7f) << shift
+        if not byte & 0x80:
+            return value, pos
+        shift += 7
+        if shift > 35:
+            break
+    raise ValueError("malformed unsigned LEB128")
+
+
+def _extract_trust_receipt(wasm_bytes):
+    findings = []
+    if not isinstance(wasm_bytes, (bytes, bytearray)) or bytes(wasm_bytes[:8]) != b"\x00asm\x01\x00\x00\x00":
+        return None, None, ["invalid WebAssembly magic or version"]
+    data = bytes(wasm_bytes)
+    pos = 8
+    receipt = None
+    payload = None
+    while pos < len(data):
+        section = data[pos]
+        size, body = _read_uleb(data, pos + 1)
+        end = body + size
+        if end > len(data):
+            return None, None, ["truncated WebAssembly section"]
+        if section == 0:
+            name_len, name_start = _read_uleb(data, body)
+            name_end = name_start + name_len
+            if name_end > end:
+                return None, None, ["truncated WebAssembly custom-section name"]
+            if data[name_start:name_end] == _TRUST_SECTION_NAME:
+                if receipt is not None:
+                    findings.append("duplicate loom.trust.v1 custom section")
+                payload = data[name_end:end]
+                try:
+                    receipt = json.loads(payload.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    receipt = None
+                    findings.append("loom.trust.v1 payload is not valid UTF-8 JSON")
+                if receipt is not None and not isinstance(receipt, dict):
+                    findings.append("loom.trust.v1 payload must be a JSON object")
+                elif receipt is not None:
+                    canonical = json.dumps(receipt, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                    if canonical != payload:
+                        findings.append("loom.trust.v1 payload is not canonical JSON")
+        pos = end
+    if receipt is None and not any("payload" in finding for finding in findings):
+        findings.append("missing loom.trust.v1 custom section")
+    return receipt, payload, findings
+
+
+def verify_wasm_trust_receipt(program_src, wasm_bytes):
+    """Verify receipt/source/checker consistency without executing the WASM module."""
+    receipt, payload, findings = _extract_trust_receipt(wasm_bytes)
+    _, source_errors = check(parse(program_src))
+    findings = list(findings)
+    findings.extend("source checker: " + error for error in source_errors)
+    if receipt is not None and not source_errors:
+        expected = _trust_receipt(program_src)
+        if payload != expected:
+            findings.append("loom.trust.v1 does not match the supplied source")
+    return {"valid": not findings, "receipt": receipt, "findings": findings}
+
+
 def _wasm_source_maps(program_src, defs):
     node_path_by_id = {}
     span_by_path = {}
@@ -3434,7 +3502,11 @@ def run_wasm(program_src, call_src):
     fields_json = _json.dumps({str(v): k for k, v in _wasm_fields(program_src, capture_slots).items()})
     resources_json = _json.dumps({str(v): k for k, v in _wasm_resources(program_src).items()})
     foreigns_json = _json.dumps({str(v): k for k, v in _wasm_foreigns(program_src).items()})
-    arr = ",".join(str(b) for b in compile_wasm(program_src))
+    wasm_bytes = compile_wasm(program_src)
+    verification = verify_wasm_trust_receipt(program_src, wasm_bytes)
+    if not verification["valid"]:
+        raise LoomError("node-wasm: invalid trust receipt: " + "; ".join(verification["findings"]))
+    arr = ",".join(str(b) for b in wasm_bytes)
     js = ("const __out=[]; const __hs=[[],[],[],[]]; const __caps=[]; let __mem=null; const __rd=(p)=>__mem.getInt32(p,true); const __td=new TextDecoder();"
           "const __tags=" + tags_json + "; const __fields=" + fields_json + "; const __resources=" + resources_json + "; const __foreigns=" + foreigns_json + ";"
           "let __dec=(v)=>((Number.isInteger(v)&&(v&1)===0)?(v>>1):v);"
