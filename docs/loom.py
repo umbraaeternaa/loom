@@ -2121,6 +2121,8 @@ _WASM_K_VARIANT = 3
 _WASM_K_EFFECT = 4
 _WASM_K_RESOURCE = 5
 _WASM_K_STRING = 6
+_TRUST_SECTION_NAME = b"loom.trust.v1"
+_TRUST_FORM_KINDS = frozenset(("trust", "prov", "by", "declassify", "seam", "seam1", "seamN", "vouch", "recall", "repro", "ffi"))
 
 def _wasm_const(n):
     return b"\x41" + _leb_s(n)
@@ -2620,6 +2622,66 @@ def _wasm_string_layout(strings):
     return layout, hp
 
 
+def _trust_atom(value):
+    if isinstance(value, list):
+        return [_trust_atom(item) for item in value]
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        return str(value)
+    return None
+
+
+def _trust_receipt(program_src):
+    """Build deterministic, non-authorizing trust/provenance metadata for a WASM module."""
+    forms = []
+
+    def walk(node):
+        value = node.get("value") if isinstance(node, dict) else None
+        if isinstance(value, list) and value and str(value[0]) in _TRUST_FORM_KINDS:
+            kind = str(value[0])
+            span = node.get("span", {})
+            entry = {
+                "kind": kind,
+                "span": {key: span[key] for key in ("line", "column", "offset", "end_offset") if key in span},
+            }
+            if kind == "trust":
+                entry["spec"] = _trust_atom(value[1]) if len(value) > 1 else None
+            elif kind == "prov":
+                entry["anchor"] = _trust_atom(value[1]) if len(value) > 1 else None
+            elif kind == "by":
+                entry["role"] = _trust_atom(value[1]) if len(value) > 1 else None
+                entry["author"] = _trust_atom(value[2]) if len(value) > 2 else None
+            elif kind == "declassify":
+                entry["role"] = _trust_atom(value[1]) if len(value) > 1 else None
+            elif kind == "seamN":
+                entry["quantum"] = _trust_atom(value[1]) if len(value) > 1 else None
+                entry["grant"] = _trust_atom(value[2]) if len(value) > 2 else None
+            elif kind in ("seam", "seam1"):
+                entry["grant"] = _trust_atom(value[1]) if len(value) > 1 else None
+            elif kind == "vouch":
+                entry["role"] = _trust_atom(value[1]) if len(value) > 1 else None
+                entry["author"] = _trust_atom(value[2]) if len(value) > 2 else None
+                entry["component"] = _trust_atom(value[3]) if len(value) > 3 else None
+            elif kind == "ffi":
+                entry["foreign"] = _trust_atom(value[1]) if len(value) > 1 else None
+            forms.append(entry)
+        for child in node.get("children", ()) if isinstance(node, dict) else ():
+            walk(child)
+
+    for root in parse_spans(program_src):
+        walk(root)
+    receipt = {
+        "schema": "loom-trust-provenance/v1",
+        "abi_version": _WASM_ABI_VERSION,
+        "checked": True,
+        "runtime": "transparent-after-static-check",
+        "source_sha256": hashlib.sha256(program_src.encode("utf-8")).hexdigest(),
+        "forms": forms,
+    }
+    return json.dumps(receipt, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
 def _wasm_source_maps(program_src, defs):
     node_path_by_id = {}
     span_by_path = {}
@@ -2656,7 +2718,7 @@ class _WasmContext:
                  "helper_base", "apply_arities", "apply_ids", "apply1_id", "meter_push_id", "meter_take_id",
                  "depth_push_id", "depth_take_id", "recursive_edges", "current_fn",
                  "variant_id", "alloc_id", "resource_use_id", "tags", "fields", "resources", "foreigns",
-                 "strings", "string_layout", "hp_init", "node_path_by_id", "span_by_path", "_metered_effs")
+                 "strings", "string_layout", "hp_init", "node_path_by_id", "span_by_path", "trust_receipt", "_metered_effs")
 
     def __init__(self, program_src):
         self._metered_effs = set()
@@ -2692,6 +2754,7 @@ class _WasmContext:
         self.strings = _wasm_strings(program_src)
         self.string_layout, self.hp_init = _wasm_string_layout(self.strings)
         self.node_path_by_id, self.span_by_path = _wasm_source_maps(program_src, self.defs)
+        self.trust_receipt = _trust_receipt(program_src)
         self.recursive_edges = _recursive_edges({t[1]: {"fn": t[3]} for t in self.defs})
         self.current_fn = None
 
@@ -2921,8 +2984,9 @@ def compile_wasm(program_src):
             if spec["bytes"]:
                 segs.append(_seg(spec["data"], spec["bytes"]))
         dc = _leb_u(len(segs)) + b"".join(segs)
+    trust_custom = _leb_u(len(_TRUST_SECTION_NAME)) + _TRUST_SECTION_NAME + ctx.trust_receipt
     return (b"\x00asm\x01\x00\x00\x00" + _sec(1, tc) + _sec(2, ic) + _sec(3, fc) + _sec(5, mc)
-            + _sec(6, gc) + _sec(7, ec) + _sec(10, cc) + (_sec(11, dc) if dc is not None else b""))
+            + _sec(6, gc) + _sec(7, ec) + _sec(0, trust_custom) + _sec(10, cc) + (_sec(11, dc) if dc is not None else b""))
 
 def emit_wat(program_src):
     """Human-readable WebAssembly Text (the 'assembler') for what compile_wasm encodes to bytes:
@@ -3159,7 +3223,11 @@ def emit_wat(program_src):
         head = "  (func $" + spec["name"] + ((" " + sig) if sig else "") + " (result i32)" + ((" " + locs) if locs else "")
         lambda_callable = set(spec["callable"]) | {pname(p) for p in fn[1] if platent(p) is not None}
         bodies.append([head] + w(fn[2:][-1] if fn[2:] else 0, "    ", None, None, lambda_callable) + ["  )"])
-    lines = ["(module", "  (global $loom_abi_version i32 (i32.const " + str(_WASM_ABI_VERSION) + "))",
+    receipt_json = ctx.trust_receipt.decode("utf-8")
+    lines = ["(module", "  ;; custom section loom.trust.v1: checked static trust/provenance receipt",
+             "  ;; runtime=transparent-after-static-check receipt_bytes=" + str(len(ctx.trust_receipt)),
+             "  ;; receipt=" + receipt_json,
+             "  (global $loom_abi_version i32 (i32.const " + str(_WASM_ABI_VERSION) + "))",
              "  (global $loom_heap_limit i32 (i32.const 65536))",
              "  (global $loom_heap_used (mut i32) (i32.const 0))",
              "  (global $loom_heap_static_used i32 (i32.const " + str(max(0, ctx.hp_init - 8)) + "))",
@@ -4252,7 +4320,7 @@ def build_about():
     return {
         "schema": "loom-about/v1",
         "language": "LOOM",
-        "citadel_checks": 488,
+        "citadel_checks": 489,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "i31_bits": INT_BITS,
         "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],

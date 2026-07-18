@@ -70,6 +70,12 @@ host imports, exports, public object layouts, or ABI obligations.
 Generated modules may also carry a separate linked call-budget frame for
 `(depthN K ...)`. It is charged before direct named recursive SCC edges and is
 likewise private: it adds no host import, export, or ABI obligation.
+Generated modules additionally carry the optional custom section
+`loom.trust.v1`, specified by [LOOM WASM Trust/Provenance Receipt v1](wasm_trust_provenance_v1.md).
+It records the checker-visible static trust/provenance forms and source digest.
+It is metadata only: runtime values remain provenance-free in ABI v1, and the
+section is not a signature, proof certificate, operator approval, or capability
+grant.
 The foreign ID passed to `host_ffi` is module-local metadata assigned by first
 occurrence of the foreign component name inside one compiled module. Repeated
 uses of the same foreign name in one module use the same raw ID; distinct names

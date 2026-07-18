@@ -21,6 +21,7 @@ CALL_BUDGET_DOC = ROOT / "docs" / "call_budget_frame_v1.md"
 RECURRENCE_DOC = ROOT / "docs" / "quantitative_recurrence_summary_v1.md"
 BOUNDS_DOC = ROOT / "docs" / "proven_value_bounds_v1.md"
 CONTEXTUAL_BOUNDS_DOC = ROOT / "docs" / "contextual_value_bounds_v2.md"
+WASM_TRUST_DOC = ROOT / "docs" / "wasm_trust_provenance_v1.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
 
 
@@ -28,7 +29,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "488-contextual-value-bounds-v2")',
+        'bundleUrl.searchParams.set("v", "489-wasm-trust-provenance-v1")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -121,8 +122,8 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "488 self-verifying checks",
-        ">488</div>",
+        "489 self-verifying checks",
+        ">489</div>",
     )
     forbidden = (
         "456 self-verifying checks",
@@ -390,6 +391,27 @@ def _check_contextual_bounds_doc() -> None:
         raise SystemExit("docs parity: contextual value bounds contract drift: missing " + ", ".join(missing))
 
 
+def _check_wasm_trust_doc() -> None:
+    text = WASM_TRUST_DOC.read_text()
+    words = " ".join(text.split())
+    required = (
+        "LOOM WASM Trust/Provenance Receipt v1",
+        "custom section named `loom.trust.v1`",
+        "canonical UTF-8 JSON",
+        "source-order inventory",
+        "source_sha256",
+        "not a signature",
+        "not a proof certificate, operator approval, or capability grant",
+        "Runtime values do not carry provenance tags in ABI v1",
+        "Custom sections are ignored by the WebAssembly core runtime",
+        "changes no ABI v1 import, export, tagged-value, heap, or effect contract",
+        "runtime=transparent-after-static-check",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: WASM trust/provenance receipt contract drift: missing " + ", ".join(missing))
+
+
 def _run_injected_citadel() -> int:
     spec = importlib.util.spec_from_file_location("loom", DOCS_LOOM)
     if spec is None or spec.loader is None:
@@ -432,6 +454,7 @@ def main() -> int:
     _check_recurrence_doc()
     _check_bounds_doc()
     _check_contextual_bounds_doc()
+    _check_wasm_trust_doc()
     _check_secret_credential_policy_doc()
     _check_pyodide_import_boundary()
     result = _run_injected_citadel()

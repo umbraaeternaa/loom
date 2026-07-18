@@ -1601,6 +1601,39 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         print(f"  {'ok  ' if r_trust_seq else 'FAIL'} backend(WASM): transparent trust/prov sequencing => {trust_results}")
     except Exception as e:
         print(f"  FAIL backend(WASM) transparent wrappers: {e}")
+    try:                                               # WASM carries a deterministic, non-authorizing trust/provenance receipt
+        receipt_program = '(defx t () (fn () (trust 1 (prov human (declassify reviewer 7)))))'
+        receipt_wasm = compile_wasm(receipt_program)
+
+        def _read_uleb(data, pos):
+            value = 0; shift = 0
+            while True:
+                byte = data[pos]; pos += 1; value |= (byte & 0x7f) << shift
+                if not byte & 0x80: return value, pos
+                shift += 7
+
+        pos = 8; receipt = None
+        while pos < len(receipt_wasm):
+            section = receipt_wasm[pos]; size, pos = _read_uleb(receipt_wasm, pos + 1); end = pos + size
+            if section == 0:
+                name_len, body = _read_uleb(receipt_wasm, pos)
+                if receipt_wasm[body:body + name_len] == b"loom.trust.v1":
+                    receipt = json.loads(receipt_wasm[body + name_len:end])
+            pos = end
+        trust_receipt_ok = (
+            receipt is not None
+            and receipt["schema"] == "loom-trust-provenance/v1"
+            and receipt["checked"] is True
+            and receipt["runtime"] == "transparent-after-static-check"
+            and [item["kind"] for item in receipt["forms"]] == ["trust", "prov", "declassify"]
+            and receipt["source_sha256"] == hashlib.sha256(receipt_program.encode("utf-8")).hexdigest()
+            and compile_wasm(receipt_program) == receipt_wasm
+            and "custom section loom.trust.v1" in emit_wat(receipt_program)
+        )
+        ok += trust_receipt_ok
+        print(f"  {'ok  ' if trust_receipt_ok else 'FAIL'} backend(WASM): trust/provenance receipt section")
+    except Exception as e:
+        print(f"  FAIL backend(WASM) trust/provenance receipt: {e}")
     try:                                               # effect frontier: IO `with` reinterprets print through a handler closure
         prog = '(defx h () (fn (x) (* x 2))) (defx t () (fn () (with IO h (print 5))))'
         v33, o33 = run_wasm(prog, "(t)")
@@ -2856,7 +2889,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 488
+            and about_json["citadel_checks"] == 489
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
@@ -3013,7 +3046,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 488/488 citadel checks" in quick
+            and "PASS -- 489/489 citadel checks" in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
             and "loom examples" in quick
@@ -3111,7 +3144,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "488-contextual-value-bounds-v2")' in play
+            and 'bundleUrl.searchParams.set("v", "489-wasm-trust-provenance-v1")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -3713,7 +3746,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 488/488 citadel checks" in rdoc
+            and "PASS -- 489/489 citadel checks" in rdoc
             and "loom examples --format json" in rdoc
             and "loom doctor --dry-run --format json" in rdoc
             and "python3 verify_docs_parity.py" in rdoc
@@ -3771,7 +3804,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 135   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 136   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

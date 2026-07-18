@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 488 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 489 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 488/488 citadel checks
+PASS — 489/489 citadel checks
 ```
 
 ## The idea in one screen
@@ -103,6 +103,11 @@ wraparound across interpreter, Python, JavaScript, WASM, and WAT; every target,
 opcode, and arity outside the registry fails closed. The checked assembly
 contract is specified in [`docs/asm_v0.md`](docs/asm_v0.md), and the normative
 integer law lives in [`docs/i31_semantics.md`](docs/i31_semantics.md).
+
+WASM modules also carry a deterministic `loom.trust.v1` custom section with the
+checker-visible trust/provenance form inventory and source digest. It is
+inspectable metadata, not a signature, proof certificate, or runtime capability
+grant; the contract is specified in [`docs/wasm_trust_provenance_v1.md`](docs/wasm_trust_provenance_v1.md).
 
 Certified recursion can also use [`Proven Value Bounds v1`](docs/proven_value_bounds_v1.md):
 the checker derives conservative i31 and list-length upper bounds through

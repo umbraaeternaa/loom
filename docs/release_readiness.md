@@ -6,7 +6,7 @@ experimental, and what LOOM does not claim yet.
 
 ## Current public baseline
 
-- Canonical self-verification: `PASS -- 488/488 citadel checks`.
+- Canonical self-verification: `PASS -- 489/489 citadel checks`.
 - Published browser bundle parity is required before release:
   `python3 verify_docs_parity.py`.
 - The public compatibility surface is `loom.py`; module boundaries are pinned in
@@ -36,7 +36,8 @@ experimental, and what LOOM does not claim yet.
 - Portable checked-code backends for Python and JavaScript.
 - WebAssembly/WAT backend for the published supported surface, including
   tagged i31 integers, records, lists, variants/match, closures, core effect
-  boxes/handlers, strings, FFI boundary, heap diagnostics, and source labels.
+  boxes/handlers, strings, FFI boundary, heap diagnostics, source labels, and
+  the non-authorizing `loom.trust.v1` trust/provenance receipt.
 - Deterministic signed i31 semantics across interpreter, Python, JavaScript,
   WebAssembly, and WAT.
 - LOOM Gate advisory contracts: manifest validation, policy decision,
@@ -75,6 +76,10 @@ experimental, and what LOOM does not claim yet.
 - Contextual Value Bounds v2 carries proven intervals through direct named-call
   value parameters under a fixed context cap. Callable/HOF, effectful/FFI,
   recursive-context, and unsupported arguments remain fail-closed.
+- WASM Trust/Provenance Receipt v1 emits checked static trust/provenance form
+  metadata and a source digest in a custom section. Runtime values remain
+  provenance-free in ABI v1; the receipt is not a signature, proof certificate,
+  operator approval, or capability grant.
 - WASM ABI v1 is stable for the documented surface. `seamN` lowers to an
   internal linked runtime meter without adding host ABI obligations, but
   host-visible quantity diagnostics and future heap growth remain experimental.
@@ -100,10 +105,10 @@ python3 loom.py about --format json
 
 Expected public markers:
 
-- `run_tests.py` prints `PASS -- 488/488 citadel checks`.
+- `run_tests.py` prints `PASS -- 489/489 citadel checks`.
 - `verify_docs_parity.py` prints that the published bundle is standalone and
   citadel-green.
-- `loom.py about --format json` reports `citadel_checks: 488`, the current
+- `loom.py about --format json` reports `citadel_checks: 489`, the current
   WASM ABI version, and the supported backend list.
 - An installed checkout exposes `loom` as the same CLI surface as
   `python3 loom.py`.
