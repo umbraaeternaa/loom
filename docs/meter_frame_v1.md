@@ -41,8 +41,11 @@ are charged under the frames active when those effects occur.
   pointer are private implementation state, not host ABI state.
 - Checker Meter Summary v1 composes finite statically resolved named calls,
   closures, higher-order applications, `handle`, and `with`. Sequential counts
-  add and conditional/match branches take their maximal path count. Recursion
-  and unresolved higher-order dispatch saturate and remain fail-closed.
+  add and conditional/match branches take their maximal path count.
+  [Quantitative Recurrence Summary v1](quantitative_recurrence_summary_v1.md)
+  additionally composes certified single-spine recursion from a source-literal
+  i31/list measure. Branching, unknown-input, uncertified, and unresolved
+  higher-order recursion saturate and remain fail-closed.
 
 Meter Frame v1 changes no WASM ABI v1 imports, exports, public object layouts,
 or host obligations. It uses one private internal global and private raw heap

@@ -18,6 +18,7 @@ WASM_ABI_DOC = ROOT / "docs" / "wasm_abi_v1.md"
 QUANTITY_DOC = ROOT / "docs" / "wasm_quantity_mediation.md"
 METER_FRAME_DOC = ROOT / "docs" / "meter_frame_v1.md"
 CALL_BUDGET_DOC = ROOT / "docs" / "call_budget_frame_v1.md"
+RECURRENCE_DOC = ROOT / "docs" / "quantitative_recurrence_summary_v1.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
 
 
@@ -25,7 +26,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "424-playground-approval-json-download-v1")',
+        'bundleUrl.searchParams.set("v", "466-quantitative-recurrence-v1")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -44,6 +45,8 @@ def _check_playground_loader() -> None:
         "n++ > 2048",
         'name: "WASM · heap meter"',
         'name: "WASM · call budget"',
+        'name: "Proof · quantified recursion"',
+        "(seamN 2 (Net) (hit 2))",
         'globalValue("loom_heap_limit")',
         'globalValue("loom_heap_used")',
         'globalValue("loom_heap_static_used")',
@@ -116,10 +119,12 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "456 self-verifying checks",
-        ">456</div>",
+        "466 self-verifying checks",
+        ">466</div>",
     )
     forbidden = (
+        "456 self-verifying checks",
+        ">456</div>",
         "415 self-verifying checks",
         "437 self-verifying checks",
         ">437</div>",
@@ -268,7 +273,8 @@ def _check_meter_frame_doc() -> None:
         "Python and JavaScript generated backends implement the same frame",
         "WASM implements the same active-frame semantics",
         "Checker Meter Summary v1 composes finite statically resolved named calls",
-        "Recursion\n  and unresolved higher-order dispatch saturate and remain fail-closed",
+        "Quantitative Recurrence Summary v1",
+        "Branching, unknown-input, uncertified, and unresolved\n  higher-order recursion saturate and remain fail-closed",
         "changes no WASM ABI v1 imports, exports, public object layouts",
     )
     missing = [needle for needle in required if needle not in text]
@@ -323,6 +329,26 @@ def _check_call_budget_doc() -> None:
         raise SystemExit("docs parity: call budget contract drift: missing " + ", ".join(missing))
 
 
+def _check_recurrence_doc() -> None:
+    text = RECURRENCE_DOC.read_text()
+    words = " ".join(text.split())
+    required = (
+        "LOOM Quantitative Recurrence Summary v1",
+        "normative static-checker contract",
+        "adds no source annotation",
+        "(prove (descent NAME...))",
+        "single spine",
+        "integer literal or a source list literal",
+        "All additions saturate at `1024`",
+        "Fibonacci-style branching",
+        "recursion crossing `with`",
+        "changes no interpreter behavior",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: quantitative recurrence contract drift: missing " + ", ".join(missing))
+
+
 def _run_injected_citadel() -> int:
     spec = importlib.util.spec_from_file_location("loom", DOCS_LOOM)
     if spec is None or spec.loader is None:
@@ -362,6 +388,7 @@ def main() -> int:
     _check_quantity_mediation_doc()
     _check_meter_frame_doc()
     _check_call_budget_doc()
+    _check_recurrence_doc()
     _check_secret_credential_policy_doc()
     _check_pyodide_import_boundary()
     result = _run_injected_citadel()

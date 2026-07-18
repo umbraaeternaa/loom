@@ -417,6 +417,19 @@ CASES = [
     ("D30 descent: match binding cannot inherit guard", '(prove (descent f)) (defx f () (fn (xs) (if (empty xs) 0 (match (variant Some (list 1)) ((Some xs) (f (tail xs)))))))', False),
     ("D30 descent: malformed proof refused", '(prove (descent)) (defx f () (fn (x) x))', False),
     ("D30 descent: unknown target refused", '(prove (descent missing)) (defx f () (fn (x) x))', False),
+    # --- grown 2026-07-18: D31 -- QUANTITATIVE RECURRENCE SUMMARY v1. A checked descent certificate may refine
+    #     seamN only for a single-spine SCC whose selected integer/list measure is a source literal. Branching,
+    #     unknown inputs, unproved recursion, and unsupported re-scoping remain at the unbounded sentinel.
+    ("D31 recurrence: known i31 exact quantum", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx f (Net) (fn () (seamN 2 (Net) (hit 2))))', True),
+    ("D31 recurrence: known i31 one short", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx f (Net) (fn () (seamN 1 (Net) (hit 2))))', False),
+    ("D31 recurrence: known list exact quantum", '(prove (descent walk)) (defx walk (Net) (fn (xs) (if (empty xs) 0 (let (x (net (head xs))) (walk (tail xs)))))) (defx f (Net) (fn () (seamN 3 (Net) (walk (list 1 2 3)))))', True),
+    ("D31 recurrence: known list one short", '(prove (descent walk)) (defx walk (Net) (fn (xs) (if (empty xs) 0 (let (x (net (head xs))) (walk (tail xs)))))) (defx f (Net) (fn () (seamN 2 (Net) (walk (list 1 2 3)))))', False),
+    ("D31 recurrence: mutual weak-strict spine", '(prove (descent even)) (defx even (Net) (fn (xs) (let (x (net 1)) (odd xs)))) (defx odd (Net) (fn (xs) (if (empty xs) 0 (even (tail xs))))) (defx f (Net) (fn () (seamN 3 (Net) (even (list 1 2)))))', True),
+    ("D31 recurrence: unknown entry stays unbounded", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx f (Net) (fn (n) (seamN 10 (Net) (hit n))))', False),
+    ("D31 recurrence: branching stays unbounded", '(prove (descent fork)) (defx fork (Net) (fn (xs) (if (empty xs) 0 (let (x (net 1)) (+ (fork (tail xs)) (fork (tail xs))))))) (defx f (Net) (fn () (seamN 10 (Net) (fork (list 1 2)))))', False),
+    ("D31 recurrence: terminal effect counted once", '(prove (descent down)) (defx down (Net) (fn (n) (if (< n 1) (net 0) (down (- n 1))))) (defx f (Net) (fn () (seamN 1 (Net) (down 100))))', True),
+    ("D31 recurrence: proof is required", '(defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx f (Net) (fn () (seamN 2 (Net) (hit 2))))', False),
+    ("D31 recurrence: with remains fail-closed", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (with Net (fn (u) u) (let (x (net n)) (hit (- n 1))))))) (defx f (Net) (fn () (seamN 2 (Net) (hit 2))))', False),
     # --- grown 2026-06-26 (pass 3): D27 — GRADED foreign trust via component-bound ATTESTATION. D26 strips ALL foreign
     #     output to ai (binary). A seam clause (vouch ROLE WHO COMP) lets a NON-AI authority WHO sign a SPECIFIC foreign
     #     component COMP, so (ffi COMP ..) directly in that seam body carries WHO's anchor instead of the strip — making
@@ -536,9 +549,21 @@ def main(argv=None):
         finite_ok = all(not check(parse(program))[1] for program in finite_programs)
         _, closure_over = check(parse('(defx f (Net) (fn () (seamN 1 (Net) (let (g (fn (u) (net u))) (g 1) (g 2)))))'))
         _, unresolved_hof = check(parse('(defx f (Net) (fn ((g Net)) (seamN 10 (Net) (g 1))))'))
+        recurrence_source = '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1))))))'
+        _, recurrence_exact = check(parse(recurrence_source + ' (defx f (Net) (fn () (seamN 2 (Net) (hit 2))))'))
+        _, recurrence_over = check(parse(recurrence_source + ' (defx f (Net) (fn () (seamN 1 (Net) (hit 2))))'))
+        _, recurrence_unknown = check(parse(recurrence_source + ' (defx f (Net) (fn (n) (seamN 10 (Net) (hit n))))'))
+        _, recurrence_ceiling = check(parse(recurrence_source + ' (defx f (Net) (fn () (seamN 1023 (Net) (hit 1023))))'))
+        _, latent_unused = check(parse('(defx loop () (fn (n) (if (< n 1) 0 (let (unused (fn () (net 1))) (loop (- n 1)))))) (defx f (Net) (fn () (seamN 0 (Net) (loop 2))))'))
         direct_ok = bool(direct_errs) and "counted 2 use(s) along the maximal finite path" in direct_errs[0]
         recursive_ok = bool(recursive_errs) and "meter summary is unbounded via recursion or unresolved higher-order dispatch" in recursive_errs[0]
-        meter_diag_ok = direct_ok and recursive_ok and finite_ok and bool(closure_over) and bool(unresolved_hof)
+        recurrence_ok = (
+            not recurrence_exact
+            and bool(recurrence_over) and "counted 2 use(s)" in recurrence_over[0]
+            and bool(recurrence_unknown) and "meter summary is unbounded" in recurrence_unknown[0]
+            and not recurrence_ceiling
+        )
+        meter_diag_ok = direct_ok and recursive_ok and finite_ok and recurrence_ok and not latent_unused and bool(closure_over) and bool(unresolved_hof)
         ok += meter_diag_ok
         print(f"  {'ok  ' if meter_diag_ok else 'FAIL'} checker: finite Meter Summary v1 + unbounded fail-closed")
     except Exception as e:
@@ -1028,6 +1053,8 @@ def main(argv=None):
             ('(defx t (IO) (fn () (seamN 2 (IO) (handle (IO) (print 1) (print 2)))))', "(t)"),
             ('(defx t (Net) (fn () (seamN 2 (Net) (with Net (fn (u) u) (net 1) (net 2)))))', "(t)"),
             ('(defx t (Net IO) (fn () (seamN 1 (Net IO) (with Net (fn (u) (print u)) (net 1)))))', "(t)"),
+            ('(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx t (Net) (fn () (seamN 2 (Net) (hit 2))))', "(t)"),
+            ('(prove (descent walk)) (defx walk (Net) (fn (xs) (if (empty xs) 0 (let (x (net (head xs))) (walk (tail xs)))))) (defx t (Net) (fn () (seamN 3 (Net) (walk (list 1 2 3)))))', "(t)"),
         )
         finite_runtime_ok = True
         for finite_program, finite_call in finite_runtime_programs:
@@ -1106,7 +1133,14 @@ def main(argv=None):
         alias_runtime_ok = run_call(alias_program, "(t)") == (5, [])
         field_fns, field_errors = check(parse('(defx fac () (fn (n) n)) (defx t () (fn () (record (fac 1))))'))
         proof_fns, proof_errors = check(parse(proof_program))
-        proof_metadata_ok = not proof_errors and proof_fns["fac"].get("descent", {}).get("measure") == {"fac": "n"}
+        proof_metadata = proof_fns["fac"].get("descent", {})
+        proof_metadata_ok = (
+            not proof_errors
+            and proof_metadata.get("measure") == {"fac": "n"}
+            and proof_metadata.get("measure_index") == {"fac": 0}
+            and proof_metadata.get("recurrence", {}).get("domain") == "i31"
+            and proof_metadata.get("recurrence", {}).get("kind") == "single-spine"
+        )
         graph_edges = getattr(_loom, "_recursive_edges", _recursive_edges)
         field_graph_ok = not field_errors and graph_edges(field_fns) == set()
         depth_budget_ok = (
@@ -2780,7 +2814,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 456
+            and about_json["citadel_checks"] == 466
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
@@ -2937,7 +2971,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 456/456 citadel checks" in quick
+            and "PASS -- 466/466 citadel checks" in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
             and "loom examples" in quick
@@ -3035,7 +3069,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "424-playground-approval-json-download-v1")' in play
+            and 'bundleUrl.searchParams.set("v", "466-quantitative-recurrence-v1")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -3298,7 +3332,8 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "traps before changing any counter" in mdoc
             and "Python and JavaScript generated backends implement the same frame" in mdoc
             and "Checker Meter Summary v1 composes finite statically resolved named calls" in mdoc
-            and "Recursion\n  and unresolved higher-order dispatch saturate and remain fail-closed" in mdoc
+            and "Quantitative Recurrence Summary v1" in mdoc
+            and "Branching, unknown-input, uncertified, and unresolved\n  higher-order recursion saturate and remain fail-closed" in mdoc
             and "changes no WASM ABI v1 imports, exports, public object layouts" in mdoc
         )
         ok += quantity_doc_ok
@@ -3620,7 +3655,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "must not own mutable `_WASM_*` compiler tables" in mbdoc
             and "parallel builds" in mbdoc
             and "legacy module-global `_WASM_*` compiler tables do not return" in mbdoc
-            and "`loom_recursion.py` | shared named-call graph, recursive-SCC edges, and static descent certificates" in mbdoc
+            and "`loom_recursion.py` | shared named-call graph, recursive-SCC edges, static descent certificates, and quantitative recurrence metadata" in mbdoc
         )
         ok += module_boundary_doc_ok
         print(f"  {'ok  ' if module_boundary_doc_ok else 'FAIL'} docs: module boundaries pinned")
@@ -3629,12 +3664,14 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
     try:                                               # public release readiness says what is stable, bounded, and not claimed
         rdoc = Path(__file__).with_name("docs").joinpath("release_readiness.md").read_text()
         descent_doc = Path(__file__).with_name("docs").joinpath("recursive_descent_certificate_v1.md").read_text()
+        recurrence_doc = Path(__file__).with_name("docs").joinpath("quantitative_recurrence_summary_v1.md").read_text()
         readme = Path(__file__).with_name("README.md").read_text()
         rdoc_words = " ".join(rdoc.split())
+        recurrence_words = " ".join(recurrence_doc.split())
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 456/456 citadel checks" in rdoc
+            and "PASS -- 466/466 citadel checks" in rdoc
             and "loom examples --format json" in rdoc
             and "loom doctor --dry-run --format json" in rdoc
             and "python3 verify_docs_parity.py" in rdoc
@@ -3646,10 +3683,15 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "Native operator signing is intentionally outside the public language runtime." in rdoc
             and "Portable Meter Frame v1 is implemented by the reference interpreter, the generated Python and JavaScript backends, and WASM." in rdoc_words
             and "Checker Meter Summary v1 admits finite statically resolved calls" in rdoc_words
-            and "Recursion and unresolved higher-order dispatch remain fail-closed." in rdoc_words
+            and "Quantitative Recurrence Summary v1 additionally admits certified single-spine recursion" in rdoc_words
+            and "Branching, unknown-input, uncertified, and unresolved higher-order recursion remain fail-closed." in rdoc_words
             and "`(prove (descent NAME...))` separately requests a checker-issued recursive descent certificate" in rdoc_words
             and "The weak-edge subgraph must be acyclic." in descent_doc
             and "recursive Meter Summary into a fixed finite quantity" in " ".join(descent_doc.split())
+            and "LOOM Quantitative Recurrence Summary v1" in recurrence_doc
+            and "All additions saturate at `1024`." in recurrence_doc
+            and "Fibonacci-style branching" in recurrence_doc
+            and "changes no interpreter behavior" in recurrence_words
             and "`seamN` lowers to an internal linked runtime meter" in rdoc_words
             and "Release verification checklist" in rdoc
             and "python3 loom.py release-check" in rdoc

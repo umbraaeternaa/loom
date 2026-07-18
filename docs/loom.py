@@ -380,12 +380,31 @@ def _tail_depth(node, name):
 
 def _descent_relation(argument, caller_param, facts):
     if caller_param in facts["shadowed"]: return None
-    if argument == caller_param: return "weak"
-    if _tail_depth(argument, caller_param): return "strict" if caller_param in facts["nonempty"] else "weak"
+    if argument == caller_param: return {"kind": "weak"}
+    tail_depth = _tail_depth(argument, caller_param)
+    if tail_depth: return {"kind": "strict" if caller_param in facts["nonempty"] else "weak", "domain": "list", "amount": tail_depth}
     if isinstance(argument, list) and len(argument) == 3 and argument[0] == "-" and argument[1] == caller_param and isinstance(argument[2], int) and argument[2] > 0:
         lower = facts["lower"].get(caller_param)
-        if lower is not None and lower - argument[2] >= INT_MIN: return "strict"
+        if lower is not None and lower - argument[2] >= INT_MIN: return {"kind": "strict", "domain": "i31", "amount": argument[2], "lower": lower}
     return None
+
+def _descent_path_call_count(node, names):
+    if not isinstance(node, list) or not node: return 0
+    h = node[0]
+    if h == "fn": return 0
+    if h == "record": return min(2, sum(_descent_path_call_count(field[1], names) for field in node[1:] if isinstance(field, list) and len(field) >= 2))
+    if h == "get": return _descent_path_call_count(node[1], names)
+    if h == "variant": return _descent_path_call_count(node[2], names)
+    if h == "match":
+        arms = [_descent_path_call_count(arm[1], names) for arm in node[2:] if isinstance(arm, list) and len(arm) >= 2]
+        return min(2, _descent_path_call_count(node[1], names) + (max(arms) if arms else 0))
+    if h == "if" and len(node) >= 4: return min(2, _descent_path_call_count(node[1], names) + max(_descent_path_call_count(node[2], names), _descent_path_call_count(node[3], names)))
+    if h == "let": return min(2, _descent_path_call_count(node[1][1], names) + sum(_descent_path_call_count(child, names) for child in node[2:]))
+    if h == "resource": return min(2, sum(_descent_path_call_count(child, names) for child in node[2:]))
+    count = 1 if _is_symbol(h) and h in names else 0
+    if isinstance(h, list): count += _descent_path_call_count(h, names)
+    count += sum(_descent_path_call_count(child, names) for child in node[1:])
+    return min(2, count)
 
 def _descent_acyclic(nodes, edges):
     graph = {name: set() for name in nodes}
@@ -421,17 +440,24 @@ def _descent_certificate(fns, target):
     for name in names: choices *= len(candidates[name])
     if choices > 4096: return False, f"{target}: descent measure search exceeds 4096 assignments", None
     for selected in product(*(candidates[name] for name in names)):
-        measure = dict(zip(names, selected)); weak_edges = []; valid = True
+        measure = dict(zip(names, selected)); weak_edges = []; relations = []; valid = True
         for source in names:
             _, caller_param = measure[source]
             for callee, args, facts in sites[source]:
                 target_index, _ = measure[callee]
                 relation = _descent_relation(args[target_index], caller_param, facts) if target_index < len(args) else None
                 if relation is None: valid = False; break
-                if relation == "weak": weak_edges.append((source, callee))
+                relations.append({"source": str(source), "target": str(callee), **relation})
+                if relation["kind"] == "weak": weak_edges.append((source, callee))
             if not valid: break
         if valid and _descent_acyclic(component, weak_edges):
-            certificate = {"component": names, "measure": {name: str(measure[name][1]) for name in names}}
+            certificate = {"component": names, "measure": {name: str(measure[name][1]) for name in names}, "measure_index": {name: measure[name][0] for name in names}}
+            domains = {relation.get("domain") for relation in relations if relation.get("domain")}
+            single_spine = all(sum(_descent_path_call_count(expr, component) for expr in fns[name]["fn"][2:]) <= 1 for name in names)
+            if len(domains) == 1 and single_spine:
+                domain = next(iter(domains)); recurrence = {"kind": "single-spine", "domain": domain, "edges": relations}
+                if domain == "i31": recurrence["floor"] = min(relation["lower"] for relation in relations if relation["kind"] == "strict" and relation.get("domain") == "i31")
+                certificate["recurrence"] = recurrence
             return True, "", certificate
     return False, f"{target}: no well-founded parameter descent covers every recursive cycle", None
 def is_var(e): return _is_symbol(e) and e not in EFFECTS and e[:1].islower()  # lowercase token = effect variable
@@ -673,10 +699,32 @@ def _callable_ncount(value, fns, penv, cenv, active):
     return {}
 def _function_ncount(name, fns, bound_cenv, active):
     info = fns[name]
-    if name in active: return {e: _NCAP for e in info.get('eff', set()) if e in EFFECTS}
+    if name in active:
+        potential = set(info.get('eff', set()))
+        for x in info['fn'][2:]: potential |= _recursive_meter_effects(x, fns, {name})
+        return {e: _NCAP for e in potential if e in EFFECTS}
     summary = {}
     for x in info['fn'][2:]: _nmerge(summary, _ncount(x, fns, info['penv'], bound_cenv, active | {name}))
     return summary
+def _recursive_meter_effects(node, fns, seen):
+    if not isinstance(node, list) or not node: return set()
+    h = node[0]
+    if h == 'fn': return set()
+    if h == 'record': children = [field[1] for field in node[1:] if isinstance(field, list) and len(field) >= 2]
+    elif h == 'get': children = node[1:2]
+    elif h == 'variant': children = node[2:3]
+    elif h == 'match': children = node[1:2] + [arm[1] for arm in node[2:] if isinstance(arm, list) and len(arm) >= 2]
+    elif h == 'let': children = [node[1][1], *node[2:]]
+    elif h == 'resource': children = node[2:]
+    else: children = node[1:]
+    out = set()
+    if h in _OPEFF: out.add(_OPEFF[h])
+    elif h == 'ffi': out.add('FFI')
+    elif h == 'resource' and isinstance(node[1], list): out |= set(node[1][1:]) & EFFECTS
+    if _is_symbol(h) and h in fns and h not in seen:
+        for x in fns[h]['fn'][2:]: out |= _recursive_meter_effects(x, fns, seen | {h})
+    for child in children: out |= _recursive_meter_effects(child, fns, seen)
+    return out
 def _ncount(node, fns, penv, cenv=None, active=None):
     """Saturating path count; exact for finite statically resolved call graphs."""
     cenv, active = cenv or {}, active or set()
@@ -742,12 +790,138 @@ def _ncount(node, fns, penv, cenv=None, active=None):
         bc = {}
         for i, p in enumerate(fns[h]['params']):
             if platent(p) is not None and i + 1 < len(node): bc[pname(p)] = _callable_ncount(node[i + 1], fns, penv, cenv, active)
-        add(_function_ncount(h, fns, bc, active))
+        recurrence = _recurrence_ncount(h, node[1:], fns, active)
+        add(recurrence if recurrence is not None else _function_ncount(h, fns, bc, active))
     elif h in cenv: add(cenv[h])
     elif penv and h in penv:
         for e in penv[h]:
             if not is_var(e): out[e] = _NCAP
     return out
+
+def _contains_recurrence_call(node, component):
+    if not isinstance(node, list) or not node: return False
+    h = node[0]
+    if h == "fn": return False
+    if h == "record": return any(_contains_recurrence_call(field[1], component) for field in node[1:] if isinstance(field, list) and len(field) >= 2)
+    if h == "get": return _contains_recurrence_call(node[1], component)
+    if h == "variant": return _contains_recurrence_call(node[2], component)
+    if h == "match": return _contains_recurrence_call(node[1], component) or any(_contains_recurrence_call(arm[1], component) for arm in node[2:] if isinstance(arm, list) and len(arm) >= 2)
+    if h == "let": return _contains_recurrence_call(node[1][1], component) or any(_contains_recurrence_call(child, component) for child in node[2:])
+    if h == "resource": return any(_contains_recurrence_call(child, component) for child in node[2:])
+    if _is_symbol(h) and h in component: return True
+    return (isinstance(h, list) and _contains_recurrence_call(h, component)) or any(_contains_recurrence_call(child, component) for child in node[1:])
+
+def _combine_recurrence_paths(left, right):
+    if left is None or right is None: return None
+    combined = []
+    for lc, lcall in left:
+        for rc, rcall in right:
+            if lcall is not None and rcall is not None: return None
+            counts = dict(lc); _nmerge(counts, rc)
+            combined.append((counts, lcall if lcall is not None else rcall))
+            if len(combined) > 4096: return None
+    return combined
+
+def _path_sequence(nodes, component, fns, penv, cenv, active):
+    paths = [({}, None)]
+    for node in nodes:
+        paths = _combine_recurrence_paths(paths, _recurrence_paths(node, component, fns, penv, cenv, active))
+        if paths is None: return None
+    return paths
+
+def _recurrence_paths(node, component, fns, penv, cenv, active):
+    if not isinstance(node, list) or not node: return [({}, None)]
+    if not _contains_recurrence_call(node, component): return [(_ncount(node, fns, penv, cenv, active), None)]
+    h = node[0]
+    if h == "fn": return [({}, None)]
+    if h == "if" and len(node) >= 4:
+        prefix = _recurrence_paths(node[1], component, fns, penv, cenv, active); branches = []
+        for branch in node[2:4]:
+            branch_paths = _recurrence_paths(branch, component, fns, penv, cenv, active)
+            if branch_paths is None: return None
+            branches.extend(branch_paths)
+        return _combine_recurrence_paths(prefix, branches)
+    if h == "match":
+        prefix = _recurrence_paths(node[1], component, fns, penv, cenv, active); branches = []
+        for arm in node[2:]:
+            if isinstance(arm, list) and len(arm) >= 2:
+                arm_paths = _recurrence_paths(arm[1], component, fns, penv, cenv, active)
+                if arm_paths is None: return None
+                branches.extend(arm_paths)
+        return _combine_recurrence_paths(prefix, branches)
+    if h == "let":
+        bound_value = node[1][1]
+        bound_paths = _recurrence_paths(bound_value, component, fns, penv, cenv, active)
+        if bound_paths is None: return None
+        nc = cenv; name = node[1][0]
+        if is_fn_expr(bound_value, fns, penv) or (_is_symbol(bound_value) and bound_value in cenv): nc = {**cenv, name: _callable_ncount(bound_value, fns, penv, cenv, active)}
+        return _combine_recurrence_paths(bound_paths, _path_sequence(node[2:], component, fns, penv, nc, active))
+    if h == "record": return _path_sequence([field[1] for field in node[1:] if isinstance(field, list) and len(field) >= 2], component, fns, penv, cenv, active)
+    if h == "get": return _recurrence_paths(node[1], component, fns, penv, cenv, active)
+    if h == "variant": return _recurrence_paths(node[2], component, fns, penv, cenv, active)
+    if h == "depthN": return _path_sequence(node[2:], component, fns, penv, cenv, active)
+    if h == "seamN": return _path_sequence(_roleclauses(node[3:])[3], component, fns, penv, cenv, active)
+    if h in ("seam", "seam1"): return _path_sequence(_roleclauses(node[2:])[3], component, fns, penv, cenv, active)
+    if h == "handle": return _path_sequence(node[2:], component, fns, penv, cenv, active)
+    if h in ("with", "resource"): return None
+    if _is_symbol(h) and h in component:
+        paths = _path_sequence(node[1:], component, fns, penv, cenv, active)
+        if paths is None or any(call is not None for _, call in paths): return None
+        return [(counts, h) for counts, _ in paths]
+    if isinstance(h, list): return None
+    paths = _path_sequence(node[1:], component, fns, penv, cenv, active)
+    if paths is None: return None
+    operation = {}
+    if h in _OPEFF: operation[_OPEFF[h]] = 1
+    elif h == "ffi": operation["FFI"] = 1
+    elif h in fns: _nmerge(operation, _function_ncount(h, fns, {}, active))
+    elif h in cenv: _nmerge(operation, cenv[h])
+    elif penv and h in penv: return None
+    for counts, _ in paths: _nmerge(counts, operation)
+    return paths
+
+def _static_recurrence_rank(argument, recurrence):
+    if recurrence["domain"] == "i31": return max(0, argument - recurrence["floor"] + 1) if isinstance(argument, int) else None
+    if recurrence["domain"] == "list": return len(argument) - 1 if isinstance(argument, list) and argument and argument[0] == "list" else None
+    return None
+
+def _recurrence_ncount(entry, args, fns, active):
+    certificate = fns[entry].get("descent"); recurrence = certificate.get("recurrence") if certificate else None
+    if recurrence is None or entry in active: return None
+    measure_index = certificate["measure_index"][entry]
+    if measure_index >= len(args): return None
+    rank = _static_recurrence_rank(args[measure_index], recurrence)
+    if rank is None or rank >= _NCAP: return None
+    component = set(certificate["component"]); paths = {}; component_active = set(active) | component
+    for name in component:
+        paths[name] = _path_sequence(fns[name]["fn"][2:], component, fns, fns[name]["penv"], {}, component_active)
+        if paths[name] is None: return None
+    edges = {}
+    for edge in recurrence["edges"]: edges.setdefault((edge["source"], edge["target"]), []).append(edge)
+    weak_targets = {name: set() for name in component}
+    for edge in recurrence["edges"]:
+        if edge["kind"] == "weak": weak_targets[edge["source"]].add(edge["target"])
+    order = []; pending = set(component)
+    while pending:
+        ready = sorted(name for name in pending if weak_targets[name] <= set(order))
+        if not ready: return None
+        order.extend(ready); pending -= set(ready)
+    table = {}
+    for remaining in range(rank + 1):
+        for name in order:
+            options = []
+            for local, target in paths[name]:
+                if target is None: options.append(dict(local)); continue
+                for edge in edges.get((name, target), ()):
+                    if edge["kind"] == "strict" and remaining == 0: continue
+                    child_rank = remaining - 1 if edge["kind"] == "strict" else remaining
+                    total = dict(local); _nmerge(total, table[(target, child_rank)]); options.append(total)
+            if not options: result = {e: _NCAP for e in fns[name].get("eff", set()) if e in EFFECTS}
+            else:
+                result = {}
+                for e in set().union(*(set(option) for option in options)): result[e] = max(option.get(e, 0) for option in options)
+            table[(name, remaining)] = result
+    return table[(entry, rank)]
 
 
 def _ambient_op_of(node, effs):
@@ -3931,7 +4105,7 @@ def build_about():
     return {
         "schema": "loom-about/v1",
         "language": "LOOM",
-        "citadel_checks": 456,
+        "citadel_checks": 466,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "i31_bits": INT_BITS,
         "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],

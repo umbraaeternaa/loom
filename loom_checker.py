@@ -242,12 +242,54 @@ def _callable_ncount(frontend, value, fns, penv, cenv, active):
 def _function_ncount(frontend, name, fns, bound_cenv, active):
     info = fns[name]
     if name in active:
-        return {eff: _NCAP for eff in info.get("eff", set()) if eff in frontend.effects}
+        potential = set(info.get("eff", set()))
+        for expr in info["fn"][2:]:
+            potential |= _recursive_meter_effects(frontend, expr, fns, {name})
+        return {eff: _NCAP for eff in potential if eff in frontend.effects}
     summary = {}
     next_active = active | {name}
     for expr in info["fn"][2:]:
         _nmerge(frontend, summary, _ncount(frontend, expr, fns, info["penv"], bound_cenv, next_active))
     return summary
+
+
+def _recursive_meter_effects(frontend, node, fns, seen):
+    """Effect requests reachable in a cycle, including locally discharged ones."""
+    if not isinstance(node, list) or not node:
+        return set()
+    head = node[0]
+    if head == "fn":
+        return set()
+    if head == "record":
+        children = [field[1] for field in node[1:] if isinstance(field, list) and len(field) >= 2]
+    elif head == "get":
+        children = node[1:2]
+    elif head == "variant":
+        children = node[2:3]
+    elif head == "match":
+        children = node[1:2] + [
+            arm[1] for arm in node[2:] if isinstance(arm, list) and len(arm) >= 2
+        ]
+    elif head == "let":
+        children = [node[1][1], *node[2:]]
+    elif head == "resource":
+        children = node[2:]
+    else:
+        children = node[1:]
+    out = set()
+    if head in frontend.op_eff:
+        out.add(frontend.op_eff[head])
+    elif head == "ffi":
+        out.add("FFI")
+    elif head == "resource" and isinstance(node[1], list):
+        out |= set(node[1][1:]) & frontend.effects
+    if _is_symbol(head) and head in fns and head not in seen:
+        next_seen = seen | {head}
+        for expr in fns[head]["fn"][2:]:
+            out |= _recursive_meter_effects(frontend, expr, fns, next_seen)
+    for child in children:
+        out |= _recursive_meter_effects(frontend, child, fns, seen)
+    return out
 
 
 def _ncount(frontend, node, fns, penv, cenv=None, active=None):
@@ -343,7 +385,11 @@ def _ncount(frontend, node, fns, penv, cenv=None, active=None):
         for index, param in enumerate(fns[head]["params"]):
             if frontend.platent(param) is not None and index + 1 < len(node):
                 bound_cenv[frontend.pname(param)] = _callable_ncount(frontend, node[index + 1], fns, penv, cenv, active)
-        add(_function_ncount(frontend, head, fns, bound_cenv, active))
+        recurrence = _recurrence_ncount(frontend, head, node[1:], fns, active)
+        add(
+            recurrence if recurrence is not None
+            else _function_ncount(frontend, head, fns, bound_cenv, active)
+        )
     elif head in cenv:
         add(cenv[head])
     elif penv and head in penv:
@@ -351,6 +397,237 @@ def _ncount(frontend, node, fns, penv, cenv=None, active=None):
             if not frontend.is_var(eff):
                 out[eff] = _NCAP
     return out
+
+
+def _contains_recurrence_call(node, component):
+    if not isinstance(node, list) or not node:
+        return False
+    head = node[0]
+    if head == "fn":
+        return False
+    if head == "record":
+        return any(
+            _contains_recurrence_call(field[1], component)
+            for field in node[1:] if isinstance(field, list) and len(field) >= 2
+        )
+    if head == "get":
+        return _contains_recurrence_call(node[1], component)
+    if head == "variant":
+        return _contains_recurrence_call(node[2], component)
+    if head == "match":
+        return _contains_recurrence_call(node[1], component) or any(
+            _contains_recurrence_call(arm[1], component)
+            for arm in node[2:] if isinstance(arm, list) and len(arm) >= 2
+        )
+    if head == "let":
+        return _contains_recurrence_call(node[1][1], component) or any(
+            _contains_recurrence_call(child, component) for child in node[2:]
+        )
+    if head == "resource":
+        return any(_contains_recurrence_call(child, component) for child in node[2:])
+    if _is_symbol(head) and head in component:
+        return True
+    return (
+        isinstance(head, list) and _contains_recurrence_call(head, component)
+    ) or any(_contains_recurrence_call(child, component) for child in node[1:])
+
+
+def _path_sequence(frontend, nodes, component, fns, penv, cenv, active):
+    paths = [({}, None)]
+    for node in nodes:
+        next_paths = _recurrence_paths(frontend, node, component, fns, penv, cenv, active)
+        if next_paths is None:
+            return None
+        combined = []
+        for left_counts, left_call in paths:
+            for right_counts, right_call in next_paths:
+                if left_call is not None and right_call is not None:
+                    return None
+                counts = dict(left_counts)
+                _nmerge(frontend, counts, right_counts)
+                combined.append((counts, left_call if left_call is not None else right_call))
+                if len(combined) > 4096:
+                    return None
+        paths = combined
+    return paths
+
+
+def _recurrence_paths(frontend, node, component, fns, penv, cenv, active):
+    """Local maximal paths for one single-spine SCC invocation."""
+    if not isinstance(node, list) or not node:
+        return [({}, None)]
+    if not _contains_recurrence_call(node, component):
+        return [(_ncount(frontend, node, fns, penv, cenv, active), None)]
+    head = node[0]
+    if head == "fn":
+        return [({}, None)]
+    if head == "if" and len(node) >= 4:
+        prefix = _recurrence_paths(frontend, node[1], component, fns, penv, cenv, active)
+        branches = []
+        for branch in node[2:4]:
+            branch_paths = _recurrence_paths(frontend, branch, component, fns, penv, cenv, active)
+            if branch_paths is None:
+                return None
+            branches.extend(branch_paths)
+        return _combine_recurrence_paths(frontend, prefix, branches)
+    if head == "match":
+        prefix = _recurrence_paths(frontend, node[1], component, fns, penv, cenv, active)
+        branches = []
+        for arm in node[2:]:
+            if isinstance(arm, list) and len(arm) >= 2:
+                arm_paths = _recurrence_paths(frontend, arm[1], component, fns, penv, cenv, active)
+                if arm_paths is None:
+                    return None
+                branches.extend(arm_paths)
+        return _combine_recurrence_paths(frontend, prefix, branches)
+    if head == "let":
+        bound_value = node[1][1]
+        bound_paths = _recurrence_paths(frontend, bound_value, component, fns, penv, cenv, active)
+        if bound_paths is None:
+            return None
+        next_cenv = cenv
+        name = node[1][0]
+        if frontend.is_fn_expr(bound_value, fns, penv) or (_is_symbol(bound_value) and bound_value in cenv):
+            summary = _callable_ncount(frontend, bound_value, fns, penv, cenv, active)
+            next_cenv = {**cenv, name: summary}
+        body_paths = _path_sequence(frontend, node[2:], component, fns, penv, next_cenv, active)
+        return _combine_recurrence_paths(frontend, bound_paths, body_paths)
+    if head == "record":
+        return _path_sequence(
+            frontend,
+            [field[1] for field in node[1:] if isinstance(field, list) and len(field) >= 2],
+            component, fns, penv, cenv, active,
+        )
+    if head == "get":
+        return _recurrence_paths(frontend, node[1], component, fns, penv, cenv, active)
+    if head == "variant":
+        return _recurrence_paths(frontend, node[2], component, fns, penv, cenv, active)
+    if head == "depthN":
+        return _path_sequence(frontend, node[2:], component, fns, penv, cenv, active)
+    if head == "seamN":
+        return _path_sequence(frontend, _roleclauses(node[3:])[3], component, fns, penv, cenv, active)
+    if head in ("seam", "seam1"):
+        return _path_sequence(frontend, _roleclauses(node[2:])[3], component, fns, penv, cenv, active)
+    if head == "handle":
+        return _path_sequence(frontend, node[2:], component, fns, penv, cenv, active)
+    if head in ("with", "resource"):
+        return None
+    if _is_symbol(head) and head in component:
+        paths = _path_sequence(frontend, node[1:], component, fns, penv, cenv, active)
+        if paths is None:
+            return None
+        if any(call is not None for _, call in paths):
+            return None
+        return [(counts, head) for counts, _ in paths]
+    if isinstance(head, list):
+        return None
+    paths = _path_sequence(frontend, node[1:], component, fns, penv, cenv, active)
+    if paths is None:
+        return None
+    operation = {}
+    if head in frontend.op_eff:
+        operation[frontend.op_eff[head]] = 1
+    elif head == "ffi":
+        operation["FFI"] = 1
+    elif head in fns:
+        _nmerge(frontend, operation, _function_ncount(frontend, head, fns, {}, active))
+    elif head in cenv:
+        _nmerge(frontend, operation, cenv[head])
+    elif penv and head in penv:
+        return None
+    for counts, _ in paths:
+        _nmerge(frontend, counts, operation)
+    return paths
+
+
+def _combine_recurrence_paths(frontend, left, right):
+    if left is None or right is None:
+        return None
+    combined = []
+    for left_counts, left_call in left:
+        for right_counts, right_call in right:
+            if left_call is not None and right_call is not None:
+                return None
+            counts = dict(left_counts)
+            _nmerge(frontend, counts, right_counts)
+            combined.append((counts, left_call if left_call is not None else right_call))
+            if len(combined) > 4096:
+                return None
+    return combined
+
+
+def _static_recurrence_rank(argument, recurrence):
+    if recurrence["domain"] == "i31":
+        if not isinstance(argument, int):
+            return None
+        return max(0, argument - recurrence["floor"] + 1)
+    if recurrence["domain"] == "list":
+        if not isinstance(argument, list) or not argument or argument[0] != "list":
+            return None
+        return len(argument) - 1
+    return None
+
+
+def _recurrence_ncount(frontend, entry, args, fns, active):
+    certificate = fns[entry].get("descent")
+    recurrence = certificate.get("recurrence") if certificate else None
+    if recurrence is None or entry in active:
+        return None
+    measure_index = certificate["measure_index"][entry]
+    if measure_index >= len(args):
+        return None
+    rank = _static_recurrence_rank(args[measure_index], recurrence)
+    if rank is None or rank >= _NCAP:
+        return None
+    component = set(certificate["component"])
+    paths = {}
+    component_active = set(active) | component
+    for name in component:
+        paths[name] = _path_sequence(
+            frontend, fns[name]["fn"][2:], component, fns,
+            fns[name]["penv"], {}, component_active,
+        )
+        if paths[name] is None:
+            return None
+    edges = {}
+    for edge in recurrence["edges"]:
+        edges.setdefault((edge["source"], edge["target"]), []).append(edge)
+    weak_targets = {name: set() for name in component}
+    for edge in recurrence["edges"]:
+        if edge["kind"] == "weak":
+            weak_targets[edge["source"]].add(edge["target"])
+    order = []
+    pending = set(component)
+    while pending:
+        ready = sorted(name for name in pending if weak_targets[name] <= set(order))
+        if not ready:
+            return None
+        order.extend(ready)
+        pending -= set(ready)
+    table = {}
+    for remaining in range(rank + 1):
+        for name in order:
+            options = []
+            for local, target in paths[name]:
+                if target is None:
+                    options.append(dict(local))
+                    continue
+                for edge in edges.get((name, target), ()):
+                    if edge["kind"] == "strict" and remaining == 0:
+                        continue
+                    child_rank = remaining - 1 if edge["kind"] == "strict" else remaining
+                    child = table[(target, child_rank)]
+                    total = dict(local)
+                    _nmerge(frontend, total, child)
+                    options.append(total)
+            if not options:
+                result = {eff: _NCAP for eff in fns[name].get("eff", set()) if eff in frontend.effects}
+            else:
+                result = {}
+                for eff in set().union(*(set(option) for option in options)):
+                    result[eff] = max(option.get(eff, 0) for option in options)
+            table[(name, remaining)] = result
+    return table[(entry, rank)]
 
 
 def _ambient_op_of(frontend, node, effs):

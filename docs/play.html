@@ -141,6 +141,18 @@ const EXAMPLES = [
   (if (< n 1) 1 (* n (fac (- n 1))))))
 
 (defx main () (fn () (fac 6)))` },
+  { name: "Proof · quantified recursion", note: "Net ≤ 2 / certified",
+    src: `; The same checked descent proof can refine seamN when recursion is
+; single-spine and its selected entry measure is a source literal.
+
+(prove (descent hit))
+(defx hit (Net) (fn (n)
+  (if (< n 1)
+      0
+      (let (x (net n)) (hit (- n 1))))))
+
+(defx main (Net) (fn ()
+  (seamN 2 (Net) (hit 2))))` },
   { name: "WASM · list-sum", note: "→ WAT",
     src: `; Integer LISTS now compile to WebAssembly too — a real heap in
 ; linear memory. Run it (→ 15), or Compile → WAT to see the $cons allocator.
@@ -385,7 +397,7 @@ async function boot(){
     pyodide = await loadPyodide();
     setStatus("loading LOOM…");
     const bundleUrl = new URL("./loom.py", location.href);
-    bundleUrl.searchParams.set("v", "424-playground-approval-json-download-v1");
+    bundleUrl.searchParams.set("v", "466-quantitative-recurrence-v1");
     const response = await fetch(bundleUrl, {cache: "no-store"});
     if (!response.ok) throw new Error("LOOM bundle HTTP " + response.status);
     const code = await response.text();

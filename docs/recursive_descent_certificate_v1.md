@@ -62,7 +62,10 @@ The certificate is independent of both runtime resource frames:
 - `depthN` dynamically limits recursive SCC edges even for uncertified code;
 - `seamN` limits effect requests;
 - a descent certificate does not remove either frame and does not turn a
-  recursive Meter Summary into a fixed finite quantity for unknown input.
+  recursive Meter Summary into a fixed finite quantity for unknown input;
+- [Quantitative Recurrence Summary v1](quantitative_recurrence_summary_v1.md)
+  may derive a finite effect upper bound only for a certified single spine
+  whose selected entry measure is a source integer/list literal.
 
 Proof directives are checker metadata and erase before execution. They add no
 runtime operation, host import, public WASM export, or ABI obligation.

@@ -279,18 +279,68 @@ def _relation(argument, caller_param, facts):
     if caller_param in facts["shadowed"]:
         return None
     if argument == caller_param:
-        return "weak"
+        return {"kind": "weak"}
     tail_depth = _tail_depth(argument, caller_param)
     if tail_depth:
-        return "strict" if caller_param in facts["nonempty"] else "weak"
+        return {
+            "kind": "strict" if caller_param in facts["nonempty"] else "weak",
+            "domain": "list",
+            "amount": tail_depth,
+        }
     if (
         isinstance(argument, list) and len(argument) == 3 and argument[0] == "-"
         and argument[1] == caller_param and isinstance(argument[2], int) and argument[2] > 0
     ):
         lower = facts["lower"].get(caller_param)
         if lower is not None and lower - argument[2] >= I31_MIN:
-            return "strict"
+            return {
+                "kind": "strict",
+                "domain": "i31",
+                "amount": argument[2],
+                "lower": lower,
+            }
     return None
+
+
+def _path_call_count(node, names):
+    """Maximum direct named calls along one evaluation path, capped at two."""
+    if not isinstance(node, list) or not node:
+        return 0
+    head = node[0]
+    if head == "fn":
+        return 0
+    if head == "record":
+        return min(2, sum(
+            _path_call_count(field[1], names)
+            for field in node[1:] if isinstance(field, list) and len(field) >= 2
+        ))
+    if head == "get":
+        return _path_call_count(node[1], names)
+    if head == "variant":
+        return _path_call_count(node[2], names)
+    if head == "match":
+        prefix = _path_call_count(node[1], names)
+        arms = [
+            _path_call_count(arm[1], names)
+            for arm in node[2:] if isinstance(arm, list) and len(arm) >= 2
+        ]
+        return min(2, prefix + (max(arms) if arms else 0))
+    if head == "if" and len(node) >= 4:
+        return min(2, _path_call_count(node[1], names) + max(
+            _path_call_count(node[2], names),
+            _path_call_count(node[3], names),
+        ))
+    if head == "let":
+        return min(2, _path_call_count(node[1][1], names) + sum(
+            _path_call_count(child, names) for child in node[2:]
+        ))
+    if head == "resource":
+        return min(2, sum(_path_call_count(child, names) for child in node[2:]))
+    count = 1 if _is_symbol(head) and head in names else 0
+    if isinstance(head, list):
+        count += _path_call_count(head, names)
+    count += sum(_path_call_count(child, names) for child in node[1:])
+    return min(2, count)
 
 
 def _acyclic(nodes, edges):
@@ -358,6 +408,7 @@ def descent_certificate(fns, target):
     for selected in product(*(candidates[name] for name in names)):
         measure = dict(zip(names, selected))
         weak_edges = []
+        relations = []
         valid = True
         for source in names:
             _, caller_param = measure[source]
@@ -367,11 +418,35 @@ def descent_certificate(fns, target):
                 if relation is None:
                     valid = False
                     break
-                if relation == "weak":
+                relations.append({"source": str(source), "target": str(callee), **relation})
+                if relation["kind"] == "weak":
                     weak_edges.append((source, callee))
             if not valid:
                 break
         if valid and _acyclic(component, weak_edges):
             certificate = {name: str(measure[name][1]) for name in names}
-            return True, "", {"component": names, "measure": certificate}
+            result = {
+                "component": names,
+                "measure": certificate,
+                "measure_index": {name: measure[name][0] for name in names},
+            }
+            domains = {relation.get("domain") for relation in relations if relation.get("domain")}
+            single_spine = all(
+                sum(_path_call_count(expr, component) for expr in fns[name]["fn"][2:]) <= 1
+                for name in names
+            )
+            if len(domains) == 1 and single_spine:
+                domain = next(iter(domains))
+                recurrence = {
+                    "kind": "single-spine",
+                    "domain": domain,
+                    "edges": relations,
+                }
+                if domain == "i31":
+                    recurrence["floor"] = min(
+                        relation["lower"] for relation in relations
+                        if relation["kind"] == "strict" and relation.get("domain") == "i31"
+                    )
+                result["recurrence"] = recurrence
+            return True, "", result
     return False, f"{target}: no well-founded parameter descent covers every recursive cycle", None

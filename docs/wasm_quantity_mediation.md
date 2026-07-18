@@ -8,7 +8,9 @@ The backend-neutral runtime rules are normative in
 and generated Python and JavaScript backends implement that contract. WASM now
 implements it with a private linked frame. Checker Meter Summary v1 admits
 finite statically resolved calls, closures, higher-order dispatch, and handlers
-by their maximal path count. Recursion and unresolved dispatch saturate and
+by their maximal path count. Quantitative Recurrence Summary v1 additionally
+admits certified single-spine recursion from a source-literal i31/list measure.
+Branching, unknown-input, uncertified, and unresolved dispatch saturate and
 remain fail-closed.
 
 ## Current Truth

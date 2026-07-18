@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 456 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 466 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 456/456 citadel checks
+PASS — 466/466 citadel checks
 ```
 
 ## The idea in one screen
@@ -375,11 +375,13 @@ The same verified program runs in the interpreter, compiles to **Python** and **
 and lowers tagged values, closures, structured data, and effects to **WebAssembly** — one checked source, many platforms. LOOM integers have one portable contract on every backend: signed i31 values (`-2^30..2^30-1`) with deterministic modulo-`2^31` wraparound; out-of-range literals are rejected before execution.
 
 The binary boundary is versioned and documented in the normative [LOOM WebAssembly ABI v1](docs/wasm_abi_v1.md); generated modules export `loom_abi_version = 1`, and hosts reject unknown versions.
-Portable runtime quantity semantics are defined by [LOOM Portable Meter Frame v1](docs/meter_frame_v1.md); the interpreter, generated Python/JavaScript backends, and WASM enforce them. WASM carries a private linked meter frame through named calls, closures/`applyN`, recursion, handlers, and FFI without adding host ABI obligations. Checker Meter Summary v1 admits finite statically resolved calls, closures, higher-order applications, and handlers by their maximal path count; recursion and unresolved higher-order dispatch remain fail-closed. WASM and heap evolution are tracked separately in the [LOOM WASM Quantity Mediation Roadmap](docs/wasm_quantity_mediation.md), and `memory.grow` stays disabled until growth is explicitly metered.
+Portable runtime quantity semantics are defined by [LOOM Portable Meter Frame v1](docs/meter_frame_v1.md); the interpreter, generated Python/JavaScript backends, and WASM enforce them. WASM carries a private linked meter frame through named calls, closures/`applyN`, recursion, handlers, and FFI without adding host ABI obligations. Checker Meter Summary v1 admits finite statically resolved calls, closures, higher-order applications, and handlers by their maximal path count. [Quantitative Recurrence Summary v1](docs/quantitative_recurrence_summary_v1.md) also admits checked single-spine recursion when its certified i31/list entry measure is a source literal; branching, unknown-input, uncertified, and unresolved higher-order recursion remain fail-closed. WASM and heap evolution are tracked separately in the [LOOM WASM Quantity Mediation Roadmap](docs/wasm_quantity_mediation.md), and `memory.grow` stays disabled until growth is explicitly metered.
 
 Named recursion can be bounded dynamically with `(depthN K BODY...)`, specified by [LOOM Call Budget Frame v1](docs/call_budget_frame_v1.md). Each direct or mutual-recursive SCC edge consumes one unit before callee entry across the interpreter, generated Python/JavaScript, and WASM. This is a separate resource from `seamN`: it bounds recursive calls, does not claim to prove termination, and does not weaken the checker's fail-closed rule for recursive effect summaries.
 
 Named recursion can also request a machine-checked static certificate with `(prove (descent NAME...))`, specified by [LOOM Recursive Descent Certificate v1](docs/recursive_descent_certificate_v1.md). The checker selects a measure across the whole recursive SCC and proves every cycle contains guarded list-tail or wrap-safe i31 descent. The directive is checked rather than trusted, erases before execution, and remains separate from `depthN` and `seamN`.
+
+When that certificate also describes a single recursive spine and the entry measure is a source integer/list literal, Quantitative Recurrence Summary v1 derives a finite maximal-path effect bound for `seamN`. It adds no annotation or runtime mechanism; all unsupported recurrence shapes keep the unbounded sentinel.
 WASM diagnostics also expose heap object-family counters (`records`, `lists`, `variants`, `effects`, `resources`) so hosts can explain what reserved heap, not just how many bytes were reserved.
 The WAT assembler view labels allocation sites (`record`, `list`, `variant`, effect boxes, resources, static strings) with source `line:column` locations, and the Playground summarizes that source map above the WAT with the matching source line and caret so humans can see which forms are responsible for heap pressure.
 The parser also exposes `tokenize_spans` and `parse_spans`, a non-semantic diagnostics layer that reports source line/column/offsets without changing the parsed AST.

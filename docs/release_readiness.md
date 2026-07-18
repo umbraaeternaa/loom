@@ -6,7 +6,7 @@ experimental, and what LOOM does not claim yet.
 
 ## Current public baseline
 
-- Canonical self-verification: `PASS -- 456/456 citadel checks`.
+- Canonical self-verification: `PASS -- 466/466 citadel checks`.
 - Published browser bundle parity is required before release:
   `python3 verify_docs_parity.py`.
 - The public compatibility surface is `loom.py`; module boundaries are pinned in
@@ -58,8 +58,10 @@ experimental, and what LOOM does not claim yet.
   generated Python and JavaScript backends, and WASM. The WASM frame propagates
   through named calls, closures/`applyN`, recursion, handlers, and FFI. The
   Checker Meter Summary v1 admits finite statically resolved calls, closures,
-  higher-order applications, and handlers. Recursion and unresolved
-  higher-order dispatch remain fail-closed.
+  higher-order applications, and handlers. Quantitative Recurrence Summary v1
+  additionally admits certified single-spine recursion when the selected
+  i31/list entry measure is a source literal. Branching, unknown-input,
+  uncertified, and unresolved higher-order recursion remain fail-closed.
 - Call Budget Frame v1 is implemented by the interpreter, generated Python and
   JavaScript, and WASM. `(depthN K ...)` charges named recursive SCC edges at
   runtime without claiming a termination proof or weakening `seamN` analysis.
@@ -91,10 +93,10 @@ python3 loom.py about --format json
 
 Expected public markers:
 
-- `run_tests.py` prints `PASS -- 456/456 citadel checks`.
+- `run_tests.py` prints `PASS -- 466/466 citadel checks`.
 - `verify_docs_parity.py` prints that the published bundle is standalone and
   citadel-green.
-- `loom.py about --format json` reports `citadel_checks: 456`, the current
+- `loom.py about --format json` reports `citadel_checks: 466`, the current
   WASM ABI version, and the supported backend list.
 - An installed checkout exposes `loom` as the same CLI surface as
   `python3 loom.py`.
