@@ -176,6 +176,9 @@ def compile_wasm(program_src):
 def verify_wasm_trust_receipt(program_src, wasm_bytes):
     return _loom_wasm.verify_trust_receipt(program_src, wasm_bytes, _WASM_FRONTEND)
 
+def verify_wasm_trust_receipt_v2(program_src, wasm_bytes):
+    return _loom_wasm.verify_trust_receipt_v2(program_src, wasm_bytes, _WASM_FRONTEND)
+
 
 def _artifact_json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -199,6 +202,9 @@ def build_wasm_artifact_binding(manifest, program_src, wasm_bytes):
     verification = verify_wasm_trust_receipt(program_src, wasm_bytes)
     if not verification["valid"]:
         return _artifact_validation(None, [{"path": "wasm", "code": "invalid-trust-receipt", "message": finding} for finding in verification["findings"]])
+    verification_v2 = verify_wasm_trust_receipt_v2(program_src, wasm_bytes)
+    if not verification_v2["valid"]:
+        return _artifact_validation(None, [{"path": "wasm", "code": "invalid-trust-receipt-v2", "message": finding} for finding in verification_v2["findings"]])
     receipt = verification["receipt"]
     receipt_bytes = _artifact_json(receipt).encode("utf-8")
     binding = {
@@ -229,6 +235,8 @@ def verify_wasm_artifact_binding(binding, manifest, program_src, wasm_bytes):
         findings.append({"path": "binding.schema", "code": "unsupported-schema", "message": "expected loom-gate-wasm-artifact/v1"})
     verification = verify_wasm_trust_receipt(program_src, wasm_bytes)
     findings.extend({"path": "wasm", "code": "invalid-trust-receipt", "message": finding} for finding in verification["findings"])
+    verification_v2 = verify_wasm_trust_receipt_v2(program_src, wasm_bytes)
+    findings.extend({"path": "wasm", "code": "invalid-trust-receipt-v2", "message": finding} for finding in verification_v2["findings"])
     if not findings:
         receipt = verification["receipt"]
         expected = {

@@ -2122,7 +2122,9 @@ _WASM_K_EFFECT = 4
 _WASM_K_RESOURCE = 5
 _WASM_K_STRING = 6
 _TRUST_SECTION_NAME = b"loom.trust.v1"
+_TRUST_V2_SECTION_NAME = b"loom.trust.v2"
 _TRUST_FORM_KINDS = frozenset(("trust", "prov", "by", "declassify", "seam", "seam1", "seamN", "vouch", "recall", "repro", "ffi"))
+_TRUST_V2_FORM_KINDS = _TRUST_FORM_KINDS | frozenset(("roles", "sub", "needs"))
 
 def _wasm_const(n):
     return b"\x41" + _leb_s(n)
@@ -2682,6 +2684,64 @@ def _trust_receipt(program_src):
     return json.dumps(receipt, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
+def _trust_receipt_v2(program_src):
+    """Build additive role-policy evidence without changing receipt v1 or ABI v1."""
+    forms = []
+
+    def walk(node):
+        value = node.get("value") if isinstance(node, dict) else None
+        if isinstance(value, list) and value and str(value[0]) in _TRUST_V2_FORM_KINDS:
+            kind = str(value[0])
+            span = node.get("span", {})
+            entry = {
+                "kind": kind,
+                "span": {key: span[key] for key in ("line", "column", "offset", "end_offset") if key in span},
+            }
+            if kind == "trust":
+                entry["spec"] = _trust_atom(value[1]) if len(value) > 1 else None
+            elif kind == "prov":
+                entry["anchor"] = _trust_atom(value[1]) if len(value) > 1 else None
+            elif kind == "by":
+                entry["role"] = _trust_atom(value[1]) if len(value) > 1 else None
+                entry["author"] = _trust_atom(value[2]) if len(value) > 2 else None
+            elif kind == "declassify":
+                entry["role"] = _trust_atom(value[1]) if len(value) > 1 else None
+            elif kind == "seamN":
+                entry["quantum"] = _trust_atom(value[1]) if len(value) > 1 else None
+                entry["grant"] = _trust_atom(value[2]) if len(value) > 2 else None
+            elif kind in ("seam", "seam1"):
+                entry["grant"] = _trust_atom(value[1]) if len(value) > 1 else None
+            elif kind == "vouch":
+                entry["role"] = _trust_atom(value[1]) if len(value) > 1 else None
+                entry["author"] = _trust_atom(value[2]) if len(value) > 2 else None
+                entry["component"] = _trust_atom(value[3]) if len(value) > 3 else None
+            elif kind == "ffi":
+                entry["foreign"] = _trust_atom(value[1]) if len(value) > 1 else None
+            elif kind == "roles":
+                entry["required"] = [_trust_atom(item) for item in value[1:]]
+            elif kind == "sub":
+                entry["lower"] = _trust_atom(value[1]) if len(value) > 1 else None
+                entry["higher"] = _trust_atom(value[2]) if len(value) > 2 else None
+            elif kind == "needs":
+                entry["effect"] = _trust_atom(value[1]) if len(value) > 1 else None
+                entry["role"] = _trust_atom(value[2]) if len(value) > 2 else None
+            forms.append(entry)
+        for child in node.get("children", ()) if isinstance(node, dict) else ():
+            walk(child)
+
+    for root in parse_spans(program_src):
+        walk(root)
+    receipt = {
+        "schema": "loom-trust-provenance/v2",
+        "abi_version": _WASM_ABI_VERSION,
+        "checked": True,
+        "runtime": "transparent-after-static-check",
+        "source_sha256": hashlib.sha256(program_src.encode("utf-8")).hexdigest(),
+        "forms": forms,
+    }
+    return json.dumps(receipt, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
 def _read_uleb(data, pos):
     value = 0
     shift = 0
@@ -2737,6 +2797,46 @@ def _extract_trust_receipt(wasm_bytes):
     return receipt, payload, findings
 
 
+def _extract_trust_receipt_v2(wasm_bytes):
+    findings = []
+    if not isinstance(wasm_bytes, (bytes, bytearray)) or bytes(wasm_bytes[:8]) != b"\x00asm\x01\x00\x00\x00":
+        return None, None, ["invalid WebAssembly magic or version"]
+    data = bytes(wasm_bytes)
+    pos = 8
+    receipt = None
+    payload = None
+    while pos < len(data):
+        section = data[pos]
+        size, body = _read_uleb(data, pos + 1)
+        end = body + size
+        if end > len(data):
+            return None, None, ["truncated WebAssembly section"]
+        if section == 0:
+            name_len, name_start = _read_uleb(data, body)
+            name_end = name_start + name_len
+            if name_end > end:
+                return None, None, ["truncated WebAssembly custom-section name"]
+            if data[name_start:name_end] == _TRUST_V2_SECTION_NAME:
+                if receipt is not None:
+                    findings.append("duplicate loom.trust.v2 custom section")
+                payload = data[name_end:end]
+                try:
+                    receipt = json.loads(payload.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    receipt = None
+                    findings.append("loom.trust.v2 payload is not valid UTF-8 JSON")
+                if receipt is not None and not isinstance(receipt, dict):
+                    findings.append("loom.trust.v2 payload must be a JSON object")
+                elif receipt is not None:
+                    canonical = json.dumps(receipt, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                    if canonical != payload:
+                        findings.append("loom.trust.v2 payload is not canonical JSON")
+        pos = end
+    if receipt is None and not any("payload" in finding for finding in findings):
+        findings.append("missing loom.trust.v2 custom section")
+    return receipt, payload, findings
+
+
 def verify_wasm_trust_receipt(program_src, wasm_bytes):
     """Verify receipt/source/checker consistency without executing the WASM module."""
     receipt, payload, findings = _extract_trust_receipt(wasm_bytes)
@@ -2747,6 +2847,19 @@ def verify_wasm_trust_receipt(program_src, wasm_bytes):
         expected = _trust_receipt(program_src)
         if payload != expected:
             findings.append("loom.trust.v1 does not match the supplied source")
+    return {"valid": not findings, "receipt": receipt, "findings": findings}
+
+
+def verify_wasm_trust_receipt_v2(program_src, wasm_bytes):
+    """Verify additive role-policy receipt/source/checker consistency."""
+    receipt, payload, findings = _extract_trust_receipt_v2(wasm_bytes)
+    _, source_errors = check(parse(program_src))
+    findings = list(findings)
+    findings.extend("source checker: " + error for error in source_errors)
+    if receipt is not None and not source_errors:
+        expected = _trust_receipt_v2(program_src)
+        if payload != expected:
+            findings.append("loom.trust.v2 does not match the supplied source")
     return {"valid": not findings, "receipt": receipt, "findings": findings}
 
 
@@ -2772,6 +2885,9 @@ def build_wasm_artifact_binding(manifest, program_src, wasm_bytes):
     verification = verify_wasm_trust_receipt(program_src, wasm_bytes)
     if not verification["valid"]:
         return _artifact_validation(None, [{"path": "wasm", "code": "invalid-trust-receipt", "message": finding} for finding in verification["findings"]])
+    verification_v2 = verify_wasm_trust_receipt_v2(program_src, wasm_bytes)
+    if not verification_v2["valid"]:
+        return _artifact_validation(None, [{"path": "wasm", "code": "invalid-trust-receipt-v2", "message": finding} for finding in verification_v2["findings"]])
     receipt = verification["receipt"]
     receipt_bytes = _artifact_json(receipt).encode("utf-8")
     binding = {
@@ -2802,6 +2918,8 @@ def verify_wasm_artifact_binding(binding, manifest, program_src, wasm_bytes):
         findings.append({"path": "binding.schema", "code": "unsupported-schema", "message": "expected loom-gate-wasm-artifact/v1"})
     verification = verify_wasm_trust_receipt(program_src, wasm_bytes)
     findings.extend({"path": "wasm", "code": "invalid-trust-receipt", "message": finding} for finding in verification["findings"])
+    verification_v2 = verify_wasm_trust_receipt_v2(program_src, wasm_bytes)
+    findings.extend({"path": "wasm", "code": "invalid-trust-receipt-v2", "message": finding} for finding in verification_v2["findings"])
     if not findings:
         receipt = verification["receipt"]
         expected = {
@@ -2895,7 +3013,7 @@ class _WasmContext:
                  "helper_base", "apply_arities", "apply_ids", "apply1_id", "meter_push_id", "meter_take_id",
                  "depth_push_id", "depth_take_id", "recursive_edges", "current_fn",
                  "variant_id", "alloc_id", "resource_use_id", "tags", "fields", "resources", "foreigns",
-                 "strings", "string_layout", "hp_init", "node_path_by_id", "span_by_path", "trust_receipt", "_metered_effs")
+                 "strings", "string_layout", "hp_init", "node_path_by_id", "span_by_path", "trust_receipt", "trust_receipt_v2", "_metered_effs")
 
     def __init__(self, program_src):
         self._metered_effs = set()
@@ -2932,6 +3050,7 @@ class _WasmContext:
         self.string_layout, self.hp_init = _wasm_string_layout(self.strings)
         self.node_path_by_id, self.span_by_path = _wasm_source_maps(program_src, self.defs)
         self.trust_receipt = _trust_receipt(program_src)
+        self.trust_receipt_v2 = _trust_receipt_v2(program_src)
         self.recursive_edges = _recursive_edges({t[1]: {"fn": t[3]} for t in self.defs})
         self.current_fn = None
 
@@ -3162,8 +3281,9 @@ def compile_wasm(program_src):
                 segs.append(_seg(spec["data"], spec["bytes"]))
         dc = _leb_u(len(segs)) + b"".join(segs)
     trust_custom = _leb_u(len(_TRUST_SECTION_NAME)) + _TRUST_SECTION_NAME + ctx.trust_receipt
+    trust_v2_custom = _leb_u(len(_TRUST_V2_SECTION_NAME)) + _TRUST_V2_SECTION_NAME + ctx.trust_receipt_v2
     return (b"\x00asm\x01\x00\x00\x00" + _sec(1, tc) + _sec(2, ic) + _sec(3, fc) + _sec(5, mc)
-            + _sec(6, gc) + _sec(7, ec) + _sec(0, trust_custom) + _sec(10, cc) + (_sec(11, dc) if dc is not None else b""))
+            + _sec(6, gc) + _sec(7, ec) + _sec(0, trust_custom) + _sec(0, trust_v2_custom) + _sec(10, cc) + (_sec(11, dc) if dc is not None else b""))
 
 def emit_wat(program_src):
     """Human-readable WebAssembly Text (the 'assembler') for what compile_wasm encodes to bytes:
@@ -3401,9 +3521,13 @@ def emit_wat(program_src):
         lambda_callable = set(spec["callable"]) | {pname(p) for p in fn[1] if platent(p) is not None}
         bodies.append([head] + w(fn[2:][-1] if fn[2:] else 0, "    ", None, None, lambda_callable) + ["  )"])
     receipt_json = ctx.trust_receipt.decode("utf-8")
+    receipt_v2_json = ctx.trust_receipt_v2.decode("utf-8")
     lines = ["(module", "  ;; custom section loom.trust.v1: checked static trust/provenance receipt",
              "  ;; runtime=transparent-after-static-check receipt_bytes=" + str(len(ctx.trust_receipt)),
              "  ;; receipt=" + receipt_json,
+             "  ;; custom section loom.trust.v2: checked role-policy evidence receipt",
+             "  ;; role_policy=roles/sub/needs receipt_bytes=" + str(len(ctx.trust_receipt_v2)),
+             "  ;; receipt_v2=" + receipt_v2_json,
              "  (global $loom_abi_version i32 (i32.const " + str(_WASM_ABI_VERSION) + "))",
              "  (global $loom_heap_limit i32 (i32.const 65536))",
              "  (global $loom_heap_used (mut i32) (i32.const 0))",
@@ -3615,6 +3739,9 @@ def run_wasm(program_src, call_src):
     verification = verify_wasm_trust_receipt(program_src, wasm_bytes)
     if not verification["valid"]:
         raise LoomError("node-wasm: invalid trust receipt: " + "; ".join(verification["findings"]))
+    verification_v2 = verify_wasm_trust_receipt_v2(program_src, wasm_bytes)
+    if not verification_v2["valid"]:
+        raise LoomError("node-wasm: invalid trust receipt v2: " + "; ".join(verification_v2["findings"]))
     arr = ",".join(str(b) for b in wasm_bytes)
     js = ("const __out=[]; const __hs=[[],[],[],[]]; const __caps=[]; let __mem=null; const __rd=(p)=>__mem.getInt32(p,true); const __td=new TextDecoder();"
           "const __tags=" + tags_json + "; const __fields=" + fields_json + "; const __resources=" + resources_json + "; const __foreigns=" + foreigns_json + ";"

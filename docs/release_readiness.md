@@ -37,7 +37,8 @@ experimental, and what LOOM does not claim yet.
 - WebAssembly/WAT backend for the published supported surface, including
   tagged i31 integers, records, lists, variants/match, closures, core effect
   boxes/handlers, strings, FFI boundary, heap diagnostics, source labels, and
-  the non-authorizing `loom.trust.v1` trust/provenance receipt.
+  the non-authorizing `loom.trust.v1` trust/provenance receipt plus additive
+  `loom.trust.v2` role-policy evidence for `roles`, `sub`, and `needs`.
 - Deterministic signed i31 semantics across interpreter, Python, JavaScript,
   WebAssembly, and WAT.
 - LOOM Gate advisory contracts: manifest validation, policy decision,

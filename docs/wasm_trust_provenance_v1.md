@@ -70,3 +70,11 @@ module. The verifier does not execute the module and does not establish that a
 producer owns the listed authors or that the WASM function body is equivalent
 to the source. Those remain separate compiler, signing, and host-boundary
 claims.
+
+## Additive v2 compatibility
+
+Receipt v1 remains unchanged. Current modules also carry a separate additive
+[`loom.trust.v2` role-policy receipt](wasm_trust_provenance_v2.md) for the
+checker-visible `roles`, `sub`, and `needs` clauses. Consumers may verify either
+contract independently; the additional custom section changes no WASM ABI v1
+runtime contract.

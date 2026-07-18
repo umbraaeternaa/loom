@@ -76,6 +76,10 @@ It records the checker-visible static trust/provenance forms and source digest.
 It is metadata only: runtime values remain provenance-free in ABI v1, and the
 section is not a signature, proof certificate, operator approval, or capability
 grant.
+Current modules also carry the additive custom section `loom.trust.v2`,
+specified by [LOOM WASM Trust/Provenance Receipt v2](wasm_trust_provenance_v2.md).
+It records `roles`, `sub`, and `needs` role-policy evidence while receipt v1
+remains unchanged. The extra section changes no ABI v1 runtime contract.
 The foreign ID passed to `host_ffi` is module-local metadata assigned by first
 occurrence of the foreign component name inside one compiled module. Repeated
 uses of the same foreign name in one module use the same raw ID; distinct names

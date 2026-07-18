@@ -22,6 +22,7 @@ RECURRENCE_DOC = ROOT / "docs" / "quantitative_recurrence_summary_v1.md"
 BOUNDS_DOC = ROOT / "docs" / "proven_value_bounds_v1.md"
 CONTEXTUAL_BOUNDS_DOC = ROOT / "docs" / "contextual_value_bounds_v2.md"
 WASM_TRUST_DOC = ROOT / "docs" / "wasm_trust_provenance_v1.md"
+WASM_TRUST_V2_DOC = ROOT / "docs" / "wasm_trust_provenance_v2.md"
 WASM_ARTIFACT_DOC = ROOT / "docs" / "gate_wasm_artifact_v1.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
 
@@ -226,6 +227,9 @@ def _check_wasm_abi_doc() -> None:
         "must not be stored in mutable module-global compiler tables",
         "every call to\n`compile_wasm` or `emit_wat` must build a fresh program context",
         "Parallel builds\nof unrelated programs must produce the same bytes and WAT",
+        "`loom.trust.v2`",
+        "Receipt v2",
+        "changes no ABI v1 runtime contract",
     )
     missing = [needle for needle in required if needle not in text]
     forbidden = (
@@ -417,6 +421,32 @@ def _check_wasm_trust_doc() -> None:
         raise SystemExit("docs parity: WASM trust/provenance receipt contract drift: missing " + ", ".join(missing))
 
 
+def _check_wasm_trust_v2_doc() -> None:
+    text = WASM_TRUST_V2_DOC.read_text()
+    words = " ".join(text.split())
+    required = (
+        "LOOM WASM Trust/Provenance Receipt v2",
+        "custom section named `loom.trust.v2`",
+        "Receipt v1 remains unchanged",
+        "canonical UTF-8 JSON",
+        "source-order inventory",
+        "`roles`",
+        "`sub`",
+        "`needs`",
+        "`required` role list",
+        "`lower` and `higher` roles",
+        "capability `effect` and required `role`",
+        "not a signature",
+        "Runtime values remain provenance-free in ABI v1",
+        "loom.verify_wasm_trust_receipt_v2(source, wasm_bytes)",
+        "does not execute the module",
+        "run_wasm` verifies both receipt v1 and receipt v2",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: WASM trust/provenance receipt v2 contract drift: missing " + ", ".join(missing))
+
+
 def _check_wasm_artifact_doc() -> None:
     text = WASM_ARTIFACT_DOC.read_text()
     words = " ".join(text.split())
@@ -490,6 +520,7 @@ def main() -> int:
     _check_bounds_doc()
     _check_contextual_bounds_doc()
     _check_wasm_trust_doc()
+    _check_wasm_trust_v2_doc()
     _check_wasm_artifact_doc()
     _check_secret_credential_policy_doc()
     _check_pyodide_import_boundary()

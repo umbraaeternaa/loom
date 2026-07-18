@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import loom as _loom
 from loom_frontend import ASM_INTRINSICS
-from loom import parse, parse_spans, tokenize, tokenize_spans, check, run_call, compile_py, run_compiled, run_js, compile_js, compile_wasm, verify_wasm_trust_receipt, run_wasm, emit_wat, LoomError, _WASM_ABI_VERSION
+from loom import parse, parse_spans, tokenize, tokenize_spans, check, run_call, compile_py, run_compiled, run_js, compile_js, compile_wasm, verify_wasm_trust_receipt, verify_wasm_trust_receipt_v2, run_wasm, emit_wat, LoomError, _WASM_ABI_VERSION
 
 def _context_chain_source(depth=65):
     parts = [
@@ -1640,8 +1640,36 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and source_mismatch["valid"] is False
             and any("does not match the supplied source" in finding for finding in source_mismatch["findings"])
         )
+        role_receipt_program = '(defx t (Net) (fn (u) (seam (Net) (roles code review) (sub review auditor) (needs Net review) (by code human (by auditor alice (net u))))))'
+        role_receipt_wasm = compile_wasm(role_receipt_program)
+        role_receipt_v1 = verify_wasm_trust_receipt(role_receipt_program, role_receipt_wasm)
+        role_receipt_v2 = verify_wasm_trust_receipt_v2(role_receipt_program, role_receipt_wasm)
+        role_source_mismatch = verify_wasm_trust_receipt_v2(
+            role_receipt_program.replace("auditor alice", "auditor carol"), role_receipt_wasm
+        )
+        tampered_role_receipt = role_receipt_wasm.replace(b'"higher":"auditor"', b'"higher":"checker"', 1)
+        role_tamper = verify_wasm_trust_receipt_v2(role_receipt_program, tampered_role_receipt)
+        v2_forms = role_receipt_v2["receipt"]["forms"] if role_receipt_v2["receipt"] else []
+        role_policy_ok = (
+            role_receipt_v1["valid"] is True
+            and [item["kind"] for item in role_receipt_v1["receipt"]["forms"]] == ["seam", "by", "by"]
+            and role_receipt_v2["valid"] is True
+            and role_receipt_v2["receipt"]["schema"] == "loom-trust-provenance/v2"
+            and [item["kind"] for item in v2_forms] == ["seam", "roles", "sub", "needs", "by", "by"]
+            and v2_forms[1]["required"] == ["code", "review"]
+            and v2_forms[2]["lower"] == "review" and v2_forms[2]["higher"] == "auditor"
+            and v2_forms[3]["effect"] == "Net" and v2_forms[3]["role"] == "review"
+            and role_receipt_v2["receipt"]["source_sha256"] == hashlib.sha256(role_receipt_program.encode("utf-8")).hexdigest()
+            and "custom section loom.trust.v2" in emit_wat(role_receipt_program)
+            and role_source_mismatch["valid"] is False
+            and any("does not match the supplied source" in finding for finding in role_source_mismatch["findings"])
+            and tampered_role_receipt != role_receipt_wasm
+            and role_tamper["valid"] is False
+            and any("does not match the supplied source" in finding for finding in role_tamper["findings"])
+        )
+        trust_receipt_ok = trust_receipt_ok and role_policy_ok
         ok += trust_receipt_ok
-        print(f"  {'ok  ' if trust_receipt_ok else 'FAIL'} backend(WASM): trust/provenance receipt section")
+        print(f"  {'ok  ' if trust_receipt_ok else 'FAIL'} backend(WASM): trust/provenance receipt v1 + role-policy v2 sections")
     except Exception as e:
         print(f"  FAIL backend(WASM) trust/provenance receipt: {e}")
     try:                                               # effect frontier: IO `with` reinterprets print through a handler closure
@@ -2006,6 +2034,10 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         tampered_binding = dict(artifact_binding or {})
         tampered_binding["wasm_sha256"] = "0" * 64
         tampered_artifact = _loom.verify_wasm_artifact_binding(tampered_binding, manifest, artifact_src, artifact_wasm)
+        tampered_v2_wasm = artifact_wasm.replace(
+            b'"schema":"loom-trust-provenance/v2"', b'"schema":"loom-trust-provenance/x2"', 1
+        )
+        tampered_v2_artifact = _loom.build_wasm_artifact_binding(manifest, artifact_src, tampered_v2_wasm)
         artifact_evidence_result = _loom.build_wasm_artifact_evidence(manifest, artifact_src, artifact_wasm)
         artifact_evidence = artifact_evidence_result["evidence"]
         verified_artifact_evidence = _loom.verify_wasm_artifact_evidence(artifact_evidence, manifest, artifact_src, artifact_wasm)
@@ -2054,6 +2086,9 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and len(artifact_binding["trust_receipt_sha256"]) == 64
             and tampered_artifact["valid"] is False
             and any(item["code"] == "artifact-mismatch" for item in tampered_artifact["findings"])
+            and tampered_v2_wasm != artifact_wasm
+            and tampered_v2_artifact["valid"] is False
+            and any(item["code"] == "invalid-trust-receipt-v2" for item in tampered_v2_artifact["findings"])
             and artifact_evidence_result["schema"] == "loom-gate-wasm-artifact-evidence-validation/v1"
             and artifact_evidence_result["valid"] is True
             and artifact_evidence["kind"] == "wasm-artifact"
