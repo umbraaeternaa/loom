@@ -47,7 +47,8 @@ experimental, and what LOOM does not claim yet.
   handoff contracts, and read-only WASM artifact binding.
 - Gate artifact evidence v1 and receipt v2 can carry a reverified exact
   source/WASM binding without changing manifest v1/v2, observation v1, receipt
-  v1, or operator approval semantics.
+  v1, or operator approval semantics. Source Equivalence v1 requires complete
+  byte identity with deterministic recompilation before artifact binding.
 - Deterministic property fuzz smoke is part of the citadel.
 
 ## Experimental or bounded

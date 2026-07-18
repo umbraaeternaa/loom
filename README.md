@@ -113,7 +113,9 @@ the checker-visible `roles`, `sub`, and `needs` policy clauses without changing
 receipt v1 or WASM ABI v1.
 The separate [`WASM artifact binding v1`](docs/gate_wasm_artifact_v1.md) binds
 the exact source, WASM bytes, trust receipt, and Gate manifest hash without
-replacing operator approval.
+replacing operator approval. Before binding, [`WASM Source Equivalence v1`](docs/wasm_source_equivalence_v1.md)
+recompiles the source and requires complete byte-for-byte identity with the
+supplied module, so valid receipts cannot conceal a changed function body.
 
 Certified recursion can also use [`Proven Value Bounds v1`](docs/proven_value_bounds_v1.md):
 the checker derives conservative i31 and list-length upper bounds through

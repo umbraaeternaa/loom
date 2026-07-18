@@ -2863,6 +2863,33 @@ def verify_wasm_trust_receipt_v2(program_src, wasm_bytes):
     return {"valid": not findings, "receipt": receipt, "findings": findings}
 
 
+def verify_wasm_source_equivalence(program_src, wasm_bytes):
+    """Recompile source and compare the complete deterministic WASM artifact."""
+    findings = []
+    source_sha256 = hashlib.sha256(program_src.encode("utf-8")).hexdigest() if isinstance(program_src, str) else None
+    if not isinstance(program_src, str):
+        findings.append("source must be a string")
+    actual = bytes(wasm_bytes) if isinstance(wasm_bytes, (bytes, bytearray)) else None
+    if actual is None:
+        findings.append("wasm_bytes must be bytes or bytearray")
+    expected = None
+    if not findings:
+        try:
+            expected = compile_wasm(program_src)
+        except LoomError as exc:
+            findings.append("source compiler: " + str(exc))
+    if expected is not None and actual != expected:
+        findings.append("WASM bytes do not match deterministic compilation of the supplied source")
+    return {
+        "schema": "loom-wasm-source-equivalence/v1",
+        "valid": not findings,
+        "source_sha256": source_sha256,
+        "expected_wasm_sha256": hashlib.sha256(expected).hexdigest() if expected is not None else None,
+        "actual_wasm_sha256": hashlib.sha256(actual).hexdigest() if actual is not None else None,
+        "findings": findings,
+    }
+
+
 def _artifact_json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -2888,6 +2915,9 @@ def build_wasm_artifact_binding(manifest, program_src, wasm_bytes):
     verification_v2 = verify_wasm_trust_receipt_v2(program_src, wasm_bytes)
     if not verification_v2["valid"]:
         return _artifact_validation(None, [{"path": "wasm", "code": "invalid-trust-receipt-v2", "message": finding} for finding in verification_v2["findings"]])
+    equivalence = verify_wasm_source_equivalence(program_src, wasm_bytes)
+    if not equivalence["valid"]:
+        return _artifact_validation(None, [{"path": "wasm", "code": "wasm-source-mismatch", "message": finding} for finding in equivalence["findings"]])
     receipt = verification["receipt"]
     receipt_bytes = _artifact_json(receipt).encode("utf-8")
     binding = {
@@ -2920,6 +2950,8 @@ def verify_wasm_artifact_binding(binding, manifest, program_src, wasm_bytes):
     findings.extend({"path": "wasm", "code": "invalid-trust-receipt", "message": finding} for finding in verification["findings"])
     verification_v2 = verify_wasm_trust_receipt_v2(program_src, wasm_bytes)
     findings.extend({"path": "wasm", "code": "invalid-trust-receipt-v2", "message": finding} for finding in verification_v2["findings"])
+    equivalence = verify_wasm_source_equivalence(program_src, wasm_bytes)
+    findings.extend({"path": "wasm", "code": "wasm-source-mismatch", "message": finding} for finding in equivalence["findings"])
     if not findings:
         receipt = verification["receipt"]
         expected = {

@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import loom as _loom
 from loom_frontend import ASM_INTRINSICS
-from loom import parse, parse_spans, tokenize, tokenize_spans, check, run_call, compile_py, run_compiled, run_js, compile_js, compile_wasm, verify_wasm_trust_receipt, verify_wasm_trust_receipt_v2, run_wasm, emit_wat, LoomError, _WASM_ABI_VERSION
+from loom import parse, parse_spans, tokenize, tokenize_spans, check, run_call, compile_py, run_compiled, run_js, compile_js, compile_wasm, verify_wasm_trust_receipt, verify_wasm_trust_receipt_v2, verify_wasm_source_equivalence, run_wasm, emit_wat, LoomError, _WASM_ABI_VERSION
 
 def _context_chain_source(depth=65):
     parts = [
@@ -1631,12 +1631,16 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "custom section loom.trust.v1" in emit_wat(receipt_program)
         )
         verified_receipt = verify_wasm_trust_receipt(receipt_program, receipt_wasm)
+        verified_equivalence = verify_wasm_source_equivalence(receipt_program, receipt_wasm)
         source_mismatch = verify_wasm_trust_receipt(
             receipt_program.replace("reviewer 7", "reviewer 8"), receipt_wasm
         )
         trust_receipt_ok = (
             trust_receipt_ok
             and verified_receipt["valid"] is True
+            and verified_equivalence["schema"] == "loom-wasm-source-equivalence/v1"
+            and verified_equivalence["valid"] is True
+            and verified_equivalence["expected_wasm_sha256"] == verified_equivalence["actual_wasm_sha256"]
             and source_mismatch["valid"] is False
             and any("does not match the supplied source" in finding for finding in source_mismatch["findings"])
         )
@@ -2038,6 +2042,27 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             b'"schema":"loom-trust-provenance/v2"', b'"schema":"loom-trust-provenance/x2"', 1
         )
         tampered_v2_artifact = _loom.build_wasm_artifact_binding(manifest, artifact_src, tampered_v2_wasm)
+
+        def _tamper_artifact_code_const(wasm_bytes):
+            data = bytearray(wasm_bytes); pos = 8
+            while pos < len(data):
+                section = data[pos]; size, body = _read_uleb(data, pos + 1); end = body + size
+                if section == 10:
+                    marker = data.find(b"\x41\x0e\x0b", body, end)  # tagged i31 7, then end
+                    if marker < 0:
+                        raise AssertionError("artifact fixture lost its code constant")
+                    data[marker + 1] = 0x10                         # tagged i31 8, same valid encoding width
+                    return bytes(data)
+                pos = end
+            raise AssertionError("artifact fixture lost its code section")
+
+        tampered_body_wasm = _tamper_artifact_code_const(artifact_wasm)
+        tampered_body_v1 = verify_wasm_trust_receipt(artifact_src, tampered_body_wasm)
+        tampered_body_v2 = verify_wasm_trust_receipt_v2(artifact_src, tampered_body_wasm)
+        tampered_body_equivalence = verify_wasm_source_equivalence(artifact_src, tampered_body_wasm)
+        tampered_body_artifact = _loom.build_wasm_artifact_binding(manifest, artifact_src, tampered_body_wasm)
+        body_validation_js = "process.exit(WebAssembly.validate(Uint8Array.from([" + ",".join(str(b) for b in tampered_body_wasm) + "]))?0:1)"
+        tampered_body_is_valid_wasm = subprocess.run(["node", "-e", body_validation_js], capture_output=True, text=True).returncode == 0
         artifact_evidence_result = _loom.build_wasm_artifact_evidence(manifest, artifact_src, artifact_wasm)
         artifact_evidence = artifact_evidence_result["evidence"]
         verified_artifact_evidence = _loom.verify_wasm_artifact_evidence(artifact_evidence, manifest, artifact_src, artifact_wasm)
@@ -2089,6 +2114,15 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and tampered_v2_wasm != artifact_wasm
             and tampered_v2_artifact["valid"] is False
             and any(item["code"] == "invalid-trust-receipt-v2" for item in tampered_v2_artifact["findings"])
+            and tampered_body_wasm != artifact_wasm
+            and tampered_body_is_valid_wasm
+            and tampered_body_v1["valid"] is True
+            and tampered_body_v2["valid"] is True
+            and tampered_body_equivalence["valid"] is False
+            and tampered_body_equivalence["expected_wasm_sha256"] != tampered_body_equivalence["actual_wasm_sha256"]
+            and any("do not match deterministic compilation" in finding for finding in tampered_body_equivalence["findings"])
+            and tampered_body_artifact["valid"] is False
+            and any(item["code"] == "wasm-source-mismatch" for item in tampered_body_artifact["findings"])
             and artifact_evidence_result["schema"] == "loom-gate-wasm-artifact-evidence-validation/v1"
             and artifact_evidence_result["valid"] is True
             and artifact_evidence["kind"] == "wasm-artifact"

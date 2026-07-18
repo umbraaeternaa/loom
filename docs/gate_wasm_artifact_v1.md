@@ -4,7 +4,7 @@ Status: read-only, deterministic, advisory, and non-authorizing.
 
 `loom.build_wasm_artifact_binding(manifest, source, wasm_bytes)` binds one
 validated Gate manifest to one exact LOOM source string, one emitted WASM byte
-sequence, and its `loom.trust.v1` receipt. The result schema is
+sequence verified by deterministic recompilation, and its trust receipts. The result schema is
 `loom-gate-wasm-artifact-validation/v1`.
 
 ## Binding shape
@@ -26,8 +26,10 @@ The trust receipt digest is over canonical JSON for the verified
 `loom.trust.v1` receipt. The ABI version is copied from that receipt.
 
 `loom.verify_wasm_artifact_binding(binding, manifest, source, wasm_bytes)`
-revalidates the manifest, trust receipt, all hashes, schema, and closed binding
-fields. A changed source, binary, receipt, manifest, or binding is rejected.
+revalidates the manifest, both trust receipts, complete
+[Source Equivalence v1](wasm_source_equivalence_v1.md), all hashes, schema, and
+closed binding fields. A changed source, binary body, receipt, manifest, or
+binding is rejected.
 
 ## Gate evidence and receipt v2
 
@@ -61,9 +63,9 @@ and WASM bytes to the v2 receipt API.
 - The binding is content-addressing, not a signature and not publisher identity.
 - It does not execute WASM, read host state, claim an operator approval, or
   grant capabilities.
-- It does not prove that arbitrary WASM function bodies are semantically
-  equivalent to source; it proves only the declared source/receipt/binary/hash
-  relationship.
+- It proves byte identity with the current deterministic compiler output for
+  the exact source. It does not prove that the compiler itself is semantically
+  correct.
 - Existing closed Gate manifest v1/v2 schemas are unchanged. A future Gate
   workflow may require this binding as an explicit evidence or artifact lane.
 - Gate observation v1 and receipt v1 remain unchanged. The v2 artifact lane

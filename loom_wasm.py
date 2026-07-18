@@ -801,6 +801,33 @@ def verify_trust_receipt_v2(program_src, wasm_bytes, frontend):
     return {"valid": not findings, "receipt": receipt, "findings": findings}
 
 
+def verify_source_equivalence(program_src, wasm_bytes, frontend):
+    """Recompile source and compare the complete deterministic WASM artifact."""
+    findings = []
+    source_sha256 = hashlib.sha256(program_src.encode("utf-8")).hexdigest() if isinstance(program_src, str) else None
+    if not isinstance(program_src, str):
+        findings.append("source must be a string")
+    actual = bytes(wasm_bytes) if isinstance(wasm_bytes, (bytes, bytearray)) else None
+    if actual is None:
+        findings.append("wasm_bytes must be bytes or bytearray")
+    expected = None
+    if not findings:
+        try:
+            expected = compile_wasm(program_src, frontend)
+        except frontend.error as exc:
+            findings.append("source compiler: " + str(exc))
+    if expected is not None and actual != expected:
+        findings.append("WASM bytes do not match deterministic compilation of the supplied source")
+    return {
+        "schema": "loom-wasm-source-equivalence/v1",
+        "valid": not findings,
+        "source_sha256": source_sha256,
+        "expected_wasm_sha256": hashlib.sha256(expected).hexdigest() if expected is not None else None,
+        "actual_wasm_sha256": hashlib.sha256(actual).hexdigest() if actual is not None else None,
+        "findings": findings,
+    }
+
+
 def _wasm_source_maps(program_src, frontend, defs):
     node_path_by_id = {}
     span_by_path = {}

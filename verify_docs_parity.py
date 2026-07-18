@@ -23,6 +23,7 @@ BOUNDS_DOC = ROOT / "docs" / "proven_value_bounds_v1.md"
 CONTEXTUAL_BOUNDS_DOC = ROOT / "docs" / "contextual_value_bounds_v2.md"
 WASM_TRUST_DOC = ROOT / "docs" / "wasm_trust_provenance_v1.md"
 WASM_TRUST_V2_DOC = ROOT / "docs" / "wasm_trust_provenance_v2.md"
+WASM_EQUIVALENCE_DOC = ROOT / "docs" / "wasm_source_equivalence_v1.md"
 WASM_ARTIFACT_DOC = ROOT / "docs" / "gate_wasm_artifact_v1.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
 
@@ -447,6 +448,28 @@ def _check_wasm_trust_v2_doc() -> None:
         raise SystemExit("docs parity: WASM trust/provenance receipt v2 contract drift: missing " + ", ".join(missing))
 
 
+def _check_wasm_equivalence_doc() -> None:
+    text = WASM_EQUIVALENCE_DOC.read_text()
+    words = " ".join(text.split())
+    required = (
+        "LOOM WASM Source Equivalence v1",
+        "normative read-only verification contract",
+        "loom.verify_wasm_source_equivalence(source, wasm_bytes)",
+        "current deterministic LOOM compiler",
+        "complete WASM byte sequence",
+        "loom-wasm-source-equivalence/v1",
+        "expected_wasm_sha256",
+        "actual_wasm_sha256",
+        "wasm-source-mismatch",
+        "does not execute the supplied module",
+        "does not prove that the compiler implementation is semantically correct",
+        "changes no WASM ABI v1",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: WASM source equivalence contract drift: missing " + ", ".join(missing))
+
+
 def _check_wasm_artifact_doc() -> None:
     text = WASM_ARTIFACT_DOC.read_text()
     words = " ".join(text.split())
@@ -460,6 +483,8 @@ def _check_wasm_artifact_doc() -> None:
         "wasm_sha256",
         "trust_receipt_sha256",
         "loom.verify_wasm_artifact_binding(binding, manifest, source, wasm_bytes)",
+        "Source Equivalence v1",
+        "byte identity with the current deterministic compiler output",
         "loom.build_wasm_artifact_evidence(manifest, source, wasm_bytes)",
         "loom-gate-wasm-artifact-evidence/v1",
         "loom.build_wasm_artifact_receipt(manifest, observation, source, wasm_bytes)",
@@ -521,6 +546,7 @@ def main() -> int:
     _check_contextual_bounds_doc()
     _check_wasm_trust_doc()
     _check_wasm_trust_v2_doc()
+    _check_wasm_equivalence_doc()
     _check_wasm_artifact_doc()
     _check_secret_credential_policy_doc()
     _check_pyodide_import_boundary()
