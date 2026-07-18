@@ -4936,7 +4936,7 @@ def build_about():
         "wasm_abi_version": _WASM_ABI_VERSION,
         "i31_bits": INT_BITS,
         "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],
-        "commands": ["about", "release-check", "help", "examples", "doctor", "check", "run", "build", "audit", "source-map", "gate", "gate-workflow"],
+        "commands": ["about", "release-check", "help", "examples", "doctor", "check", "run", "build", "audit", "source-map", "gate", "gate-workflow", "gate-workflow-v3"],
     }
 
 
@@ -4986,7 +4986,7 @@ _EXAMPLES = (
 
 
 def _usage():
-    return "usage: python3 loom.py <about|release-check|help|examples|doctor|check|run|build|audit|source-map|gate|gate-workflow> FILE [call] [--target py|js|wat] [--format text|json] [--dry-run]"
+    return "usage: python3 loom.py <about|release-check|help|examples|doctor|check|run|build|audit|source-map|gate|gate-workflow|gate-workflow-v3> FILE [call] [--target py|js|wat] [--format text|json] [--dry-run]"
 
 
 def _help(topic=None):
@@ -5036,7 +5036,7 @@ def _help(topic=None):
     print("  release-check         run the public verification checklist")
     print("")
     print("Gate commands:")
-    print("  gate, gate-workflow")
+    print("  gate, gate-workflow, gate-workflow-v3")
     print("")
     print(_usage())
     return 0
@@ -5357,10 +5357,10 @@ def _cli(argv):
             for item in diagnostics["secret_lanes"]: print(f"  [{item['disposition']}] {item['class']} at {item['field']} ({item['code']})")
         else: print("secret lanes: none")
         return 1 if diagnostics["decision"] == "reject" else 0
-    if cmd == "gate-workflow":
+    if cmd in ("gate-workflow", "gate-workflow-v3"):
         try: manifest = json.loads(src)
         except json.JSONDecodeError as e: print("invalid Gate manifest JSON: " + str(e)); return 2
-        workflow = build_gate_workflow(manifest)
+        workflow = build_gate_workflow_v3(manifest) if cmd == "gate-workflow-v3" else build_gate_workflow(manifest)
         if output_format == "json":
             _emit_verdict_json(workflow); return 0 if workflow["valid"] and workflow["decision"] != "reject" else 1
         print("LOOM GATE WORKFLOW - bounded AI action route")

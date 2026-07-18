@@ -3141,6 +3141,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "examples" in about_json["commands"]
             and "doctor" in about_json["commands"]
             and "gate-workflow" in about_json["commands"]
+            and "gate-workflow-v3" in about_json["commands"]
         )
         ok += about_contract_ok
         print(f"  {'ok  ' if about_contract_ok else 'FAIL'} cli/api: machine-readable about contract v1")
@@ -3388,6 +3389,11 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             with contextlib.redirect_stdout(cli_out):
                 cli_workflow_code = _loom._cli(["gate-workflow", str(manifest_file), "--format=json"])
             cli_workflow = json.loads(cli_out.getvalue())
+            cli_v3_out = io.StringIO()
+            with contextlib.redirect_stdout(cli_v3_out):
+                cli_v3_code = _loom._cli(["gate-workflow-v3", str(manifest_file), "--format=json"])
+            cli_v3_workflow = json.loads(cli_v3_out.getvalue())
+        expected_v3 = _loom.build_gate_workflow_v3(workflow_manifest)
         workflow_ok = (
             bad_dash_rejected
             and cli_workflow_code == 0
@@ -3399,6 +3405,13 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and [step["id"] for step in workflow["steps"]] == ["approval-request", "claim", "plan", "attempt-dry-run", "finish"]
             and all("command" in step for step in workflow["steps"])
             and "gate-process-finish" in workflow["steps"][-1]["command"]
+            and cli_v3_code == 0
+            and cli_v3_workflow == expected_v3
+            and cli_v3_workflow["schema"] == "loom-gate-workflow/v3"
+            and cli_v3_workflow["compiler_evidence"]["surface"] in {"modular-python", "standalone-python"}
+            and [step["id"] for step in cli_v3_workflow["steps"]][-4:] == [
+                "artifact-evidence", "compiler-evidence", "compiler-receipt", "finish"
+            ]
         )
         ok += workflow_ok
         print(f"  {'ok  ' if workflow_ok else 'FAIL'} cli/api: Gate workflow route v1")
@@ -3457,7 +3470,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "489-gate-artifact-workflow-v2")' in play
+            and 'bundleUrl.searchParams.set("v", "489-gate-compiler-workflow-v3")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -3597,11 +3610,19 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             'id="bWorkflow"' in play
             and "Gate workflow" in play
             and "function renderGateWorkflow(workflow)" in play
-            and "loom.build_gate_workflow_v2(_manifest)" in play
-            and "loom-gate-workflow/v2" in play
+            and "loom.build_gate_workflow_v3(_manifest)" in play
+            and "loom-gate-workflow/v3" in play
             and "artifact lane:" in play
             and "artifact-evidence" in play
             and "receipt contract:" in play
+            and "compiler lane:" in play
+            and "compiler surface:" in play
+            and "standalone-python" in play
+            and "component input:" in play
+            and "trusted-host-exact-bytes" in play
+            and "v3 receipt contract:" in play
+            and "compiler-evidence" in play
+            and "compiler-receipt" in play
             and "Review and plan a bounded LOOM code change" in play
             and "allowed now: operator approval request only" in play
             and "blocked until approval:" in play

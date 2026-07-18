@@ -442,6 +442,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
             "source-map",
             "gate",
             "gate-workflow",
+            "gate-workflow-v3",
             "gate-request",
             "gate-claim",
             "gate-finish",
@@ -536,6 +537,9 @@ def build_gate_workflow_v3(manifest):
         ]
         workflow["steps"][artifact_index + 1:artifact_index + 1] = compiler_steps
     return workflow
+
+
+_CLI_FRONTEND.metadata["gate_workflow_v3_builder"] = build_gate_workflow_v3
 
 
 def validate_manifest(manifest):

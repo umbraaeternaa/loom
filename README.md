@@ -251,6 +251,7 @@ python3 loom.py release-check                  # run the public release verifica
 python3 loom.py about --format json             # machine-readable LOOM capability/canon summary
 python3 loom.py gate manifest.json             # redacted Gate manifest diagnostics
 python3 loom.py gate-workflow manifest.json --format json  # safe next-step route for an AI/host action
+python3 loom.py gate-workflow-v3 manifest.json --format json  # route with artifact + exact compiler evidence
 python3 loom.py gate-request manifest.json --nonce <64-hex> --format json  # operator approval request
 python3 loom.py gate-claim manifest.json challenge.json approval.json --format json  # reserve signed approval before execution
 python3 loom.py gate-finish manifest.json observation.json challenge.json approval.json claim.json --format json  # finalize claimed execution
@@ -264,8 +265,9 @@ python3 loom.py check examples/demo.loom --format json  # stable machine verdict
 ```
 
 `examples/bounded_ai_action_manifest.json` is a checked manifest fixture for a
-Codex/Cloud Code style bounded AI action. It drives `gate-workflow` through the
-same operator-required route the dashboard displays.
+Codex/Cloud Code style bounded AI action. It drives `gate-workflow` or the
+additive `gate-workflow-v3` through the same operator-required route the
+dashboard displays.
 
 `check` and `audit` accept `--format json` and emit the same deterministic
 `loom-verdict/v1` document. The public `loom.build_verdict(source)` API returns

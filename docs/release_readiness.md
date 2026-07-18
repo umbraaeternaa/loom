@@ -56,6 +56,8 @@ experimental, and what LOOM does not claim yet.
   Source Equivalence v1 while fixing identity to the running implementation
   surface. Compiler Receipt v3 composes that evidence with Receipt v2 and
   exposes Workflow v3 without changing earlier receipt or workflow schemas.
+  `loom gate-workflow-v3` and the Playground expose this route without
+  collecting components, signing, approving, or executing host actions.
 - Deterministic property fuzz smoke is part of the citadel.
 
 ## Experimental or bounded

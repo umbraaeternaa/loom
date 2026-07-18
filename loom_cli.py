@@ -31,6 +31,7 @@ _COMMANDS = (
     "source-map",
     "gate",
     "gate-workflow",
+    "gate-workflow-v3",
     "gate-request",
     "gate-claim",
     "gate-finish",
@@ -128,7 +129,7 @@ def _help(frontend, topic=None):
     print("  release-check         run the public verification checklist")
     print("")
     print("Gate commands:")
-    print("  gate, gate-workflow, gate-request, gate-claim, gate-finish")
+    print("  gate, gate-workflow, gate-workflow-v3, gate-request, gate-claim, gate-finish")
     print("  gate-plan, gate-exec-finish, gate-attempt, gate-process-attempt, gate-process-finish")
     print("")
     print(_usage())
@@ -481,14 +482,19 @@ def build_gate_workflow(manifest):
     return workflow
 
 
-def _gate_workflow(frontend, src, output_format="text"):
-    del frontend
+def _gate_workflow(frontend, src, output_format="text", version=1):
     try:
         manifest = json.loads(src)
     except json.JSONDecodeError as err:
         print("invalid Gate manifest JSON: " + str(err))
         return 2
-    workflow = build_gate_workflow(manifest)
+    builder = build_gate_workflow
+    if version == 3:
+        builder = (getattr(frontend, "metadata", {}) or {}).get("gate_workflow_v3_builder")
+        if not callable(builder):
+            print("Gate workflow v3 is unavailable in this runtime")
+            return 2
+    workflow = builder(manifest)
     if output_format == "json":
         _emit_json(workflow)
         return 0 if workflow["valid"] and workflow["decision"] != "reject" else 1
@@ -869,6 +875,8 @@ def cli(argv, frontend):
         return _gate(frontend, src, output_format)
     if cmd == "gate-workflow":
         return _gate_workflow(frontend, src, output_format)
+    if cmd == "gate-workflow-v3":
+        return _gate_workflow(frontend, src, output_format, version=3)
     if cmd == "gate-request":
         return _gate_request(frontend, src, flags.get("nonce"), output_format)
     if cmd == "run":

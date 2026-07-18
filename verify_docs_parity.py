@@ -35,7 +35,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "489-gate-artifact-workflow-v2")',
+        'bundleUrl.searchParams.set("v", "489-gate-compiler-workflow-v3")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -92,6 +92,14 @@ def _check_playground_loader() -> None:
         "SecretExfil",
         "CredentialAccess",
         "raw paths and secret values are not displayed",
+        "loom.build_gate_workflow_v3(_manifest)",
+        "loom-gate-workflow/v3",
+        "compiler lane:",
+        "compiler surface:",
+        "component input:",
+        "trusted-host-exact-bytes",
+        "compiler-evidence",
+        "compiler-receipt",
     )
     missing = [needle for needle in required if needle not in text]
     if missing:

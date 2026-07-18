@@ -319,8 +319,24 @@ function renderGateDiagnostics(diagnostics){
   }
   return s;
 }
+const GATE_WORKFLOW_V3_CONTRACT = Object.freeze({
+  schema: "loom-gate-workflow/v3",
+  surface: "standalone-python",
+  componentInput: "trusted-host-exact-bytes",
+  compilerSteps: Object.freeze(["compiler-evidence", "compiler-receipt"]),
+});
+function assertGateWorkflowV3(workflow){
+  const compiler = workflow && workflow.compiler_evidence;
+  const stepIds = (workflow && workflow.steps || []).map(step => step.id);
+  if (!workflow || workflow.schema !== GATE_WORKFLOW_V3_CONTRACT.schema ||
+      !compiler || compiler.surface !== GATE_WORKFLOW_V3_CONTRACT.surface ||
+      compiler.component_input !== GATE_WORKFLOW_V3_CONTRACT.componentInput ||
+      !GATE_WORKFLOW_V3_CONTRACT.compilerSteps.every(id => stepIds.includes(id))) {
+    throw new Error("published Workflow v3 contract drift");
+  }
+}
 function renderGateWorkflow(workflow){
-  const workflowSchema = workflow.schema === "loom-gate-workflow/v2" ? "loom-gate-workflow/v2" : (workflow.schema || "loom-gate-workflow/v1");
+  const workflowSchema = workflow.schema || "loom-gate-workflow/v1";
   const artifactStepId = "artifact-evidence";
   let s = "<span class='v-eff'>" + esc(workflowSchema) + "</span>\n";
   s += "decision: <span class='" + (workflow.decision === "reject" ? "v-bad" : "v-ok") + "'>" + esc(workflow.decision) + "</span>\n";
@@ -331,6 +347,13 @@ function renderGateWorkflow(workflow){
     s += "artifact lane: <span class='v-key'>" + esc(workflow.artifact_evidence.kind) + "</span> · " +
          (workflow.artifact_evidence.required ? "required" : "optional") + "\n";
     s += "receipt contract: <span class='v-key'>" + esc(workflow.artifact_evidence.receipt_api) + "</span>\n";
+  }
+  if (workflow.compiler_evidence) {
+    s += "compiler lane: <span class='v-key'>" + esc(workflow.compiler_evidence.kind) + "</span> · " +
+         (workflow.compiler_evidence.required ? "required" : "optional") + "\n";
+    s += "compiler surface: <span class='v-key'>" + esc(workflow.compiler_evidence.surface) + "</span>\n";
+    s += "component input: <span class='v-key'>" + esc(workflow.compiler_evidence.component_input) + "</span>\n";
+    s += "v3 receipt contract: <span class='v-key'>" + esc(workflow.compiler_evidence.receipt_api) + "</span>\n";
   }
   const steps = workflow.steps || [];
   const stepIds = steps.map(step => step.id);
@@ -404,7 +427,7 @@ async function boot(){
     pyodide = await loadPyodide();
     setStatus("loading LOOM…");
     const bundleUrl = new URL("./loom.py", location.href);
-  bundleUrl.searchParams.set("v", "489-gate-artifact-workflow-v2");
+  bundleUrl.searchParams.set("v", "489-gate-compiler-workflow-v3");
     const response = await fetch(bundleUrl, {cache: "no-store"});
     if (!response.ok) throw new Error("LOOM bundle HTTP " + response.status);
     const code = await response.text();
@@ -722,9 +745,10 @@ _manifest = {
     "actions": ["read", "process"],
     "evidence_required": [],
 }
-_r = json.dumps(loom.build_gate_workflow_v2(_manifest))
+_r = json.dumps(loom.build_gate_workflow_v3(_manifest))
 _r
 `);
+    assertGateWorkflowV3(workflow);
     show(renderGateWorkflow(workflow));
   } catch(e){ show("<span class='v-bad'>Gate workflow error</span>\n" + esc(e)); }
 };
