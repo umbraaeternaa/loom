@@ -1982,7 +1982,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             "read_paths": ["/Users/macbook/Projects/loom"],
             "write_paths": ["/Users/macbook/Projects/loom/loom_gate.py", "/Users/macbook/Projects/loom/run_tests.py"],
             "actions": ["read", "write", "test", "git-commit"],
-            "evidence_required": ["syntax", "citadel", "docs-parity", "git-sync"],
+            "evidence_required": ["syntax", "citadel", "docs-parity", "git-clean", "git-sync"],
         }
         reordered = json.loads(json.dumps(manifest))
         reordered["actions"].reverse()
@@ -2006,6 +2006,34 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         tampered_binding = dict(artifact_binding or {})
         tampered_binding["wasm_sha256"] = "0" * 64
         tampered_artifact = _loom.verify_wasm_artifact_binding(tampered_binding, manifest, artifact_src, artifact_wasm)
+        artifact_evidence_result = _loom.build_wasm_artifact_evidence(manifest, artifact_src, artifact_wasm)
+        artifact_evidence = artifact_evidence_result["evidence"]
+        verified_artifact_evidence = _loom.verify_wasm_artifact_evidence(artifact_evidence, manifest, artifact_src, artifact_wasm)
+        tampered_evidence = json.loads(json.dumps(artifact_evidence))
+        tampered_evidence["binding_sha256"] = "0" * 64
+        tampered_evidence_result = _loom.verify_wasm_artifact_evidence(tampered_evidence, manifest, artifact_src, artifact_wasm)
+        artifact_observation = {
+            "schema": "loom-gate-observation/v1",
+            "result": "completed",
+            "repositories": [{"root": "/Users/macbook/Projects/loom", "before_head": "cecfaf8", "after_head": "abcdef12"}],
+            "files_changed": ["/Users/macbook/Projects/loom/loom_gate.py"],
+            "actions_observed": ["read", "write", "test", "git-commit"],
+            "evidence": [
+                {"kind": "syntax", "status": "pass", "detail": "PASS syntax"},
+                {"kind": "citadel", "status": "pass", "detail": "489/489"},
+                {"kind": "docs-parity", "status": "pass", "detail": "PASS docs parity"},
+                {"kind": "git-clean", "status": "pass", "detail": "clean"},
+                {"kind": "git-sync", "status": "pass", "detail": "HEAD == origin/main"},
+                {"kind": "operator-approval", "status": "pass", "detail": "manifest-bound approval observed"},
+            ],
+        }
+        artifact_receipt_result = _loom.build_wasm_artifact_receipt(manifest, artifact_observation, artifact_src, artifact_wasm)
+        artifact_receipt = artifact_receipt_result["receipt"]
+        verified_artifact_receipt = _loom.verify_wasm_artifact_receipt(artifact_receipt, manifest, artifact_observation, artifact_src, artifact_wasm)
+        tampered_receipt = json.loads(json.dumps(artifact_receipt))
+        tampered_receipt["artifact_evidence"]["binding"]["wasm_sha256"] = "0" * 64
+        tampered_receipt_result = _loom.verify_wasm_artifact_receipt(tampered_receipt, manifest, artifact_observation, artifact_src, artifact_wasm)
+        artifact_workflow = _loom.build_gate_workflow_v2(manifest)
         manifest_contract_ok = (
             valid["valid"] is True
             and valid["advisory"] is True
@@ -2026,6 +2054,24 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and len(artifact_binding["trust_receipt_sha256"]) == 64
             and tampered_artifact["valid"] is False
             and any(item["code"] == "artifact-mismatch" for item in tampered_artifact["findings"])
+            and artifact_evidence_result["schema"] == "loom-gate-wasm-artifact-evidence-validation/v1"
+            and artifact_evidence_result["valid"] is True
+            and artifact_evidence["kind"] == "wasm-artifact"
+            and len(artifact_evidence["binding_sha256"]) == 64
+            and verified_artifact_evidence["valid"] is True
+            and tampered_evidence_result["valid"] is False
+            and any(item["code"] == "artifact-evidence-mismatch" for item in tampered_evidence_result["findings"])
+            and artifact_receipt_result["schema"] == "loom-gate-receipt-v2-validation/v1"
+            and artifact_receipt_result["valid"] is True
+            and artifact_receipt["schema"] == "loom-gate-receipt/v2"
+            and artifact_receipt["artifact_evidence"] == artifact_evidence
+            and verified_artifact_receipt["valid"] is True
+            and tampered_receipt_result["valid"] is False
+            and any(item["code"] == "receipt-mismatch" for item in tampered_receipt_result["findings"])
+            and artifact_workflow["schema"] == "loom-gate-workflow/v2"
+            and artifact_workflow["artifact_evidence"]["required"] is True
+            and "artifact-evidence" in [step["id"] for step in artifact_workflow["steps"]]
+            and artifact_workflow["steps"][-2]["id"] == "artifact-evidence"
         )
         ok += manifest_contract_ok
         print(f"  {'ok  ' if manifest_contract_ok else 'FAIL'} gate: deterministic fail-closed task manifest v1")

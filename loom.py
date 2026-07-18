@@ -243,6 +243,48 @@ def verify_wasm_artifact_binding(binding, manifest, program_src, wasm_bytes):
             findings.append({"path": "binding", "code": "artifact-mismatch", "message": "artifact binding does not match the supplied manifest, source, or WASM"})
     return _artifact_validation(None if findings else binding, findings)
 
+
+def _artifact_evidence_validation(evidence, findings):
+    return {
+        "schema": "loom-gate-wasm-artifact-evidence-validation/v1",
+        "valid": not findings,
+        "advisory": True,
+        "evidence": evidence if not findings else None,
+        "findings": findings,
+    }
+
+
+def build_wasm_artifact_evidence(manifest, program_src, wasm_bytes):
+    """Build a verified, read-only WASM artifact evidence envelope."""
+    binding_result = build_wasm_artifact_binding(manifest, program_src, wasm_bytes)
+    findings = list(binding_result["findings"])
+    if findings:
+        return _artifact_evidence_validation(None, findings)
+    binding = binding_result["binding"]
+    evidence = {
+        "schema": "loom-gate-wasm-artifact-evidence/v1",
+        "kind": "wasm-artifact",
+        "status": "pass",
+        "manifest_sha256": binding["manifest_sha256"],
+        "binding": binding,
+        "binding_sha256": hashlib.sha256(_artifact_json(binding).encode("utf-8")).hexdigest(),
+    }
+    return _artifact_evidence_validation(evidence, [])
+
+
+def verify_wasm_artifact_evidence(evidence, manifest, program_src, wasm_bytes):
+    """Verify an artifact evidence envelope against its exact source and WASM bytes."""
+    expected = build_wasm_artifact_evidence(manifest, program_src, wasm_bytes)
+    if not expected["valid"]:
+        return expected
+    if evidence != expected["evidence"]:
+        return _artifact_evidence_validation(None, [{
+            "path": "evidence",
+            "code": "artifact-evidence-mismatch",
+            "message": "artifact evidence does not match the supplied manifest, source, or WASM",
+        }])
+    return _artifact_evidence_validation(evidence, [])
+
 def emit_wat(program_src):
     return _loom_wasm.emit_wat(program_src, _WASM_FRONTEND)
 
@@ -305,6 +347,32 @@ def build_gate_workflow(manifest):
     return _loom_cli.build_gate_workflow(manifest)
 
 
+def build_gate_workflow_v2(manifest):
+    """Return the Gate route with an explicit, verified WASM artifact lane."""
+    workflow = build_gate_workflow(manifest)
+    workflow["schema"] = "loom-gate-workflow/v2"
+    workflow["artifact_evidence"] = {
+        "schema": "loom-gate-wasm-artifact-evidence/v1",
+        "kind": "wasm-artifact",
+        "required": True,
+        "receipt_api": "build_wasm_artifact_receipt",
+    }
+    workflow["steps"] = list(workflow["steps"])
+    if workflow["valid"] and workflow["decision"] not in {"reject"}:
+        artifact_step = {
+            "id": "artifact-evidence",
+            "kind": "trusted-host",
+            "description": "Verify source, trust receipt, and exact WASM bytes before building the v2 receipt.",
+            "command": "loom.build_wasm_artifact_receipt(manifest, observation, source, wasm_bytes)",
+        }
+        if workflow["decision"] == "accept":
+            workflow["steps"].append(artifact_step)
+        else:
+            finish_index = next((index for index, step in enumerate(workflow["steps"]) if step["id"] == "finish"), len(workflow["steps"]))
+            workflow["steps"].insert(finish_index, artifact_step)
+    return workflow
+
+
 def validate_manifest(manifest):
     """Validate and hash a read-only LOOM Gate manifest v1."""
     return _loom_gate.validate_manifest(manifest)
@@ -323,6 +391,47 @@ def build_gate_diagnostics(manifest):
 def build_receipt(manifest, observation):
     """Build a deterministic advisory receipt from a manifest and observation."""
     return _loom_gate.build_receipt(manifest, observation)
+
+
+def _wasm_receipt_v2_validation(receipt, findings):
+    return {
+        "schema": "loom-gate-receipt-v2-validation/v1",
+        "valid": not findings,
+        "advisory": True,
+        "receipt": receipt if not findings else None,
+        "findings": findings,
+    }
+
+
+def build_wasm_artifact_receipt(manifest, observation, program_src, wasm_bytes):
+    """Build a Gate receipt v2 containing independently verified WASM evidence."""
+    base = build_receipt(manifest, observation)
+    artifact = build_wasm_artifact_evidence(manifest, program_src, wasm_bytes)
+    findings = list(base["findings"])
+    if not artifact["valid"]:
+        findings.extend(artifact["findings"])
+    if findings:
+        return _wasm_receipt_v2_validation(None, findings)
+    body = dict(base["receipt"])
+    body.pop("receipt_sha256", None)
+    body["schema"] = "loom-gate-receipt/v2"
+    body["artifact_evidence"] = artifact["evidence"]
+    body["receipt_sha256"] = hashlib.sha256(_artifact_json(body).encode("utf-8")).hexdigest()
+    return _wasm_receipt_v2_validation(body, [])
+
+
+def verify_wasm_artifact_receipt(receipt, manifest, observation, program_src, wasm_bytes):
+    """Verify a Gate receipt v2 against observation and exact source/WASM bytes."""
+    expected = build_wasm_artifact_receipt(manifest, observation, program_src, wasm_bytes)
+    if not expected["valid"]:
+        return expected
+    if receipt != expected["receipt"]:
+        return _wasm_receipt_v2_validation(None, [{
+            "path": "receipt",
+            "code": "receipt-mismatch",
+            "message": "WASM artifact receipt does not match the supplied Gate inputs",
+        }])
+    return _wasm_receipt_v2_validation(receipt, [])
 
 
 def collect_observation(manifest, result, actions_observed, evidence):

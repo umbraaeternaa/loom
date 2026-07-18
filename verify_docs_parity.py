@@ -421,7 +421,7 @@ def _check_wasm_artifact_doc() -> None:
     text = WASM_ARTIFACT_DOC.read_text()
     words = " ".join(text.split())
     required = (
-        "LOOM Gate WASM artifact binding v1",
+        "LOOM Gate WASM artifact binding and evidence v1",
         "loom.build_wasm_artifact_binding(manifest, source, wasm_bytes)",
         "loom-gate-wasm-artifact-validation/v1",
         "loom-gate-wasm-artifact/v1",
@@ -430,6 +430,13 @@ def _check_wasm_artifact_doc() -> None:
         "wasm_sha256",
         "trust_receipt_sha256",
         "loom.verify_wasm_artifact_binding(binding, manifest, source, wasm_bytes)",
+        "loom.build_wasm_artifact_evidence(manifest, source, wasm_bytes)",
+        "loom-gate-wasm-artifact-evidence/v1",
+        "loom.build_wasm_artifact_receipt(manifest, observation, source, wasm_bytes)",
+        "loom-gate-receipt/v2",
+        "loom.verify_wasm_artifact_receipt(...)",
+        "loom.build_gate_workflow_v2(manifest)",
+        "artifact-evidence",
         "content-addressing, not a signature",
         "does not execute WASM",
         "Existing closed Gate manifest v1/v2 schemas are unchanged",
