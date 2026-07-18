@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -36,6 +36,7 @@ loom = "loom:main"
 py-modules = [
   "loom",
   "loom_approval",
+  "loom_bounds",
   "loom_checker",
   "loom_cli",
   "loom_codegen",
@@ -45,6 +46,8 @@ py-modules = [
   "loom_gate",
   "loom_observer",
   "loom_parse",
+  "loom_provenance",
+  "loom_recursion",
   "loom_runtime",
   "loom_wasm",
 ]

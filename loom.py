@@ -166,6 +166,7 @@ def run_js(program_src, call_src):
 # ---- THIRD TARGET: WebAssembly. The implementation lives in loom_wasm.py;
 #      this module supplies the checked LOOM frontend through an explicit dependency boundary. ----
 import loom_wasm as _loom_wasm
+import loom_provenance as _loom_provenance
 
 _WASM_ABI_VERSION = _loom_wasm.WASM_ABI_VERSION
 _WASM_FRONTEND = _loom_wasm.Frontend(parse, parse_spans, check, pname, LoomError, OP, _check_call_literals, platent, _roleclauses)
@@ -181,6 +182,12 @@ def verify_wasm_trust_receipt_v2(program_src, wasm_bytes):
 
 def verify_wasm_source_equivalence(program_src, wasm_bytes):
     return _loom_wasm.verify_source_equivalence(program_src, wasm_bytes, _WASM_FRONTEND)
+
+def build_wasm_compiler_profile(surface, components):
+    return _loom_provenance.build_compiler_profile(surface, components, _WASM_ABI_VERSION)
+
+def verify_wasm_compiler_profile(profile, surface, components):
+    return _loom_provenance.verify_compiler_profile(profile, surface, components, _WASM_ABI_VERSION)
 
 
 def _artifact_json(value):

@@ -2890,6 +2890,80 @@ def verify_wasm_source_equivalence(program_src, wasm_bytes):
     }
 
 
+_COMPILER_PROFILE_SCHEMA = "loom-wasm-compiler-profile/v1"
+_COMPILER_PROFILE_VALIDATION_SCHEMA = "loom-wasm-compiler-profile-validation/v1"
+_COMPILER_PACKAGE_VERSION = "0.1.0"
+_COMPILER_SURFACES = {
+    "modular-python": (
+        "loom.py", "loom_parse.py", "loom_checker.py", "loom_bounds.py",
+        "loom_recursion.py", "loom_frontend.py", "loom_wasm.py",
+    ),
+    "standalone-python": ("docs/loom.py",),
+}
+
+
+def _compiler_profile_finding(path, code, message):
+    return {"path": path, "code": code, "message": message}
+
+
+def _compiler_profile_validation(profile, findings):
+    return {"schema": _COMPILER_PROFILE_VALIDATION_SCHEMA, "valid": not findings, "profile": profile if not findings else None, "findings": findings}
+
+
+def build_wasm_compiler_profile(surface, components):
+    """Hash exact host-supplied compiler bytes into a closed deterministic profile."""
+    findings = []
+    expected_paths = _COMPILER_SURFACES.get(surface)
+    if expected_paths is None:
+        findings.append(_compiler_profile_finding("surface", "unknown-surface", "expected modular-python or standalone-python"))
+    if not isinstance(components, dict):
+        findings.append(_compiler_profile_finding("components", "expected-object", "components must map canonical paths to exact bytes")); components = {}
+    rows = []
+    if expected_paths is not None:
+        expected = set(expected_paths)
+        for path in sorted(set(components) - expected, key=str):
+            findings.append(_compiler_profile_finding("components." + str(path), "unknown-component", "component is outside the closed compiler surface"))
+        for path in expected_paths:
+            if path not in components:
+                findings.append(_compiler_profile_finding("components." + path, "missing-component", "required compiler component is missing")); continue
+            payload = components[path]
+            if not isinstance(payload, (bytes, bytearray)):
+                findings.append(_compiler_profile_finding("components." + path, "expected-bytes", "compiler component must be exact bytes or bytearray")); continue
+            payload = bytes(payload)
+            rows.append({"path": path, "byte_length": len(payload), "sha256": hashlib.sha256(payload).hexdigest()})
+    if findings:
+        return _compiler_profile_validation(None, findings)
+    profile = {
+        "schema": _COMPILER_PROFILE_SCHEMA, "compiler": "loom-wasm", "surface": surface,
+        "package_version": _COMPILER_PACKAGE_VERSION, "wasm_abi_version": _WASM_ABI_VERSION,
+        "components": rows,
+    }
+    profile["profile_sha256"] = hashlib.sha256(_artifact_json(profile).encode("utf-8")).hexdigest()
+    return _compiler_profile_validation(profile, [])
+
+
+def verify_wasm_compiler_profile(profile, surface, components):
+    """Verify profile closure, self-hash, and exact host-supplied component bytes."""
+    findings = []
+    expected_result = build_wasm_compiler_profile(surface, components)
+    findings.extend(expected_result["findings"])
+    expected_keys = {"schema", "compiler", "surface", "package_version", "wasm_abi_version", "components", "profile_sha256"}
+    if not isinstance(profile, dict):
+        findings.append(_compiler_profile_finding("profile", "expected-object", "compiler profile must be an object")); return _compiler_profile_validation(None, findings)
+    for key in sorted(set(profile) - expected_keys, key=str): findings.append(_compiler_profile_finding("profile." + str(key), "unknown-field", "unknown compiler profile field"))
+    for key in sorted(expected_keys - set(profile)): findings.append(_compiler_profile_finding("profile." + key, "missing-field", "missing compiler profile field"))
+    if profile.get("schema") != _COMPILER_PROFILE_SCHEMA: findings.append(_compiler_profile_finding("profile.schema", "unsupported-schema", "expected " + _COMPILER_PROFILE_SCHEMA))
+    if set(profile) >= expected_keys:
+        body = {key: profile[key] for key in expected_keys if key != "profile_sha256"}
+        try: digest = hashlib.sha256(_artifact_json(body).encode("utf-8")).hexdigest()
+        except (TypeError, ValueError): findings.append(_compiler_profile_finding("profile", "non-canonical-profile", "profile fields must be canonical JSON values"))
+        else:
+            if profile.get("profile_sha256") != digest: findings.append(_compiler_profile_finding("profile.profile_sha256", "profile-hash-mismatch", "profile hash does not match its canonical fields"))
+    if expected_result["valid"] and profile != expected_result["profile"]:
+        findings.append(_compiler_profile_finding("profile", "compiler-profile-mismatch", "profile does not match the supplied compiler surface bytes"))
+    return _compiler_profile_validation(profile if not findings else None, findings)
+
+
 def _artifact_json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 

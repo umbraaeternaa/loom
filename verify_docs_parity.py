@@ -24,6 +24,7 @@ CONTEXTUAL_BOUNDS_DOC = ROOT / "docs" / "contextual_value_bounds_v2.md"
 WASM_TRUST_DOC = ROOT / "docs" / "wasm_trust_provenance_v1.md"
 WASM_TRUST_V2_DOC = ROOT / "docs" / "wasm_trust_provenance_v2.md"
 WASM_EQUIVALENCE_DOC = ROOT / "docs" / "wasm_source_equivalence_v1.md"
+COMPILER_PROVENANCE_DOC = ROOT / "docs" / "compiler_provenance_v1.md"
 WASM_ARTIFACT_DOC = ROOT / "docs" / "gate_wasm_artifact_v1.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
 
@@ -470,6 +471,31 @@ def _check_wasm_equivalence_doc() -> None:
         raise SystemExit("docs parity: WASM source equivalence contract drift: missing " + ", ".join(missing))
 
 
+def _check_compiler_provenance_doc() -> None:
+    text = COMPILER_PROVENANCE_DOC.read_text()
+    words = " ".join(text.split())
+    required = (
+        "LOOM WASM Compiler Profile v1",
+        "normative host-built compiler identity contract",
+        "loom.build_wasm_compiler_profile(surface, components)",
+        "loom.verify_wasm_compiler_profile(profile, surface, components)",
+        "`modular-python` requires exactly",
+        "`standalone-python` requires exactly `docs/loom.py`",
+        "loom-wasm-compiler-profile-validation/v1",
+        "loom-wasm-compiler-profile/v1",
+        "profile_sha256",
+        "python3 -m loom_provenance --root . --surface modular-python",
+        "builds a real wheel",
+        "imports the compiler directly from that wheel",
+        "content identity, not a signature or publisher identity",
+        "Gate compiler-evidence contract",
+        "Existing Gate schemas, trust receipts, and WASM ABI v1 are unchanged",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: compiler provenance contract drift: missing " + ", ".join(missing))
+
+
 def _check_wasm_artifact_doc() -> None:
     text = WASM_ARTIFACT_DOC.read_text()
     words = " ".join(text.split())
@@ -547,6 +573,7 @@ def main() -> int:
     _check_wasm_trust_doc()
     _check_wasm_trust_v2_doc()
     _check_wasm_equivalence_doc()
+    _check_compiler_provenance_doc()
     _check_wasm_artifact_doc()
     _check_secret_credential_policy_doc()
     _check_pyodide_import_boundary()

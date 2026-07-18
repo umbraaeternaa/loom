@@ -6,10 +6,13 @@ import json
 import hashlib
 import subprocess
 import tempfile
+import shutil
+import zipfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import loom as _loom
 from loom_frontend import ASM_INTRINSICS
+import loom_provenance as _loom_provenance
 from loom import parse, parse_spans, tokenize, tokenize_spans, check, run_call, compile_py, run_compiled, run_js, compile_js, compile_wasm, verify_wasm_trust_receipt, verify_wasm_trust_receipt_v2, verify_wasm_source_equivalence, run_wasm, emit_wat, LoomError, _WASM_ABI_VERSION
 
 def _context_chain_source(depth=65):
@@ -3146,19 +3149,90 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         print(f"  FAIL release-check dry-run contract: {e}")
     try:                                               # install metadata keeps LOOM usable as a normal Python CLI without losing the repo-local path
         import tomllib
-        pyproject = tomllib.loads(Path(__file__).with_name("pyproject.toml").read_text())
-        readme = Path(__file__).with_name("README.md").read_text()
-        rdoc = Path(__file__).with_name("docs").joinpath("release_readiness.md").read_text()
+        root = Path(__file__).resolve().parent
+        pyproject = tomllib.loads(root.joinpath("pyproject.toml").read_text())
+        readme = root.joinpath("README.md").read_text()
+        rdoc = root.joinpath("docs", "release_readiness.md").read_text()
+        modules = pyproject["tool"]["setuptools"]["py-modules"]
+        required_compiler_modules = {"loom", "loom_parse", "loom_checker", "loom_bounds", "loom_recursion", "loom_frontend", "loom_wasm", "loom_provenance"}
+        modular_components = _loom_provenance.collect_compiler_components(root, "modular-python")
+        standalone_components = _loom_provenance.collect_compiler_components(root, "standalone-python")
+        modular_profile = _loom.build_wasm_compiler_profile("modular-python", modular_components)
+        standalone_profile = _loom.build_wasm_compiler_profile("standalone-python", standalone_components)
+        verified_modular_profile = _loom.verify_wasm_compiler_profile(modular_profile["profile"], "modular-python", modular_components)
+        verified_standalone_profile = _loom.verify_wasm_compiler_profile(standalone_profile["profile"], "standalone-python", standalone_components)
+        tampered_profile = json.loads(json.dumps(modular_profile["profile"])); tampered_profile["profile_sha256"] = "0" * 64
+        rejected_profile = _loom.verify_wasm_compiler_profile(tampered_profile, "modular-python", modular_components)
+        tampered_components = dict(modular_components); tampered_components["loom_wasm.py"] += b"\n"
+        rejected_components = _loom.verify_wasm_compiler_profile(modular_profile["profile"], "modular-python", tampered_components)
+        missing_components = dict(modular_components); missing_components.pop("loom_bounds.py")
+        rejected_missing = _loom.build_wasm_compiler_profile("modular-python", missing_components)
+        extra_components = dict(modular_components); extra_components["loom_runtime.py"] = root.joinpath("loom_runtime.py").read_bytes()
+        rejected_extra = _loom.build_wasm_compiler_profile("modular-python", extra_components)
+        malformed_profile = dict(modular_profile["profile"]); malformed_profile["components"] = [b"not-json"]
+        rejected_malformed = _loom.verify_wasm_compiler_profile(malformed_profile, "modular-python", modular_components)
+        cli_profile_run = subprocess.run(
+            [sys.executable, "-m", "loom_provenance", "--root", str(root), "--surface", "modular-python"],
+            cwd=root, capture_output=True, text=True,
+        )
+        cli_profile = json.loads(cli_profile_run.stdout)
+        with tempfile.TemporaryDirectory() as td:
+            source_root = Path(td, "source"); source_root.mkdir()
+            dist_root = Path(td, "dist"); dist_root.mkdir()
+            for name in ("pyproject.toml", "README.md", "LICENSE"):
+                shutil.copy2(root.joinpath(name), source_root.joinpath(name))
+            for module in modules:
+                shutil.copy2(root.joinpath(module + ".py"), source_root.joinpath(module + ".py"))
+            wheel_run = subprocess.run(
+                [sys.executable, "-m", "pip", "wheel", str(source_root), "--no-deps", "--no-build-isolation", "--disable-pip-version-check", "--wheel-dir", str(dist_root)],
+                cwd=td, capture_output=True, text=True,
+            )
+            wheel_paths = sorted(dist_root.glob("*.whl"))
+            wheel_names = set()
+            wheel_smoke = None
+            if wheel_run.returncode == 0 and len(wheel_paths) == 1:
+                with zipfile.ZipFile(wheel_paths[0]) as archive:
+                    wheel_names = set(archive.namelist())
+                wheel_code = (
+                    "import sys;sys.path.insert(0," + repr(str(wheel_paths[0])) + ");"
+                    "import loom,loom_bounds,loom_recursion,loom_provenance;"
+                    "w=loom.compile_wasm('(defx main () (fn () 42))');"
+                    "assert w[:4]==b'\\x00asm'"
+                )
+                wheel_smoke = subprocess.run([sys.executable, "-c", wheel_code], cwd=td, capture_output=True, text=True)
         packaging_ok = (
-            pyproject["build-system"]["requires"] == ["setuptools>=61"]
+            pyproject["build-system"]["requires"] == ["setuptools>=61", "wheel"]
             and pyproject["build-system"]["build-backend"] == "setuptools.build_meta"
             and pyproject["project"]["name"] == "loom-lang"
             and pyproject["project"]["requires-python"] == ">=3.10"
             and pyproject["project"]["dependencies"] == []
+            and pyproject["project"]["version"] == _loom_provenance.PACKAGE_VERSION
             and pyproject["project"]["scripts"]["loom"] == "loom:main"
-            and "loom" in pyproject["tool"]["setuptools"]["py-modules"]
-            and "loom_cli" in pyproject["tool"]["setuptools"]["py-modules"]
-            and "loom_wasm" in pyproject["tool"]["setuptools"]["py-modules"]
+            and required_compiler_modules <= set(modules)
+            and wheel_run.returncode == 0
+            and len(wheel_paths) == 1
+            and {module + ".py" for module in modules} <= wheel_names
+            and wheel_smoke is not None and wheel_smoke.returncode == 0
+            and modular_profile["valid"] is True
+            and standalone_profile["valid"] is True
+            and modular_profile["profile"]["schema"] == "loom-wasm-compiler-profile/v1"
+            and modular_profile["profile"]["surface"] == "modular-python"
+            and standalone_profile["profile"]["surface"] == "standalone-python"
+            and modular_profile["profile"]["profile_sha256"] != standalone_profile["profile"]["profile_sha256"]
+            and verified_modular_profile["valid"] is True
+            and verified_standalone_profile["valid"] is True
+            and rejected_profile["valid"] is False
+            and any(item["code"] == "profile-hash-mismatch" for item in rejected_profile["findings"])
+            and rejected_components["valid"] is False
+            and any(item["code"] == "compiler-profile-mismatch" for item in rejected_components["findings"])
+            and rejected_missing["valid"] is False
+            and any(item["code"] == "missing-component" for item in rejected_missing["findings"])
+            and rejected_extra["valid"] is False
+            and any(item["code"] == "unknown-component" for item in rejected_extra["findings"])
+            and rejected_malformed["valid"] is False
+            and any(item["code"] == "non-canonical-profile" for item in rejected_malformed["findings"])
+            and cli_profile_run.returncode == 0
+            and cli_profile == modular_profile
             and "python3 -m pip install ." in readme
             and "python3 -m loom about --format json" in readme
             and "loom about --format json" in readme
@@ -3168,7 +3242,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "provides the\n  `loom` console command" in rdoc
         )
         ok += packaging_ok
-        print(f"  {'ok  ' if packaging_ok else 'FAIL'} packaging: installable console script pinned")
+        print(f"  {'ok  ' if packaging_ok else 'FAIL'} packaging: wheel closure + compiler profiles pinned")
     except Exception as e:
         print(f"  FAIL packaging install metadata pin: {e}")
     try:                                               # first-run onboarding keeps a new user path pinned from checkout to trust gate

@@ -49,6 +49,9 @@ experimental, and what LOOM does not claim yet.
   source/WASM binding without changing manifest v1/v2, observation v1, receipt
   v1, or operator approval semantics. Source Equivalence v1 requires complete
   byte identity with deterministic recompilation before artifact binding.
+- Compiler Profile v1 content-addresses the exact closed modular or standalone
+  compiler surface supplied by a trusted host. It remains artifact-independent
+  and non-authorizing; Gate compiler evidence is a separate future contract.
 - Deterministic property fuzz smoke is part of the citadel.
 
 ## Experimental or bounded

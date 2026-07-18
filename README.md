@@ -116,6 +116,9 @@ the exact source, WASM bytes, trust receipt, and Gate manifest hash without
 replacing operator approval. Before binding, [`WASM Source Equivalence v1`](docs/wasm_source_equivalence_v1.md)
 recompiles the source and requires complete byte-for-byte identity with the
 supplied module, so valid receipts cannot conceal a changed function body.
+[`Compiler Profile v1`](docs/compiler_provenance_v1.md) separately fingerprints
+the exact modular or standalone compiler bytes supplied by a trusted host; it
+does not self-attest or replace operator approval.
 
 Certified recursion can also use [`Proven Value Bounds v1`](docs/proven_value_bounds_v1.md):
 the checker derives conservative i31 and list-length upper bounds through
@@ -130,6 +133,7 @@ contract; higher-order and effectful arguments remain fail-closed.
   Module-boundary policy is pinned in [`docs/module_boundaries.md`](docs/module_boundaries.md).
 - [`loom_codegen.py`](loom_codegen.py) — isolated portable Python/JavaScript generators.
 - [`loom_wasm.py`](loom_wasm.py) — isolated WebAssembly/WAT compiler and ABI runtime.
+- [`loom_provenance.py`](loom_provenance.py) — host-built modular/standalone compiler profiles.
 - [`run_tests.py`](run_tests.py) — the self-verifying suite: it accepts honest programs,
   rejects every flavor of lie, and runs real programs.
 

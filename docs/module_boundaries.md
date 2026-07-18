@@ -18,10 +18,13 @@ Current stable boundaries:
 | --- | --- |
 | `loom_parse.py` | tokenization, parsing, and source spans |
 | `loom_checker.py` | static effect/trust/capability checking |
+| `loom_bounds.py` | conservative i31/list bounds and contextual specialization |
+| `loom_frontend.py` | shared parser/checker/backend adapter contracts and ASM registry |
 | `loom_runtime.py` | interpreter runtime and capability contexts |
 | `loom_codegen.py` | portable Python and JavaScript backends |
 | `loom_wasm.py` | WebAssembly/WAT backend and ABI runtime |
 | `loom_recursion.py` | shared named-call graph, recursive-SCC edges, static descent certificates, and quantitative recurrence metadata |
+| `loom_provenance.py` | host-built content-addressed compiler profiles and closed surface collection |
 | `loom_cli.py` | CLI and machine-readable verdict surface |
 | `loom_gate.py` | Gate manifest, policy, diagnostics, and advisory receipt logic |
 | `loom_observer.py` | read-only Git observation collection |
