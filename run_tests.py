@@ -430,6 +430,23 @@ CASES = [
     ("D31 recurrence: terminal effect counted once", '(prove (descent down)) (defx down (Net) (fn (n) (if (< n 1) (net 0) (down (- n 1))))) (defx f (Net) (fn () (seamN 1 (Net) (down 100))))', True),
     ("D31 recurrence: proof is required", '(defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx f (Net) (fn () (seamN 2 (Net) (hit 2))))', False),
     ("D31 recurrence: with remains fail-closed", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (with Net (fn (u) u) (let (x (net n)) (hit (- n 1))))))) (defx f (Net) (fn () (seamN 2 (Net) (hit 2))))', False),
+    # --- grown 2026-07-18: D32 -- PROVEN VALUE BOUNDS v1. The checker derives finite i31/list upper bounds through
+    #     lexical lets, wrap-safe pure operations, and branch guards/joins. It adds no trusted annotation and keeps
+    #     possible wraparound, lexical shadowing, effect results, and interprocedural wrapper values fail-closed.
+    ("D32 bounds: let-bound i31 rank", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx f (Net) (fn () (let (n 2) (seamN 2 (Net) (hit n)))))', True),
+    ("D32 bounds: pure arithmetic rank", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx f (Net) (fn () (seamN 2 (Net) (hit (+ 1 1)))))', True),
+    ("D32 bounds: branch hull upper rank", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx f (Net) (fn (c) (let (n (if c 2 3)) (seamN 3 (Net) (hit n)))))', True),
+    ("D32 bounds: branch hull one short", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx f (Net) (fn (c) (let (n (if c 2 3)) (seamN 2 (Net) (hit n)))))', False),
+    ("D32 bounds: guard refines parameter upper", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx f (Net) (fn (n) (if (< n 3) (seamN 2 (Net) (hit n)) 0)))', True),
+    ("D32 bounds: exact i31 wrap is known", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx f (Net) (fn () (seamN 0 (Net) (hit (+ 1073741823 1)))))', True),
+    ("D32 bounds: possible i31 wrap refused", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx f (Net) (fn (n) (if (> n -2) (seamN 10 (Net) (hit (+ n 1))) 0)))', False),
+    ("D32 bounds: let-bound list rank", '(prove (descent walk)) (defx walk (Net) (fn (xs) (if (empty xs) 0 (let (x (net (head xs))) (walk (tail xs)))))) (defx f (Net) (fn () (let (xs (list 1 2 3)) (seamN 3 (Net) (walk xs)))))', True),
+    ("D32 bounds: cons-tail list rank", '(prove (descent walk)) (defx walk (Net) (fn (xs) (if (empty xs) 0 (let (x (net (head xs))) (walk (tail xs)))))) (defx f (Net) (fn () (let (xs (tail (cons 0 (list 1 2 3)))) (seamN 3 (Net) (walk xs)))))', True),
+    ("D32 bounds: let-bound list one short", '(prove (descent walk)) (defx walk (Net) (fn (xs) (if (empty xs) 0 (let (x (net (head xs))) (walk (tail xs)))))) (defx f (Net) (fn () (let (xs (list 1 2 3)) (seamN 2 (Net) (walk xs)))))', False),
+    ("D32 bounds: let shadow drops outer proof", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx f (Net) (fn (x) (let (n 2) (let (n x) (seamN 2 (Net) (hit n))))))', False),
+    ("D32 bounds: match binding drops outer proof", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx f (Net) (fn () (let (n 2) (match (variant Some 9) ((Some n) (seamN 2 (Net) (hit n)))))))', False),
+    ("D32 bounds: effect result stays unknown", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx f (Net) (fn () (let (n (net 2)) (seamN 2 (Net) (hit n)))))', False),
+    ("D32 bounds: wrapper specialization deferred", '(prove (descent hit)) (defx hit (Net) (fn (n) (if (< n 1) 0 (let (x (net n)) (hit (- n 1)))))) (defx wrap (Net) (fn (n) (hit n))) (defx f (Net) (fn () (seamN 2 (Net) (wrap 2))))', False),
     # --- grown 2026-06-26 (pass 3): D27 — GRADED foreign trust via component-bound ATTESTATION. D26 strips ALL foreign
     #     output to ai (binary). A seam clause (vouch ROLE WHO COMP) lets a NON-AI authority WHO sign a SPECIFIC foreign
     #     component COMP, so (ffi COMP ..) directly in that seam body carries WHO's anchor instead of the strip — making
@@ -2814,7 +2831,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 466
+            and about_json["citadel_checks"] == 480
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
@@ -2971,7 +2988,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 466/466 citadel checks" in quick
+            and "PASS -- 480/480 citadel checks" in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
             and "loom examples" in quick
@@ -3069,7 +3086,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "466-quantitative-recurrence-v1")' in play
+            and 'bundleUrl.searchParams.set("v", "480-proven-value-bounds-v1")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -3671,7 +3688,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 466/466 citadel checks" in rdoc
+            and "PASS -- 480/480 citadel checks" in rdoc
             and "loom examples --format json" in rdoc
             and "loom doctor --dry-run --format json" in rdoc
             and "python3 verify_docs_parity.py" in rdoc

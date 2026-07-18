@@ -227,6 +227,132 @@ def platent(p):                                                 # fn-param's lat
     return set(p[1:]) if isinstance(p, list) else None
 def _is_symbol(node): return isinstance(node, str) and type(node) is not str
 
+# Proven Value Bounds v1: standalone mirror of loom_bounds.py.
+def _bound_bind(env, name, bound):
+    out = dict(env); out.pop(name, None)
+    if bound is not None: out[name] = bound
+    return out
+
+def _bound_shadow(env, names):
+    out = dict(env)
+    for name in names: out.pop(name, None)
+    return out
+
+def _bound_pattern_names(pattern):
+    if _is_symbol(pattern): return {pattern}
+    if not isinstance(pattern, list): return set()
+    out = set()
+    for child in pattern[1:]: out |= _bound_pattern_names(child)
+    return out
+
+def _bound_join(left, right):
+    if left is None or right is None or left[0] != right[0]: return None
+    lo = None if left[1] is None or right[1] is None else min(left[1], right[1])
+    hi = None if left[2] is None or right[2] is None else max(left[2], right[2])
+    return (left[0], lo, hi)
+
+def _bound_i31_math(head, args):
+    if not all(bound is not None and bound[0] == "i31" for bound in args): return None
+    exact = all(bound[1] == bound[2] for bound in args)
+    if head == "+":
+        if exact:
+            result = _i31(sum(bound[1] for bound in args)); return ("i31", result, result)
+        lo = sum(bound[1] for bound in args); hi = sum(bound[2] for bound in args)
+    elif head == "-" and len(args) == 2:
+        if exact:
+            result = _i31(args[0][1] - args[1][1]); return ("i31", result, result)
+        lo = args[0][1] - args[1][2]; hi = args[0][2] - args[1][1]
+    elif head == "*":
+        current = ("i31", 1, 1)
+        for bound in args:
+            if current[1] == current[2] and bound[1] == bound[2]:
+                result = _i31(current[1] * bound[1]); current = ("i31", result, result); continue
+            products = (current[1] * bound[1], current[1] * bound[2], current[2] * bound[1], current[2] * bound[2])
+            lo, hi = min(products), max(products)
+            if lo < INT_MIN or hi > INT_MAX: return None
+            current = ("i31", lo, hi)
+        return current
+    else: return None
+    return None if lo < INT_MIN or hi > INT_MAX else ("i31", lo, hi)
+
+def _bound_value(node, env):
+    if isinstance(node, int): return ("i31", node, node) if INT_MIN <= node <= INT_MAX else None
+    if _is_symbol(node): return env.get(node)
+    if not isinstance(node, list) or not node: return None
+    h = node[0]
+    if h in ("+", "-", "*"): return _bound_i31_math(h, [_bound_value(arg, env) for arg in node[1:]])
+    if h in ("=", "<", ">") and len(node) == 3:
+        left, right = _bound_value(node[1], env), _bound_value(node[2], env)
+        if left is None or right is None or left[0] != right[0]: return ("i31", 0, 1)
+        if h == "=":
+            if left[2] < right[1] or right[2] < left[1]: return ("i31", 0, 0)
+            if left[1] == left[2] == right[1] == right[2]: return ("i31", 1, 1)
+        elif h == "<":
+            if left[2] < right[1]: return ("i31", 1, 1)
+            if left[1] >= right[2]: return ("i31", 0, 0)
+        else:
+            if left[1] > right[2]: return ("i31", 1, 1)
+            if left[2] <= right[1]: return ("i31", 0, 0)
+        return ("i31", 0, 1)
+    if h == "list":
+        length = len(node) - 1; return ("list", length, length)
+    if h == "cons" and len(node) == 3:
+        tail = _bound_value(node[2], env)
+        return ("list", tail[1] + 1, tail[2] + 1) if tail is not None and tail[0] == "list" and tail[2] is not None else None
+    if h == "tail" and len(node) == 2:
+        source = _bound_value(node[1], env)
+        return ("list", max(0, source[1] - 1), max(0, source[2] - 1)) if source is not None and source[0] == "list" and source[2] is not None else None
+    if h == "empty" and len(node) == 2:
+        source = _bound_value(node[1], env)
+        if source is None or source[0] != "list": return ("i31", 0, 1)
+        if source[2] == 0: return ("i31", 1, 1)
+        if source[1] is not None and source[1] > 0: return ("i31", 0, 0)
+        return ("i31", 0, 1)
+    if h == "if" and len(node) >= 4:
+        condition = _bound_value(node[1], env)
+        if condition is not None and condition[0] == "i31" and condition[1] == condition[2]:
+            return _bound_value(node[2] if condition[1] != 0 else node[3], env)
+        then_env, else_env = _bound_refine(node[1], env, True), _bound_refine(node[1], env, False)
+        then_bound = _bound_value(node[2], then_env) if then_env is not None else None
+        else_bound = _bound_value(node[3], else_env) if else_env is not None else None
+        if then_env is None: return else_bound
+        if else_env is None: return then_bound
+        return _bound_join(then_bound, else_bound)
+    if h == "let" and len(node) >= 3 and isinstance(node[1], list) and len(node[1]) >= 2:
+        name, source = node[1][0], node[1][1]
+        return _bound_value(node[-1], _bound_bind(env, name, _bound_value(source, env)))
+    return None
+
+def _bound_restrict(env, name, domain, lo, hi):
+    current = env.get(name)
+    if current is not None and current[0] != domain: return None
+    old_lo = current[1] if current is not None else None; old_hi = current[2] if current is not None else None
+    new_lo = lo if old_lo is None else (old_lo if lo is None else max(old_lo, lo))
+    new_hi = hi if old_hi is None else (old_hi if hi is None else min(old_hi, hi))
+    if new_lo is not None and new_hi is not None and new_lo > new_hi: return None
+    out = dict(env); out[name] = (domain, new_lo, new_hi); return out
+
+def _bound_refine(condition, env, truth):
+    known = _bound_value(condition, env)
+    if known is not None and known[0] == "i31" and known[1] == known[2] and ((known[1] != 0) != truth): return None
+    if not isinstance(condition, list) or len(condition) != 3: return dict(env)
+    h, left, right = condition
+    if isinstance(left, int) and _is_symbol(right): left, right, h = right, left, {"<": ">", ">": "<"}.get(h, h)
+    if not _is_symbol(left) or not isinstance(right, int): return dict(env)
+    if h == "<": lo, hi = ((INT_MIN, right - 1) if truth else (right, INT_MAX))
+    elif h == ">": lo, hi = ((right + 1, INT_MAX) if truth else (INT_MIN, right))
+    elif h == "=" and truth: lo = hi = right
+    else: return dict(env)
+    lo, hi = max(INT_MIN, lo), min(INT_MAX, hi)
+    return None if lo > hi else _bound_restrict(env, left, "i31", lo, hi)
+
+def _bound_recurrence_rank(argument, recurrence, env):
+    bound = _bound_value(argument, env)
+    if bound is None or bound[2] is None or bound[0] != recurrence["domain"]: return None
+    if recurrence["domain"] == "i31": return max(0, bound[2] - recurrence["floor"] + 1)
+    if recurrence["domain"] == "list": return bound[2]
+    return None
+
 def _named_calls(node, names):
     out = set()
     if not isinstance(node, list) or not node or node[0] == "fn": return out
@@ -685,7 +811,8 @@ def _nmul(a, b): return min(a * b, _NCAP)
 def _nmerge(target, counts):
     for e, c in counts.items():
         if e in EFFECTS or not is_var(e): target[e] = _nadd(target.get(e, 0), c)
-def _callable_ncount(value, fns, penv, cenv, active):
+def _callable_ncount(value, fns, penv, cenv, active, venv=None):
+    venv = venv or {}
     if _is_symbol(value):
         if value in cenv: return dict(cenv[value])
         if value in fns: return _function_ncount(value, fns, {}, active)
@@ -693,8 +820,8 @@ def _callable_ncount(value, fns, penv, cenv, active):
         return {}
     if isinstance(value, list) and value and value[0] == 'fn':
         lp = {**penv, **{pname(p): platent(p) for p in value[1] if platent(p) is not None}}
-        summary = {}
-        for x in value[2:]: _nmerge(summary, _ncount(x, fns, lp, cenv, active))
+        lv = _bound_shadow(venv, {pname(p) for p in value[1]}); summary = {}
+        for x in value[2:]: _nmerge(summary, _ncount(x, fns, lp, cenv, active, lv))
         return summary
     return {}
 def _function_ncount(name, fns, bound_cenv, active):
@@ -704,7 +831,7 @@ def _function_ncount(name, fns, bound_cenv, active):
         for x in info['fn'][2:]: potential |= _recursive_meter_effects(x, fns, {name})
         return {e: _NCAP for e in potential if e in EFFECTS}
     summary = {}
-    for x in info['fn'][2:]: _nmerge(summary, _ncount(x, fns, info['penv'], bound_cenv, active | {name}))
+    for x in info['fn'][2:]: _nmerge(summary, _ncount(x, fns, info['penv'], bound_cenv, active | {name}, {}))
     return summary
 def _recursive_meter_effects(node, fns, seen):
     if not isinstance(node, list) or not node: return set()
@@ -725,72 +852,75 @@ def _recursive_meter_effects(node, fns, seen):
         for x in fns[h]['fn'][2:]: out |= _recursive_meter_effects(x, fns, seen | {h})
     for child in children: out |= _recursive_meter_effects(child, fns, seen)
     return out
-def _ncount(node, fns, penv, cenv=None, active=None):
+def _ncount(node, fns, penv, cenv=None, active=None, venv=None):
     """Saturating path count; exact for finite statically resolved call graphs."""
-    cenv, active = cenv or {}, active or set()
+    cenv, active, venv = cenv or {}, active or set(), venv or {}
     out = {}
     def add(dd): _nmerge(out, dd)
     if not isinstance(node, list) or not node: return out
     h = node[0]
     if h == 'fn': return out
     if h == 'depthN':
-        for x in node[2:]: add(_ncount(x, fns, penv, cenv, active))
+        for x in node[2:]: add(_ncount(x, fns, penv, cenv, active, venv))
         return out
-    if h == 'seamN': return _ncount(['seam'] + node[2:], fns, penv, cenv, active)
+    if h == 'seamN': return _ncount(['seam'] + node[2:], fns, penv, cenv, active, venv)
     if h in ('seam', 'seam1'):
-        for x in _roleclauses(node[2:])[3]: add(_ncount(x, fns, penv, cenv, active))
+        for x in _roleclauses(node[2:])[3]: add(_ncount(x, fns, penv, cenv, active, venv))
         return out
     if h == 'if':
-        add(_ncount(node[1], fns, penv, cenv, active))
-        tc, ec = _ncount(node[2], fns, penv, cenv, active), _ncount(node[3], fns, penv, cenv, active)
+        add(_ncount(node[1], fns, penv, cenv, active, venv))
+        tv, ev = _bound_refine(node[1], venv, True), _bound_refine(node[1], venv, False)
+        tc = _ncount(node[2], fns, penv, cenv, active, tv) if tv is not None else {}
+        ec = _ncount(node[3], fns, penv, cenv, active, ev) if ev is not None else {}
         for e in set(tc) | set(ec): out[e] = _nadd(out.get(e, 0), max(tc.get(e, 0), ec.get(e, 0)))
         return out
     if h == 'match':
-        add(_ncount(node[1], fns, penv, cenv, active))
-        arms = [_ncount(a[1], fns, penv, cenv, active) for a in node[2:] if isinstance(a, list) and len(a) >= 2]
+        add(_ncount(node[1], fns, penv, cenv, active, venv))
+        arms = [_ncount(a[1], fns, penv, cenv, active, _bound_shadow(venv, _bound_pattern_names(a[0]))) for a in node[2:] if isinstance(a, list) and len(a) >= 2]
         for e in set().union(*[set(c) for c in arms]) if arms else set():
             out[e] = _nadd(out.get(e, 0), max(c.get(e, 0) for c in arms))
         return out
     if h == 'let':
         name, bound_value = node[1][0], node[1][1]
-        add(_ncount(bound_value, fns, penv, cenv, active))
+        add(_ncount(bound_value, fns, penv, cenv, active, venv))
+        nv = _bound_bind(venv, name, _bound_value(bound_value, venv))
         nc = cenv
         if is_fn_expr(bound_value, fns, penv) or (_is_symbol(bound_value) and bound_value in cenv):
-            summary = _callable_ncount(bound_value, fns, penv, cenv, active)
+            summary = _callable_ncount(bound_value, fns, penv, cenv, active, venv)
             if isinstance(bound_value, list) and any(_has_head(x, name) for x in bound_value[2:]): summary = {e: _NCAP for e in summary}
             nc = {**cenv, name: summary}
-        for x in node[2:]: add(_ncount(x, fns, penv, nc, active))
+        for x in node[2:]: add(_ncount(x, fns, penv, nc, active, nv))
         return out
     if isinstance(h, list):
-        add(_callable_ncount(h, fns, penv, cenv, active))
-        for a in node[1:]: add(_ncount(a, fns, penv, cenv, active))
+        add(_callable_ncount(h, fns, penv, cenv, active, venv))
+        for a in node[1:]: add(_ncount(a, fns, penv, cenv, active, venv))
         return out
     if h == 'handle':
-        for x in node[2:]: add(_ncount(x, fns, penv, cenv, active))
+        for x in node[2:]: add(_ncount(x, fns, penv, cenv, active, venv))
         return out
     if h == 'with':
         body_counts = {}
-        for x in node[3:]: _nmerge(body_counts, _ncount(x, fns, penv, cenv, active))
+        for x in node[3:]: _nmerge(body_counts, _ncount(x, fns, penv, cenv, active, venv))
         add(body_counts); requests = body_counts.get(node[1], 0)
-        hc = _callable_ncount(node[2], fns, penv, cenv, active)
+        hc = _callable_ncount(node[2], fns, penv, cenv, active, venv)
         if requests and hc.get(node[1], 0): hc = {e: _NCAP for e in hc}
         for e, c in hc.items(): out[e] = _nadd(out.get(e, 0), _nmul(requests, c))
         return out
     if h == 'resource':
         spec = node[1]; rname, reffs = (spec[0], set(spec[1:])) if isinstance(spec, list) else (spec, set())
-        for x in node[2:]: add(_ncount(x, fns, penv, cenv, active))
+        for x in node[2:]: add(_ncount(x, fns, penv, cenv, active, venv))
         uses = out.pop(rname, 0)
         for E in reffs & EFFECTS: out[E] = _nadd(out.get(E, 0), uses)
         return out
     if h == 'use': return {node[1]: 1}
-    for a in node[1:]: add(_ncount(a, fns, penv, cenv, active))
+    for a in node[1:]: add(_ncount(a, fns, penv, cenv, active, venv))
     if h in _OPEFF: out[_OPEFF[h]] = _nadd(out.get(_OPEFF[h], 0), 1)
     elif h == 'ffi': out['FFI'] = _nadd(out.get('FFI', 0), 1)
     elif h in fns:
         bc = {}
         for i, p in enumerate(fns[h]['params']):
-            if platent(p) is not None and i + 1 < len(node): bc[pname(p)] = _callable_ncount(node[i + 1], fns, penv, cenv, active)
-        recurrence = _recurrence_ncount(h, node[1:], fns, active)
+            if platent(p) is not None and i + 1 < len(node): bc[pname(p)] = _callable_ncount(node[i + 1], fns, penv, cenv, active, venv)
+        recurrence = _recurrence_ncount(h, node[1:], fns, active, venv)
         add(recurrence if recurrence is not None else _function_ncount(h, fns, bc, active))
     elif h in cenv: add(cenv[h])
     elif penv and h in penv:
@@ -880,17 +1010,14 @@ def _recurrence_paths(node, component, fns, penv, cenv, active):
     for counts, _ in paths: _nmerge(counts, operation)
     return paths
 
-def _static_recurrence_rank(argument, recurrence):
-    if recurrence["domain"] == "i31": return max(0, argument - recurrence["floor"] + 1) if isinstance(argument, int) else None
-    if recurrence["domain"] == "list": return len(argument) - 1 if isinstance(argument, list) and argument and argument[0] == "list" else None
-    return None
+def _static_recurrence_rank(argument, recurrence, venv): return _bound_recurrence_rank(argument, recurrence, venv)
 
-def _recurrence_ncount(entry, args, fns, active):
+def _recurrence_ncount(entry, args, fns, active, venv=None):
     certificate = fns[entry].get("descent"); recurrence = certificate.get("recurrence") if certificate else None
     if recurrence is None or entry in active: return None
     measure_index = certificate["measure_index"][entry]
     if measure_index >= len(args): return None
-    rank = _static_recurrence_rank(args[measure_index], recurrence)
+    rank = _static_recurrence_rank(args[measure_index], recurrence, venv or {})
     if rank is None or rank >= _NCAP: return None
     component = set(certificate["component"]); paths = {}; component_active = set(active) | component
     for name in component:
@@ -1126,9 +1253,9 @@ def _author_covers(pairs, role, up):
             if hi not in seen: seen.add(hi); stk.append(hi)
     return any(r in seen and w != "ai" for (r, w) in pairs)
 
-def infer(node, fns, errs, penv=None):
+def infer(node, fns, errs, penv=None, venv=None):
     """Effect row a node performs (transitively). penv = {param: latent-effect-set} for function-typed names in scope."""
-    penv = penv or {}
+    penv, venv = penv or {}, venv or {}
     if not isinstance(node, list) or not node: return set()
     h = node[0]
     if h == "fn": return set()                          # DEFINING a lambda performs nothing (its cost is at the call)
@@ -1136,18 +1263,18 @@ def infer(node, fns, errs, penv=None):
         K = node[1] if len(node) > 1 and isinstance(node[1], int) else -1
         if K < 0 or K >= _NCAP: errs.append(f"call budget has invalid quantum {K} (expected 0..{_NCAP - 1})")
         inner = set()
-        for x in node[2:]: inner |= infer(x, fns, errs, penv)
+        for x in node[2:]: inner |= infer(x, fns, errs, penv, venv)
         return inner
     if h == "ffi":                                      # (ffi name arg..) — effect-OPAQUE foreign call; '?' = unbounded
         eff = set()                                     # foreign authority. Only a SEAM (the FFI contract) may cover it,
-        for a in node[2:]: eff |= infer(a, fns, errs, penv)  # so the seam's granted row IS the capability handed across.
+        for a in node[2:]: eff |= infer(a, fns, errs, penv, venv)  # so the seam's granted row IS the capability handed across.
         return eff | {"?"}
     if h == "seam" or h == "seam1":                     # (seam (E..) (roles ..)? (sub ..)* expr..) — CHECKED boundary == GRANT
         decl = set(node[1]) - {"Pure"}                  # (seam1 ..) = LINEAR/AFFINE grant: each cap usable AT MOST ONCE.
         role_spec, up, needs, body = _roleclauses(node[2:])  # D12 (roles ..) GATES the grant on a quorum; D13 (needs EFF role) binds per-effect
         up = _with_policy_rank(up)                       # D15: program-wide (rank ..) edges apply to this gate too
         inner = set()                                   # the row it declares is exactly the authority handed to the body
-        for x in body: inner |= infer(x, fns, errs, penv)  # (incl. opaque foreign code). 'Pure' = the EMPTY grant.
+        for x in body: inner |= infer(x, fns, errs, penv, venv)  # (incl. opaque foreign code). 'Pure' = the EMPTY grant.
         inner.discard("?")                              # the seam is WHERE you take responsibility for opaque foreign code
         if inner - decl:
             errs.append(f"seam under-declares: wraps {sorted(inner)} but contract says {sorted(decl)}")
@@ -1180,11 +1307,11 @@ def infer(node, fns, errs, penv=None):
         return decl
     if h == 'seamN':                                    # (seamN K (E..) ... body) -- D27 METERED grant: seam gates + at-most-K uses per granted effect
         K = node[1] if isinstance(node[1], int) else -1
-        decl = infer(['seam'] + node[2:], fns, errs, penv)
+        decl = infer(['seam'] + node[2:], fns, errs, penv, venv)
         body = _roleclauses(node[3:])[3]
         nc = {}
         for x in body:
-            for e, c in _ncount(x, fns, penv).items(): nc[e] = _nadd(nc.get(e, 0), c)
+            for e, c in _ncount(x, fns, penv, venv=venv).items(): nc[e] = _nadd(nc.get(e, 0), c)
         for E in sorted(decl):
             direct_count = nc.get(E, 0)
             if K < 0 or K >= _NCAP or direct_count > K:
@@ -1192,7 +1319,7 @@ def infer(node, fns, errs, penv=None):
         return decl
     if h == "repro":                                    # (repro body..) -- pass-10 REPRODUCIBILITY region: this path must be
         inner = set()                                   # re-DERIVABLE, not merely signed. No nondeterministic Rand may influence it;
-        for x in node[1:]: inner |= infer(x, fns, errs, penv)   # a handle CANNOT launder Rand to satisfy repro (the runtime op still
+        for x in node[1:]: inner |= infer(x, fns, errs, penv, venv)   # a handle CANNOT launder Rand to satisfy repro (the runtime op still
         laundered = set()                               # fires -- the seal lesson), so we re-add any Rand an inner handle dropped;
         for x in node[1:]: laundered |= _sealed_discharges(x, {"Rand"})   # a (with Rand det-fn) IS reproducible (allowed).
         nd = (inner | laundered) & {"Rand"}
@@ -1204,7 +1331,7 @@ def infer(node, fns, errs, penv=None):
         bad = {e for e in hdl if e not in EFFECTS and not is_var(e)}
         if bad: errs.append(f"handle of unknown effect {sorted(bad)}")
         inner = set()
-        for x in node[2:]: inner |= infer(x, fns, errs, penv)
+        for x in node[2:]: inner |= infer(x, fns, errs, penv, venv)
         return inner - hdl                              # dual of seam: handled effects are subtracted, not added
     if h == "with":                                     # (with E hfn body..) — REINTERPRET E via hfn: E -> hfn's effect
         E = node[1]
@@ -1212,7 +1339,7 @@ def infer(node, fns, errs, penv=None):
             errs.append(f"with of unknown effect ['{E}']")
         hlat = latent_of(node[2], fns, penv, errs)      # the handler PROVIDES E; its OWN effects take E's place
         inner = set()
-        for x in node[3:]: inner |= infer(x, fns, errs, penv)
+        for x in node[3:]: inner |= infer(x, fns, errs, penv, venv)
         return (inner - {E}) | hlat
     if h == "use":                                      # consume a linear resource; its USE performs the resource's effect
         for frame in reversed(_checker_state().renv):                   # (a typed resource unifies linear use-once WITH an effect)
@@ -1233,7 +1360,7 @@ def infer(node, fns, errs, penv=None):
         _checker_state().renv.append({rname: reffs})                    # in scope, (use rname) performs reffs
         try:
             eff = set()
-            for x in node[2:]: eff |= infer(x, fns, errs, penv)
+            for x in node[2:]: eff |= infer(x, fns, errs, penv, venv)
         finally:
             _checker_state().renv.pop()
         uc = {}
@@ -1246,50 +1373,58 @@ def infer(node, fns, errs, penv=None):
     if h == "record":                                   # (record (k v)..) — a product value; BUILDING performs field effects
         eff = set()
         for fld in node[1:]:
-            if isinstance(fld, list) and len(fld) >= 2: eff |= infer(fld[1], fns, errs, penv)
+            if isinstance(fld, list) and len(fld) >= 2: eff |= infer(fld[1], fns, errs, penv, venv)
         return eff
-    if h == "get": return infer(node[1], fns, errs, penv)   # (get r k) — field access is pure; effects come from r
-    if h == "variant": return infer(node[2], fns, errs, penv)   # (variant Tag payload) — building performs payload effects
+    if h == "get": return infer(node[1], fns, errs, penv, venv)   # (get r k) — field access is pure; effects come from r
+    if h == "variant": return infer(node[2], fns, errs, penv, venv)   # (variant Tag payload) — building performs payload effects
     if h == "match":                                    # (match e (pat body)..) — SOUND: union of all arm bodies
-        eff = infer(node[1], fns, errs, penv)
+        eff = infer(node[1], fns, errs, penv, venv)
         for arm in node[2:]:
-            if isinstance(arm, list) and len(arm) >= 2: eff |= infer(arm[1], fns, errs, penv)
+            if isinstance(arm, list) and len(arm) >= 2:
+                arm_venv = _bound_shadow(venv, _bound_pattern_names(arm[0]))
+                eff |= infer(arm[1], fns, errs, penv, arm_venv)
         return eff
     if h == "if":                                       # (if cond then else) — SOUND: union of all branches
-        return infer(node[1], fns, errs, penv) | infer(node[2], fns, errs, penv) | infer(node[3], fns, errs, penv)
+        cond_eff = infer(node[1], fns, errs, penv, venv)
+        then_env = _bound_refine(node[1], venv, True)
+        else_env = _bound_refine(node[1], venv, False)
+        then_eff = infer(node[2], fns, errs, penv, then_env) if then_env is not None else set()
+        else_eff = infer(node[3], fns, errs, penv, else_env) if else_env is not None else set()
+        return cond_eff | then_eff | else_eff
     if h == "let":                                      # (let (name val) body..) — bind a local, then run body
         name, val = node[1][0], node[1][1]
-        eff = infer(val, fns, errs, penv)               # the bound value's OWN effects (defining a lambda = none)
+        eff = infer(val, fns, errs, penv, venv)               # the bound value's OWN effects (defining a lambda = none)
         bp = {**penv, name: latent_of(val, fns, penv, errs)} if is_fn_expr(val, fns, penv) else penv
+        bv = _bound_bind(venv, name, _bound_value(val, venv))
         sp = _checker_state().taint_prov.get(name, _MISS); sr = _checker_state().taint_role.get(name, _MISS)   # D19: bind name's provenance for the body's scope
         _checker_state().taint_prov[name] = prov_of(val, _checker_state().taint_prov); _checker_state().taint_role[name] = roles_of(val, _checker_state().taint_role)   # (chained lets resolve)
         try:
-            for x in node[2:]: eff |= infer(x, fns, errs, bp)   # a let-bound function becomes callable; the gate sees the taint
+            for x in node[2:]: eff |= infer(x, fns, errs, bp, bv)   # a let-bound function becomes callable; the gate sees the taint
         finally:                                        # restore (shadowing-safe), so the binding never leaks past its scope
             (_checker_state().taint_prov.__setitem__(name, sp) if sp is not _MISS else _checker_state().taint_prov.pop(name, None))
             (_checker_state().taint_role.__setitem__(name, sr) if sr is not _MISS else _checker_state().taint_role.pop(name, None))
         return eff
     if h == "prov":                                     # (prov P expr) — tag PROVENANCE P (who authored it); a channel
         eff = set()                                     # SEPARATE from effects: prov flows up, effects pass through unchanged
-        for x in node[2:]: eff |= infer(x, fns, errs, penv)
+        for x in node[2:]: eff |= infer(x, fns, errs, penv, venv)
         return eff
     if h == "by":                                       # (by ROLE WHO expr) — role-tagged provenance; effects pass through
         eff = set()
-        for x in node[3:]: eff |= infer(x, fns, errs, penv)
+        for x in node[3:]: eff |= infer(x, fns, errs, penv, venv)
         return eff
     if h == "recall":  # D24: e crossed a persistence boundary; effects flow, provenance does not (see prov_of/roles_of)
         eff = set()
-        for x in node[1:]: eff |= infer(x, fns, errs, penv)
+        for x in node[1:]: eff |= infer(x, fns, errs, penv, venv)
         return eff
     if h == "declassify":                               # (declassify ROLE e) — D21: a non-ai ROLE launders provenance taint
         if node[1] == "ai":                             # CORE anti-circularity rule: ai may not declassify its own output
             errs.append("declassify: 'ai' cannot declassify provenance — only a non-ai role may take responsibility")
         eff = set()
-        for x in node[2:]: eff |= infer(x, fns, errs, penv)
+        for x in node[2:]: eff |= infer(x, fns, errs, penv, venv)
         return eff
     if isinstance(h, list):                             # direct application of an inline closure / callable expression
         eff = latent_of(h, fns, penv, errs)
-        for a in node[1:]: eff |= infer(a, fns, errs, penv)
+        for a in node[1:]: eff |= infer(a, fns, errs, penv, venv)
         return eff
     if h == "trust":                                    # (trust SPEC? expr) — D9/D10 GATE vs CIRCULAR / under-corroborated trust
         spec = node[1] if len(node) > 1 else None
@@ -1312,7 +1447,7 @@ def infer(node, fns, errs, penv=None):
             if len(independent) < need and not deferred:
                 errs.append(f"trust gate: need >= {need} independent anchor(s), got {len(independent)} {sorted(independent) or '(none)'} — value too self-referential / under-corroborated")
         eff = set()
-        for x in body: eff |= infer(x, fns, errs, penv)
+        for x in body: eff |= infer(x, fns, errs, penv, venv)
         return eff
     if h == "asm":
         error = asm_validation_error(node)
@@ -1321,11 +1456,11 @@ def infer(node, fns, errs, penv=None):
             return set()
         spec = asm_metadata(node)
         eff = set()
-        for x in node[3:]: eff |= infer(x, fns, errs, penv)
+        for x in node[3:]: eff |= infer(x, fns, errs, penv, venv)
         eff |= set(spec["effects"])
         return eff
     eff = set()
-    for a in node[1:]: eff |= infer(a, fns, errs, penv)
+    for a in node[1:]: eff |= infer(a, fns, errs, penv, venv)
     if h in BUILTIN_EFF: eff |= BUILTIN_EFF[h]
     elif h in penv: eff |= penv[h]                      # applying a function-typed name in scope -> its latent effect
     elif h in fns:
@@ -4105,7 +4240,7 @@ def build_about():
     return {
         "schema": "loom-about/v1",
         "language": "LOOM",
-        "citadel_checks": 466,
+        "citadel_checks": 480,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "i31_bits": INT_BITS,
         "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],

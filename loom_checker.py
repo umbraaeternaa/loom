@@ -8,13 +8,15 @@ provided explicitly through Frontend, avoiding imports and circular loading.
 from contextvars import ContextVar
 
 from loom_frontend import asm_metadata, asm_validation_error
+import loom_bounds
 from loom_recursion import descent_certificate
 
 
 class Frontend:
     __slots__ = (
         "effects", "builtin_eff", "pure_ops", "plin", "pname", "platent",
-        "is_var", "is_fn_expr", "int_literal_errors", "miss", "error", "op_eff",
+        "is_var", "is_fn_expr", "int_literal_errors", "int_min", "int_max",
+        "i31", "miss", "error", "op_eff",
     )
 
     def __init__(
@@ -28,6 +30,9 @@ class Frontend:
         is_var,
         is_fn_expr,
         int_literal_errors,
+        int_min,
+        int_max,
+        i31,
         miss,
         error,
     ):
@@ -40,6 +45,9 @@ class Frontend:
         self.is_var = is_var
         self.is_fn_expr = is_fn_expr
         self.int_literal_errors = int_literal_errors
+        self.int_min = int_min
+        self.int_max = int_max
+        self.i31 = i31
         self.miss = miss
         self.error = error
         self.op_eff = {op: next(iter(effs)) for op, effs in builtin_eff.items()}
@@ -218,7 +226,8 @@ def _nmerge(frontend, target, counts):
             target[eff] = _nadd(target.get(eff, 0), count)
 
 
-def _callable_ncount(frontend, value, fns, penv, cenv, active):
+def _callable_ncount(frontend, value, fns, penv, cenv, active, venv=None):
+    venv = venv or {}
     if _is_symbol(value):
         if value in cenv:
             return dict(cenv[value])
@@ -232,9 +241,12 @@ def _callable_ncount(frontend, value, fns, penv, cenv, active):
             **penv,
             **{frontend.pname(p): frontend.platent(p) for p in value[1] if frontend.platent(p) is not None},
         }
+        local_venv = loom_bounds.shadow(
+            venv, {frontend.pname(param) for param in value[1]},
+        )
         summary = {}
         for expr in value[2:]:
-            _nmerge(frontend, summary, _ncount(frontend, expr, fns, lpenv, cenv, active))
+            _nmerge(frontend, summary, _ncount(frontend, expr, fns, lpenv, cenv, active, local_venv))
         return summary
     return {}
 
@@ -249,7 +261,7 @@ def _function_ncount(frontend, name, fns, bound_cenv, active):
     summary = {}
     next_active = active | {name}
     for expr in info["fn"][2:]:
-        _nmerge(frontend, summary, _ncount(frontend, expr, fns, info["penv"], bound_cenv, next_active))
+        _nmerge(frontend, summary, _ncount(frontend, expr, fns, info["penv"], bound_cenv, next_active, {}))
     return summary
 
 
@@ -292,10 +304,11 @@ def _recursive_meter_effects(frontend, node, fns, seen):
     return out
 
 
-def _ncount(frontend, node, fns, penv, cenv=None, active=None):
+def _ncount(frontend, node, fns, penv, cenv=None, active=None, venv=None):
     """Saturating path count; exact for finite statically resolved call graphs."""
     cenv = cenv or {}
     active = active or set()
+    venv = venv or {}
     out = {}
 
     def add(counts):
@@ -308,56 +321,81 @@ def _ncount(frontend, node, fns, penv, cenv=None, active=None):
         return out
     if head == "depthN":
         for item in node[2:]:
-            add(_ncount(frontend, item, fns, penv, cenv, active))
+            add(_ncount(frontend, item, fns, penv, cenv, active, venv))
         return out
     if head == "seamN":
-        return _ncount(frontend, ["seam"] + node[2:], fns, penv, cenv, active)
+        return _ncount(frontend, ["seam"] + node[2:], fns, penv, cenv, active, venv)
     if head in ("seam", "seam1"):
         for item in _roleclauses(node[2:])[3]:
-            add(_ncount(frontend, item, fns, penv, cenv, active))
+            add(_ncount(frontend, item, fns, penv, cenv, active, venv))
         return out
     if head == "if":
-        add(_ncount(frontend, node[1], fns, penv, cenv, active))
-        then_counts = _ncount(frontend, node[2], fns, penv, cenv, active)
-        else_counts = _ncount(frontend, node[3], fns, penv, cenv, active)
+        add(_ncount(frontend, node[1], fns, penv, cenv, active, venv))
+        then_env = loom_bounds.refine(
+            node[1], venv, True, frontend.int_min, frontend.int_max, frontend.i31,
+        )
+        else_env = loom_bounds.refine(
+            node[1], venv, False, frontend.int_min, frontend.int_max, frontend.i31,
+        )
+        then_counts = (
+            _ncount(frontend, node[2], fns, penv, cenv, active, then_env)
+            if then_env is not None else {}
+        )
+        else_counts = (
+            _ncount(frontend, node[3], fns, penv, cenv, active, else_env)
+            if else_env is not None else {}
+        )
         for eff in set(then_counts) | set(else_counts):
             out[eff] = _nadd(out.get(eff, 0), max(then_counts.get(eff, 0), else_counts.get(eff, 0)))
         return out
     if head == "match":
-        add(_ncount(frontend, node[1], fns, penv, cenv, active))
-        arms = [_ncount(frontend, arm[1], fns, penv, cenv, active) for arm in node[2:] if isinstance(arm, list) and len(arm) >= 2]
+        add(_ncount(frontend, node[1], fns, penv, cenv, active, venv))
+        arms = [
+            _ncount(
+                frontend, arm[1], fns, penv, cenv, active,
+                loom_bounds.shadow(venv, loom_bounds.pattern_names(arm[0])),
+            )
+            for arm in node[2:] if isinstance(arm, list) and len(arm) >= 2
+        ]
         union = set().union(*[set(counts) for counts in arms]) if arms else set()
         for eff in union:
             out[eff] = _nadd(out.get(eff, 0), max(counts.get(eff, 0) for counts in arms))
         return out
     if head == "let":
         name, bound_value = node[1][0], node[1][1]
-        add(_ncount(frontend, bound_value, fns, penv, cenv, active))
+        add(_ncount(frontend, bound_value, fns, penv, cenv, active, venv))
+        next_venv = loom_bounds.bind(
+            venv,
+            name,
+            loom_bounds.value(
+                bound_value, venv, frontend.int_min, frontend.int_max, frontend.i31,
+            ),
+        )
         next_cenv = cenv
         if frontend.is_fn_expr(bound_value, fns, penv) or (_is_symbol(bound_value) and bound_value in cenv):
-            summary = _callable_ncount(frontend, bound_value, fns, penv, cenv, active)
+            summary = _callable_ncount(frontend, bound_value, fns, penv, cenv, active, venv)
             if any(_has_head(item, name) for item in bound_value[2:] if isinstance(bound_value, list)):
                 summary = {eff: _NCAP for eff in summary}
             next_cenv = {**cenv, name: summary}
         for item in node[2:]:
-            add(_ncount(frontend, item, fns, penv, next_cenv, active))
+            add(_ncount(frontend, item, fns, penv, next_cenv, active, next_venv))
         return out
     if isinstance(head, list):
-        add(_callable_ncount(frontend, head, fns, penv, cenv, active))
+        add(_callable_ncount(frontend, head, fns, penv, cenv, active, venv))
         for arg in node[1:]:
-            add(_ncount(frontend, arg, fns, penv, cenv, active))
+            add(_ncount(frontend, arg, fns, penv, cenv, active, venv))
         return out
     if head == "handle":
         for item in node[2:]:
-            add(_ncount(frontend, item, fns, penv, cenv, active))
+            add(_ncount(frontend, item, fns, penv, cenv, active, venv))
         return out
     if head == "with":
         body_counts = {}
         for item in node[3:]:
-            _nmerge(frontend, body_counts, _ncount(frontend, item, fns, penv, cenv, active))
+            _nmerge(frontend, body_counts, _ncount(frontend, item, fns, penv, cenv, active, venv))
         add(body_counts)
         requests = body_counts.get(node[1], 0)
-        handler_counts = _callable_ncount(frontend, node[2], fns, penv, cenv, active)
+        handler_counts = _callable_ncount(frontend, node[2], fns, penv, cenv, active, venv)
         if requests and handler_counts.get(node[1], 0):
             handler_counts = {eff: _NCAP for eff in handler_counts}
         for eff, count in handler_counts.items():
@@ -367,7 +405,7 @@ def _ncount(frontend, node, fns, penv, cenv=None, active=None):
         spec = node[1]
         rname, reffs = (spec[0], set(spec[1:])) if isinstance(spec, list) else (spec, set())
         for item in node[2:]:
-            add(_ncount(frontend, item, fns, penv, cenv, active))
+            add(_ncount(frontend, item, fns, penv, cenv, active, venv))
         uses = out.pop(rname, 0)
         for eff in reffs & frontend.effects:
             out[eff] = _nadd(out.get(eff, 0), uses)
@@ -375,7 +413,7 @@ def _ncount(frontend, node, fns, penv, cenv=None, active=None):
     if head == "use":
         return {node[1]: 1}
     for arg in node[1:]:
-        add(_ncount(frontend, arg, fns, penv, cenv, active))
+        add(_ncount(frontend, arg, fns, penv, cenv, active, venv))
     if head in frontend.op_eff:
         out[frontend.op_eff[head]] = _nadd(out.get(frontend.op_eff[head], 0), 1)
     elif head == "ffi":
@@ -384,8 +422,8 @@ def _ncount(frontend, node, fns, penv, cenv=None, active=None):
         bound_cenv = {}
         for index, param in enumerate(fns[head]["params"]):
             if frontend.platent(param) is not None and index + 1 < len(node):
-                bound_cenv[frontend.pname(param)] = _callable_ncount(frontend, node[index + 1], fns, penv, cenv, active)
-        recurrence = _recurrence_ncount(frontend, head, node[1:], fns, active)
+                bound_cenv[frontend.pname(param)] = _callable_ncount(frontend, node[index + 1], fns, penv, cenv, active, venv)
+        recurrence = _recurrence_ncount(frontend, head, node[1:], fns, active, venv)
         add(
             recurrence if recurrence is not None
             else _function_ncount(frontend, head, fns, bound_cenv, active)
@@ -556,19 +594,14 @@ def _combine_recurrence_paths(frontend, left, right):
     return combined
 
 
-def _static_recurrence_rank(argument, recurrence):
-    if recurrence["domain"] == "i31":
-        if not isinstance(argument, int):
-            return None
-        return max(0, argument - recurrence["floor"] + 1)
-    if recurrence["domain"] == "list":
-        if not isinstance(argument, list) or not argument or argument[0] != "list":
-            return None
-        return len(argument) - 1
-    return None
+def _static_recurrence_rank(frontend, argument, recurrence, venv):
+    return loom_bounds.recurrence_rank(
+        argument, recurrence, venv,
+        frontend.int_min, frontend.int_max, frontend.i31,
+    )
 
 
-def _recurrence_ncount(frontend, entry, args, fns, active):
+def _recurrence_ncount(frontend, entry, args, fns, active, venv=None):
     certificate = fns[entry].get("descent")
     recurrence = certificate.get("recurrence") if certificate else None
     if recurrence is None or entry in active:
@@ -576,7 +609,7 @@ def _recurrence_ncount(frontend, entry, args, fns, active):
     measure_index = certificate["measure_index"][entry]
     if measure_index >= len(args):
         return None
-    rank = _static_recurrence_rank(args[measure_index], recurrence)
+    rank = _static_recurrence_rank(frontend, args[measure_index], recurrence, venv or {})
     if rank is None or rank >= _NCAP:
         return None
     component = set(certificate["component"])
@@ -894,9 +927,10 @@ def _author_covers(pairs, role, up):
     return any(actual_role in seen and who != "ai" for (actual_role, who) in pairs)
 
 
-def infer(frontend, node, fns, errs, penv=None):
+def infer(frontend, node, fns, errs, penv=None, venv=None):
     """Effect row a node performs transitively."""
     penv = penv or {}
+    venv = venv or {}
     if not isinstance(node, list) or not node:
         return set()
     head = node[0]
@@ -908,12 +942,12 @@ def infer(frontend, node, fns, errs, penv=None):
             errs.append(f"call budget has invalid quantum {quantum} (expected 0..{_NCAP - 1})")
         eff = set()
         for expr in node[2:]:
-            eff |= infer(frontend, expr, fns, errs, penv)
+            eff |= infer(frontend, expr, fns, errs, penv, venv)
         return eff
     if head == "ffi":
         eff = set()
         for arg in node[2:]:
-            eff |= infer(frontend, arg, fns, errs, penv)
+            eff |= infer(frontend, arg, fns, errs, penv, venv)
         return eff | {"?"}
     if head in ("seam", "seam1"):
         decl = set(node[1]) - {"Pure"}
@@ -921,7 +955,7 @@ def infer(frontend, node, fns, errs, penv=None):
         up = _with_policy_rank(up)
         inner = set()
         for expr in body:
-            inner |= infer(frontend, expr, fns, errs, penv)
+            inner |= infer(frontend, expr, fns, errs, penv, venv)
         inner.discard("?")
         if inner - decl:
             errs.append(f"seam under-declares: wraps {sorted(inner)} but contract says {sorted(decl)}")
@@ -955,11 +989,11 @@ def infer(frontend, node, fns, errs, penv=None):
         return decl
     if head == "seamN":
         quantum = node[1] if isinstance(node[1], int) else -1
-        decl = infer(frontend, ["seam"] + node[2:], fns, errs, penv)
+        decl = infer(frontend, ["seam"] + node[2:], fns, errs, penv, venv)
         body = _roleclauses(node[3:])[3]
         counts = {}
         for expr in body:
-            for effect_name, count in _ncount(frontend, expr, fns, penv).items():
+            for effect_name, count in _ncount(frontend, expr, fns, penv, venv=venv).items():
                 counts[effect_name] = _nadd(counts.get(effect_name, 0), count)
         for effect_name in sorted(decl):
             direct_count = counts.get(effect_name, 0)
@@ -969,7 +1003,7 @@ def infer(frontend, node, fns, errs, penv=None):
     if head == "repro":
         inner = set()
         for expr in node[1:]:
-            inner |= infer(frontend, expr, fns, errs, penv)
+            inner |= infer(frontend, expr, fns, errs, penv, venv)
         laundered = set()
         for expr in node[1:]:
             laundered |= _sealed_discharges(expr, {"Rand"})
@@ -984,7 +1018,7 @@ def infer(frontend, node, fns, errs, penv=None):
             errs.append(f"handle of unknown effect {sorted(bad)}")
         inner = set()
         for expr in node[2:]:
-            inner |= infer(frontend, expr, fns, errs, penv)
+            inner |= infer(frontend, expr, fns, errs, penv, venv)
         return inner - handled
     if head == "with":
         eff_name = node[1]
@@ -993,7 +1027,7 @@ def infer(frontend, node, fns, errs, penv=None):
         handler_latent = latent_of(frontend, node[2], fns, penv, errs)
         inner = set()
         for expr in node[3:]:
-            inner |= infer(frontend, expr, fns, errs, penv)
+            inner |= infer(frontend, expr, fns, errs, penv, venv)
         return (inner - {eff_name}) | handler_latent
     if head == "use":
         for frame in reversed(_checker_state().renv):
@@ -1016,7 +1050,7 @@ def infer(frontend, node, fns, errs, penv=None):
         try:
             eff = set()
             for expr in node[2:]:
-                eff |= infer(frontend, expr, fns, errs, penv)
+                eff |= infer(frontend, expr, fns, errs, penv, venv)
         finally:
             _checker_state().renv.pop()
         uc = {}
@@ -1033,31 +1067,46 @@ def infer(frontend, node, fns, errs, penv=None):
         eff = set()
         for field in node[1:]:
             if isinstance(field, list) and len(field) >= 2:
-                eff |= infer(frontend, field[1], fns, errs, penv)
+                eff |= infer(frontend, field[1], fns, errs, penv, venv)
         return eff
     if head == "get":
-        return infer(frontend, node[1], fns, errs, penv)
+        return infer(frontend, node[1], fns, errs, penv, venv)
     if head == "variant":
-        return infer(frontend, node[2], fns, errs, penv)
+        return infer(frontend, node[2], fns, errs, penv, venv)
     if head == "match":
-        eff = infer(frontend, node[1], fns, errs, penv)
+        eff = infer(frontend, node[1], fns, errs, penv, venv)
         for arm in node[2:]:
             if isinstance(arm, list) and len(arm) >= 2:
-                eff |= infer(frontend, arm[1], fns, errs, penv)
+                arm_venv = loom_bounds.shadow(venv, loom_bounds.pattern_names(arm[0]))
+                eff |= infer(frontend, arm[1], fns, errs, penv, arm_venv)
         return eff
     if head == "if":
-        return infer(frontend, node[1], fns, errs, penv) | infer(frontend, node[2], fns, errs, penv) | infer(frontend, node[3], fns, errs, penv)
+        cond_eff = infer(frontend, node[1], fns, errs, penv, venv)
+        then_env = loom_bounds.refine(
+            node[1], venv, True, frontend.int_min, frontend.int_max, frontend.i31,
+        )
+        else_env = loom_bounds.refine(
+            node[1], venv, False, frontend.int_min, frontend.int_max, frontend.i31,
+        )
+        then_eff = infer(frontend, node[2], fns, errs, penv, then_env) if then_env is not None else set()
+        else_eff = infer(frontend, node[3], fns, errs, penv, else_env) if else_env is not None else set()
+        return cond_eff | then_eff | else_eff
     if head == "let":
         name, value = node[1][0], node[1][1]
-        eff = infer(frontend, value, fns, errs, penv)
+        eff = infer(frontend, value, fns, errs, penv, venv)
         bound_penv = {**penv, name: latent_of(frontend, value, fns, penv, errs)} if frontend.is_fn_expr(value, fns, penv) else penv
+        bound_venv = loom_bounds.bind(
+            venv,
+            name,
+            loom_bounds.value(value, venv, frontend.int_min, frontend.int_max, frontend.i31),
+        )
         saved_prov = _checker_state().taint_prov.get(name, frontend.miss)
         saved_role = _checker_state().taint_role.get(name, frontend.miss)
         _checker_state().taint_prov[name] = prov_of(frontend, value, _checker_state().taint_prov)
         _checker_state().taint_role[name] = roles_of(frontend, value, _checker_state().taint_role)
         try:
             for expr in node[2:]:
-                eff |= infer(frontend, expr, fns, errs, bound_penv)
+                eff |= infer(frontend, expr, fns, errs, bound_penv, bound_venv)
         finally:
             if saved_prov is not frontend.miss:
                 _checker_state().taint_prov[name] = saved_prov
@@ -1071,29 +1120,29 @@ def infer(frontend, node, fns, errs, penv=None):
     if head == "prov":
         eff = set()
         for expr in node[2:]:
-            eff |= infer(frontend, expr, fns, errs, penv)
+            eff |= infer(frontend, expr, fns, errs, penv, venv)
         return eff
     if head == "by":
         eff = set()
         for expr in node[3:]:
-            eff |= infer(frontend, expr, fns, errs, penv)
+            eff |= infer(frontend, expr, fns, errs, penv, venv)
         return eff
     if head == "recall":
         eff = set()
         for expr in node[1:]:
-            eff |= infer(frontend, expr, fns, errs, penv)
+            eff |= infer(frontend, expr, fns, errs, penv, venv)
         return eff
     if head == "declassify":
         if node[1] == "ai":
             errs.append("declassify: 'ai' cannot declassify provenance — only a non-ai role may take responsibility")
         eff = set()
         for expr in node[2:]:
-            eff |= infer(frontend, expr, fns, errs, penv)
+            eff |= infer(frontend, expr, fns, errs, penv, venv)
         return eff
     if isinstance(head, list):
         eff = latent_of(frontend, head, fns, penv, errs)
         for arg in node[1:]:
-            eff |= infer(frontend, arg, fns, errs, penv)
+            eff |= infer(frontend, arg, fns, errs, penv, venv)
         return eff
     if head == "trust":
         spec = node[1] if len(node) > 1 else None
@@ -1117,7 +1166,7 @@ def infer(frontend, node, fns, errs, penv=None):
                 errs.append(f"trust gate: need >= {need} independent anchor(s), got {len(independent)} {sorted(independent) or '(none)'} — value too self-referential / under-corroborated")
         eff = set()
         for expr in body:
-            eff |= infer(frontend, expr, fns, errs, penv)
+            eff |= infer(frontend, expr, fns, errs, penv, venv)
         return eff
     if head == "asm":
         error = asm_validation_error(node)
@@ -1127,12 +1176,12 @@ def infer(frontend, node, fns, errs, penv=None):
         spec = asm_metadata(node)
         eff = set()
         for arg in node[3:]:
-            eff |= infer(frontend, arg, fns, errs, penv)
+            eff |= infer(frontend, arg, fns, errs, penv, venv)
         eff |= set(spec["effects"])
         return eff
     eff = set()
     for arg in node[1:]:
-        eff |= infer(frontend, arg, fns, errs, penv)
+        eff |= infer(frontend, arg, fns, errs, penv, venv)
     if head in frontend.builtin_eff:
         eff |= frontend.builtin_eff[head]
     elif head in penv:
