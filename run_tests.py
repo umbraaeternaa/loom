@@ -2143,6 +2143,89 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             compiler_receipt, manifest, artifact_observation, artifact_src, artifact_wasm, changed_components
         )
         compiler_workflow = _loom.build_gate_workflow_v3(manifest)
+        binding_protocol = "local-process/v1"
+        binding_authority = "urn:loom:host:operator-gate"
+        binding_input = {
+            "action": "process",
+            "label": "cafe\u0301",
+            "manifest_sha256": valid["manifest_sha256"],
+        }
+        binding_input_nfc = {
+            "manifest_sha256": valid["manifest_sha256"],
+            "label": "caf\u00e9",
+            "action": "process",
+        }
+        interface_result = _loom.build_interface_binding(binding_protocol)
+        interface_binding = interface_result["binding"]
+        binding_executor = getattr(_loom, "_loom_executor", None)
+        executor_descriptor_ok = (
+            binding_executor is None
+            or (
+                interface_binding["descriptor"]["plan_schema"] == binding_executor.PLAN_SCHEMA
+                and interface_binding["descriptor"]["plan_validation_schema"] == binding_executor.PLAN_VALIDATION_SCHEMA
+                and interface_binding["descriptor"]["attempt_schema"] == binding_executor.HOST_ATTEMPT_SCHEMA
+                and interface_binding["descriptor"]["attempt_validation_schema"] == binding_executor.HOST_ATTEMPT_VALIDATION_SCHEMA
+                and interface_binding["descriptor"]["action"] == binding_executor.PROCESS_ACTION
+                and interface_binding["descriptor"]["attempt_results"] == sorted(binding_executor._HOST_RESULTS)
+            )
+        )
+        verified_interface = _loom.verify_interface_binding(interface_binding, binding_protocol)
+        tampered_interface = json.loads(json.dumps(interface_binding))
+        tampered_interface["descriptor"]["executor_boundary"] = "ambient-authority"
+        tampered_interface["descriptor_sha256"] = hashlib.sha256(
+            _loom._artifact_json(tampered_interface["descriptor"]).encode("utf-8")
+        ).hexdigest()
+        tampered_interface["binding_sha256"] = hashlib.sha256(_loom._artifact_json({
+            key: value for key, value in tampered_interface.items() if key != "binding_sha256"
+        }).encode("utf-8")).hexdigest()
+        rejected_interface_tamper = _loom.verify_interface_binding(tampered_interface, binding_protocol)
+        unknown_interface = json.loads(json.dumps(interface_binding))
+        unknown_interface["extension"] = "not-negotiated"
+        rejected_interface_extension = _loom.verify_interface_binding(unknown_interface, binding_protocol)
+        tool_result = _loom.build_tool_binding(binding_protocol, binding_authority, "process", binding_input)
+        tool_binding = tool_result["binding"]
+        verified_tool = _loom.verify_tool_binding(
+            tool_binding, binding_protocol, binding_authority, "process", binding_input
+        )
+        nfc_tool = _loom.build_tool_binding(binding_protocol, binding_authority, "process", binding_input_nfc)
+        rejected_changed_input = _loom.verify_tool_binding(
+            tool_binding, binding_protocol, binding_authority, "process",
+            {**binding_input_nfc, "action": "different"},
+        )
+        tampered_authority = json.loads(json.dumps(tool_binding))
+        tampered_authority["authority"] = "urn:loom:host:ambient"
+        tampered_authority["binding_sha256"] = hashlib.sha256(_loom._artifact_json({
+            key: value for key, value in tampered_authority.items() if key != "binding_sha256"
+        }).encode("utf-8")).hexdigest()
+        rejected_authority_tamper = _loom.verify_tool_binding(
+            tampered_authority, binding_protocol, binding_authority, "process", binding_input
+        )
+        tampered_nested_interface = json.loads(json.dumps(tool_binding))
+        nested = tampered_nested_interface["interface_binding"]
+        nested["descriptor"]["executor_boundary"] = "ambient-authority"
+        nested["descriptor_sha256"] = hashlib.sha256(
+            _loom._artifact_json(nested["descriptor"]).encode("utf-8")
+        ).hexdigest()
+        nested["binding_sha256"] = hashlib.sha256(_loom._artifact_json({
+            key: value for key, value in nested.items() if key != "binding_sha256"
+        }).encode("utf-8")).hexdigest()
+        tampered_nested_interface["interface_binding_sha256"] = nested["binding_sha256"]
+        tampered_nested_interface["binding_sha256"] = hashlib.sha256(_loom._artifact_json({
+            key: value for key, value in tampered_nested_interface.items() if key != "binding_sha256"
+        }).encode("utf-8")).hexdigest()
+        rejected_nested_interface = _loom.verify_tool_binding(
+            tampered_nested_interface, binding_protocol, binding_authority, "process", binding_input
+        )
+        rejected_float_input = _loom.build_tool_binding(
+            binding_protocol, binding_authority, "process", {"value": 1.5}
+        )
+        rejected_unsafe_integer = _loom.build_tool_binding(
+            binding_protocol, binding_authority, "process", {"value": 1 << 53}
+        )
+        rejected_key_collision = _loom.build_tool_binding(
+            binding_protocol, binding_authority, "process", {"e\u0301": 1, "\u00e9": 2}
+        )
+        rejected_protocol = _loom.build_interface_binding("mcp/2025-11-25")
         manifest_contract_ok = (
             valid["valid"] is True
             and valid["advisory"] is True
@@ -2243,6 +2326,36 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
                 "artifact-evidence", "compiler-evidence", "compiler-receipt", "finish"
             ]
             and compiler_workflow["steps"][-4]["command"] == "loom.build_wasm_artifact_evidence(manifest, source, wasm_bytes)"
+            and interface_result["valid"] is True
+            and interface_binding["schema"] == "loom-interface-binding/v0"
+            and interface_binding["protocol"] == binding_protocol
+            and interface_binding["descriptor"]["executor_boundary"] == "no-shell/no-network-by-default"
+            and executor_descriptor_ok
+            and verified_interface["valid"] is True
+            and rejected_interface_tamper["valid"] is False
+            and any(item["code"] == "interface-mismatch" for item in rejected_interface_tamper["findings"])
+            and rejected_interface_extension["valid"] is False
+            and any(item["code"] == "unknown-field" for item in rejected_interface_extension["findings"])
+            and tool_result["valid"] is True
+            and tool_binding["schema"] == "loom-tool-binding/v0"
+            and tool_binding["authority"] == binding_authority
+            and tool_binding["operation"] == "process"
+            and verified_tool["valid"] is True
+            and nfc_tool == tool_result
+            and rejected_changed_input["valid"] is False
+            and any(item["code"] == "tool-mismatch" for item in rejected_changed_input["findings"])
+            and rejected_authority_tamper["valid"] is False
+            and any(item["code"] == "authority-mismatch" for item in rejected_authority_tamper["findings"])
+            and rejected_nested_interface["valid"] is False
+            and any(item["code"] == "interface-mismatch" for item in rejected_nested_interface["findings"])
+            and rejected_float_input["valid"] is False
+            and any(item["code"] == "non-json-value" for item in rejected_float_input["findings"])
+            and rejected_unsafe_integer["valid"] is False
+            and any(item["code"] == "unsafe-integer" for item in rejected_unsafe_integer["findings"])
+            and rejected_key_collision["valid"] is False
+            and any(item["code"] == "normalized-key-collision" for item in rejected_key_collision["findings"])
+            and rejected_protocol["valid"] is False
+            and any(item["code"] == "unsupported-protocol" for item in rejected_protocol["findings"])
         )
         ok += manifest_contract_ok
         print(f"  {'ok  ' if manifest_contract_ok else 'FAIL'} gate: deterministic fail-closed task manifest v1")

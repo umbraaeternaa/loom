@@ -2969,6 +2969,220 @@ def _artifact_json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+_INTERFACE_BINDING_SCHEMA = "loom-interface-binding/v0"
+_INTERFACE_BINDING_VALIDATION_SCHEMA = "loom-interface-binding-validation/v0"
+_TOOL_BINDING_SCHEMA = "loom-tool-binding/v0"
+_TOOL_BINDING_VALIDATION_SCHEMA = "loom-tool-binding-validation/v0"
+_LOCAL_PROCESS_PROTOCOL = "local-process/v1"
+_LOCAL_PROCESS_AUTHORITY = "urn:loom:host:operator-gate"
+_LOCAL_PROCESS_DESCRIPTOR = {
+    "schema": "loom-local-process-interface/v1",
+    "action": "process",
+    "plan_schema": "loom-gate-execution-plan/v1",
+    "plan_validation_schema": "loom-gate-execution-plan-validation/v1",
+    "attempt_schema": "loom-gate-host-attempt/v1",
+    "attempt_validation_schema": "loom-gate-host-attempt-validation/v1",
+    "attempt_results": ["blocked", "completed", "failed"],
+    "executor_boundary": "no-shell/no-network-by-default",
+}
+_BINDING_MAX_DEPTH = 16
+_BINDING_MAX_ITEMS = 256
+_BINDING_MAX_STRING_BYTES = 65536
+_BINDING_MAX_SAFE_INTEGER = (1 << 53) - 1
+
+
+def _binding_result(schema, key, value, findings):
+    return {
+        "schema": schema,
+        "valid": not findings,
+        "advisory": True,
+        key: value if not findings else None,
+        "findings": findings,
+    }
+
+
+def _binding_sha256(value):
+    return hashlib.sha256(_artifact_json(value).encode("utf-8")).hexdigest()
+
+
+def _binding_is_sha256(value):
+    return isinstance(value, str) and len(value) == 64 and all(char in "0123456789abcdef" for char in value)
+
+
+def _normalize_binding_json(value, path="input", depth=0):
+    findings = []
+    if depth > _BINDING_MAX_DEPTH:
+        return None, [{"path": path, "code": "maximum-depth", "message": "binding JSON exceeds maximum depth 16"}]
+    if value is None or isinstance(value, bool):
+        return value, []
+    if type(value) is int:
+        if abs(value) > _BINDING_MAX_SAFE_INTEGER:
+            findings.append({"path": path, "code": "unsafe-integer", "message": "binding JSON integer exceeds the portable safe range"})
+        return value, findings
+    if isinstance(value, str):
+        normalized = unicodedata.normalize("NFC", value)
+        if len(normalized.encode("utf-8")) > _BINDING_MAX_STRING_BYTES:
+            findings.append({"path": path, "code": "string-too-large", "message": "binding JSON string exceeds 65536 UTF-8 bytes"})
+        return normalized, findings
+    if isinstance(value, list):
+        if len(value) > _BINDING_MAX_ITEMS:
+            findings.append({"path": path, "code": "too-many-items", "message": "binding JSON array exceeds 256 items"})
+        normalized = []
+        for index, item in enumerate(value):
+            child, child_findings = _normalize_binding_json(item, f"{path}[{index}]", depth + 1)
+            normalized.append(child)
+            findings.extend(child_findings)
+        return normalized, findings
+    if isinstance(value, dict):
+        if len(value) > _BINDING_MAX_ITEMS:
+            findings.append({"path": path, "code": "too-many-items", "message": "binding JSON object exceeds 256 fields"})
+        normalized = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                findings.append({"path": path, "code": "non-string-key", "message": "binding JSON object keys must be strings"})
+                continue
+            normalized_key = unicodedata.normalize("NFC", key)
+            if len(normalized_key.encode("utf-8")) > _BINDING_MAX_STRING_BYTES:
+                findings.append({"path": path, "code": "key-too-large", "message": "binding JSON key exceeds 65536 UTF-8 bytes"})
+            if normalized_key in normalized:
+                findings.append({"path": path, "code": "normalized-key-collision", "message": "binding JSON keys collide after NFC normalization"})
+                continue
+            child, child_findings = _normalize_binding_json(item, f"{path}.{normalized_key}", depth + 1)
+            normalized[normalized_key] = child
+            findings.extend(child_findings)
+        return normalized, findings
+    return None, [{"path": path, "code": "non-json-value", "message": "binding input must contain only portable JSON values"}]
+
+
+def build_interface_binding(protocol):
+    """Build a non-authorizing identity for the exact local process interface."""
+    findings = []
+    if not isinstance(protocol, str):
+        findings.append({"path": "protocol", "code": "expected-string", "message": "interface protocol must be a string"})
+    elif protocol != _LOCAL_PROCESS_PROTOCOL:
+        findings.append({"path": "protocol", "code": "unsupported-protocol", "message": "expected local-process/v1"})
+    if findings:
+        return _binding_result(_INTERFACE_BINDING_VALIDATION_SCHEMA, "binding", None, findings)
+    descriptor = json.loads(_artifact_json(_LOCAL_PROCESS_DESCRIPTOR))
+    body = {
+        "schema": _INTERFACE_BINDING_SCHEMA,
+        "protocol": protocol,
+        "descriptor": descriptor,
+        "descriptor_sha256": _binding_sha256(descriptor),
+    }
+    body["binding_sha256"] = _binding_sha256(body)
+    return _binding_result(_INTERFACE_BINDING_VALIDATION_SCHEMA, "binding", body, [])
+
+
+def verify_interface_binding(binding, protocol):
+    """Verify a local process interface binding against the closed v0 contract."""
+    expected_result = build_interface_binding(protocol)
+    findings = list(expected_result["findings"])
+    expected_keys = {"schema", "protocol", "descriptor", "descriptor_sha256", "binding_sha256"}
+    if not isinstance(binding, dict):
+        findings.append({"path": "binding", "code": "expected-object", "message": "interface binding must be an object"})
+        return _binding_result(_INTERFACE_BINDING_VALIDATION_SCHEMA, "binding", None, findings)
+    for key in sorted(set(binding) - expected_keys):
+        findings.append({"path": "binding." + key, "code": "unknown-field", "message": "unknown interface binding field"})
+    for key in sorted(expected_keys - set(binding)):
+        findings.append({"path": "binding." + key, "code": "missing-field", "message": "missing interface binding field"})
+    if binding.get("schema") != _INTERFACE_BINDING_SCHEMA:
+        findings.append({"path": "binding.schema", "code": "unsupported-schema", "message": "expected loom-interface-binding/v0"})
+    if binding.get("protocol") != _LOCAL_PROCESS_PROTOCOL:
+        findings.append({"path": "binding.protocol", "code": "protocol-mismatch", "message": "interface binding must use local-process/v1"})
+    for key in ("descriptor_sha256", "binding_sha256"):
+        if not _binding_is_sha256(binding.get(key)):
+            findings.append({"path": "binding." + key, "code": "expected-sha256", "message": key + " must be lowercase SHA-256 hex"})
+    if set(binding) == expected_keys and isinstance(binding.get("descriptor"), dict):
+        if binding.get("descriptor_sha256") != _binding_sha256(binding["descriptor"]):
+            findings.append({"path": "binding.descriptor_sha256", "code": "descriptor-hash-mismatch", "message": "descriptor hash does not match the canonical interface descriptor"})
+        unsigned = {key: binding[key] for key in sorted(expected_keys - {"binding_sha256"})}
+        if binding.get("binding_sha256") != _binding_sha256(unsigned):
+            findings.append({"path": "binding.binding_sha256", "code": "binding-hash-mismatch", "message": "binding hash does not match the canonical interface binding"})
+    if expected_result["valid"] and binding != expected_result["binding"]:
+        findings.append({"path": "binding", "code": "interface-mismatch", "message": "interface binding does not match the exact local process contract"})
+    return _binding_result(_INTERFACE_BINDING_VALIDATION_SCHEMA, "binding", binding, findings)
+
+
+def _local_process_output_contract():
+    return {
+        "attempt_schema": _LOCAL_PROCESS_DESCRIPTOR["attempt_schema"],
+        "attempt_validation_schema": _LOCAL_PROCESS_DESCRIPTOR["attempt_validation_schema"],
+        "results": list(_LOCAL_PROCESS_DESCRIPTOR["attempt_results"]),
+    }
+
+
+def build_tool_binding(protocol, authority, operation, input_value):
+    """Bind exact local process authority, operation, interface, and JSON input."""
+    findings = []
+    interface_result = build_interface_binding(protocol)
+    findings.extend(interface_result["findings"])
+    if not isinstance(authority, str):
+        findings.append({"path": "authority", "code": "expected-string", "message": "tool authority must be a string"})
+    elif authority != _LOCAL_PROCESS_AUTHORITY:
+        findings.append({"path": "authority", "code": "authority-mismatch", "message": "local process authority must be urn:loom:host:operator-gate"})
+    if not isinstance(operation, str):
+        findings.append({"path": "operation", "code": "expected-string", "message": "tool operation must be a string"})
+    elif operation != "process":
+        findings.append({"path": "operation", "code": "operation-mismatch", "message": "local-process/v1 supports only process"})
+    normalized_input, input_findings = _normalize_binding_json(input_value)
+    findings.extend(input_findings)
+    if findings:
+        return _binding_result(_TOOL_BINDING_VALIDATION_SCHEMA, "binding", None, findings)
+    interface_binding = interface_result["binding"]
+    body = {
+        "schema": _TOOL_BINDING_SCHEMA,
+        "protocol": protocol,
+        "authority": authority,
+        "operation": operation,
+        "interface_binding": interface_binding,
+        "interface_binding_sha256": interface_binding["binding_sha256"],
+        "input_sha256": _binding_sha256(normalized_input),
+        "output_contract_sha256": _binding_sha256(_local_process_output_contract()),
+    }
+    body["binding_sha256"] = _binding_sha256(body)
+    return _binding_result(_TOOL_BINDING_VALIDATION_SCHEMA, "binding", body, [])
+
+
+def verify_tool_binding(binding, protocol, authority, operation, input_value):
+    """Verify a local process tool binding against its exact caller inputs."""
+    expected_result = build_tool_binding(protocol, authority, operation, input_value)
+    findings = list(expected_result["findings"])
+    expected_keys = {
+        "schema", "protocol", "authority", "operation", "interface_binding",
+        "interface_binding_sha256", "input_sha256", "output_contract_sha256", "binding_sha256",
+    }
+    if not isinstance(binding, dict):
+        findings.append({"path": "binding", "code": "expected-object", "message": "tool binding must be an object"})
+        return _binding_result(_TOOL_BINDING_VALIDATION_SCHEMA, "binding", None, findings)
+    for key in sorted(set(binding) - expected_keys):
+        findings.append({"path": "binding." + key, "code": "unknown-field", "message": "unknown tool binding field"})
+    for key in sorted(expected_keys - set(binding)):
+        findings.append({"path": "binding." + key, "code": "missing-field", "message": "missing tool binding field"})
+    if binding.get("schema") != _TOOL_BINDING_SCHEMA:
+        findings.append({"path": "binding.schema", "code": "unsupported-schema", "message": "expected loom-tool-binding/v0"})
+    if binding.get("protocol") != _LOCAL_PROCESS_PROTOCOL:
+        findings.append({"path": "binding.protocol", "code": "protocol-mismatch", "message": "tool binding must use local-process/v1"})
+    if binding.get("authority") != _LOCAL_PROCESS_AUTHORITY:
+        findings.append({"path": "binding.authority", "code": "authority-mismatch", "message": "tool binding has the wrong local authority"})
+    if binding.get("operation") != "process":
+        findings.append({"path": "binding.operation", "code": "operation-mismatch", "message": "tool binding has the wrong local operation"})
+    for key in ("interface_binding_sha256", "input_sha256", "output_contract_sha256", "binding_sha256"):
+        if not _binding_is_sha256(binding.get(key)):
+            findings.append({"path": "binding." + key, "code": "expected-sha256", "message": key + " must be lowercase SHA-256 hex"})
+    interface_check = verify_interface_binding(binding.get("interface_binding"), protocol)
+    findings.extend({"path": "binding.interface_binding." + item["path"], "code": item["code"], "message": item["message"]} for item in interface_check["findings"])
+    if interface_check["valid"] and binding.get("interface_binding_sha256") != interface_check["binding"]["binding_sha256"]:
+        findings.append({"path": "binding.interface_binding_sha256", "code": "interface-hash-mismatch", "message": "tool binding does not reference its embedded interface binding"})
+    if set(binding) == expected_keys:
+        unsigned = {key: binding[key] for key in sorted(expected_keys - {"binding_sha256"})}
+        if binding.get("binding_sha256") != _binding_sha256(unsigned):
+            findings.append({"path": "binding.binding_sha256", "code": "binding-hash-mismatch", "message": "binding hash does not match the canonical tool binding"})
+    if expected_result["valid"] and binding != expected_result["binding"]:
+        findings.append({"path": "binding", "code": "tool-mismatch", "message": "tool binding does not match the exact authority, operation, interface, or input"})
+    return _binding_result(_TOOL_BINDING_VALIDATION_SCHEMA, "binding", binding, findings)
+
+
 def _artifact_validation(binding, findings):
     return {
         "schema": "loom-gate-wasm-artifact-validation/v1",

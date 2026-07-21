@@ -27,6 +27,7 @@ WASM_EQUIVALENCE_DOC = ROOT / "docs" / "wasm_source_equivalence_v1.md"
 COMPILER_PROVENANCE_DOC = ROOT / "docs" / "compiler_provenance_v1.md"
 COMPILER_EVIDENCE_DOC = ROOT / "docs" / "gate_compiler_evidence_v1.md"
 COMPILER_RECEIPT_DOC = ROOT / "docs" / "gate_compiler_receipt_v3.md"
+ACTION_BINDING_DOC = ROOT / "docs" / "action_binding_v0.md"
 WASM_ARTIFACT_DOC = ROOT / "docs" / "gate_wasm_artifact_v1.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
 
@@ -633,6 +634,58 @@ def _check_compiler_evidence_surface_parity() -> None:
         raise SystemExit("docs parity: compiler evidence surface identity drift")
 
 
+def _check_action_binding_doc() -> None:
+    words = " ".join(ACTION_BINDING_DOC.read_text().split())
+    required = (
+        "LOOM Interface and Tool Binding v0",
+        "normative, deterministic, read-only, advisory, and non-authorizing",
+        "build_interface_binding(protocol)",
+        "verify_interface_binding(binding, protocol)",
+        "build_tool_binding(protocol, authority, operation, input_value)",
+        "verify_tool_binding(binding, protocol, authority, operation, input_value)",
+        "loom-interface-binding/v0",
+        "loom-tool-binding/v0",
+        "local-process/v1",
+        "urn:loom:host:operator-gate",
+        "no-shell/no-network-by-default",
+        "no duplicate object keys after NFC normalization",
+        "not capabilities",
+        "Action Capsule v0 and an additive Approval v2",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: action binding v0 contract drift: missing " + ", ".join(missing))
+
+
+def _check_action_binding_parity() -> None:
+    import loom as modular
+    spec = importlib.util.spec_from_file_location("loom_docs_action_binding", DOCS_LOOM)
+    if spec is None or spec.loader is None:
+        raise SystemExit("docs parity: could not load standalone action binding surface")
+    standalone = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(standalone)
+    protocol = "local-process/v1"
+    authority = "urn:loom:host:operator-gate"
+    operation = "process"
+    input_value = {"action": "process", "label": "cafe\u0301", "arguments": [1, True, None]}
+    modular_interface = modular.build_interface_binding(protocol)
+    standalone_interface = standalone.build_interface_binding(protocol)
+    modular_tool = modular.build_tool_binding(protocol, authority, operation, input_value)
+    standalone_tool = standalone.build_tool_binding(protocol, authority, operation, input_value)
+    contract = (
+        modular_interface == standalone_interface
+        and modular_interface["valid"]
+        and modular.verify_interface_binding(modular_interface["binding"], protocol)["valid"]
+        and standalone.verify_interface_binding(standalone_interface["binding"], protocol)["valid"]
+        and modular_tool == standalone_tool
+        and modular_tool["valid"]
+        and modular.verify_tool_binding(modular_tool["binding"], protocol, authority, operation, input_value)["valid"]
+        and standalone.verify_tool_binding(standalone_tool["binding"], protocol, authority, operation, input_value)["valid"]
+    )
+    if not contract:
+        raise SystemExit("docs parity: modular and standalone action bindings diverged")
+
+
 def _check_wasm_artifact_doc() -> None:
     text = WASM_ARTIFACT_DOC.read_text()
     words = " ".join(text.split())
@@ -714,6 +767,8 @@ def main() -> int:
     _check_compiler_evidence_doc()
     _check_compiler_receipt_doc()
     _check_compiler_evidence_surface_parity()
+    _check_action_binding_doc()
+    _check_action_binding_parity()
     _check_wasm_artifact_doc()
     _check_secret_credential_policy_doc()
     _check_pyodide_import_boundary()

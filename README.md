@@ -126,6 +126,11 @@ Source Equivalence result without changing earlier Gate schemas. The additive
 artifact evidence, and that exact compiler identity into one closed receipt and
 an explicit Workflow v3 route.
 
+[`Interface and Tool Binding v0`](docs/action_binding_v0.md) is the first pure,
+non-authorizing Action Capsule primitive. It content-addresses the exact local
+process plan/attempt interface, authority, operation, and normalized JSON input.
+It does not execute, approve, claim, delegate, or grant authority.
+
 Certified recursion can also use [`Proven Value Bounds v1`](docs/proven_value_bounds_v1.md):
 the checker derives conservative i31 and list-length upper bounds through
 lexical `let`, safe pure expressions, and guarded paths. Unknown values and

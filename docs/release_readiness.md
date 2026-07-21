@@ -58,11 +58,18 @@ experimental, and what LOOM does not claim yet.
   exposes Workflow v3 without changing earlier receipt or workflow schemas.
   `loom gate-workflow-v3` and the Playground expose this route without
   collecting components, signing, approving, or executing host actions.
+- Interface and Tool Binding v0 deterministically pins the exact
+  `local-process/v1` plan/attempt contract, operator-gate authority, `process`
+  operation, and normalized portable JSON input. It is advisory and performs no
+  execution, signing, approval, claim, delegation, or capability grant.
 - Deterministic property fuzz smoke is part of the citadel.
 
 ## Experimental or bounded
 
 - LOOM is still a research kernel, not a package-manager ecosystem.
+- Action Capsule v0 and an additive Approval v2 that binds the exact capsule
+  hash remain future contracts; Interface and Tool Binding v0 does not imply
+  either authority or an authorizing lifecycle.
 - The Gate is a verification and lifecycle layer; it does not magically confine
   arbitrary external tools unless those tools are routed through the bounded
   host lifecycle.
