@@ -3397,6 +3397,153 @@ def verify_wasm_compiler_evidence(evidence, manifest, program_src, wasm_bytes, c
     return _compiler_evidence_validation(evidence if not findings else None, findings)
 
 
+def _compiler_evidence_v2_attribution(builder_profile=None, verifier_profile=None):
+    builder_valid = isinstance(builder_profile, dict)
+    verifier_valid = isinstance(verifier_profile, dict)
+    relation = "unknown"
+    if builder_valid and verifier_valid:
+        relation = "same" if builder_profile == verifier_profile else "different"
+    return {
+        "builder_surface": builder_profile.get("surface") if builder_valid else None,
+        "builder_profile_sha256": builder_profile.get("profile_sha256") if builder_valid else None,
+        "verifier_surface": verifier_profile.get("surface") if verifier_valid else _GATE_COMPILER_SURFACE,
+        "verifier_profile_sha256": verifier_profile.get("profile_sha256") if verifier_valid else None,
+        "relation": relation,
+    }
+
+
+def _compiler_evidence_v2_validation(evidence, attribution, findings):
+    return {
+        "schema": "loom-gate-wasm-compiler-evidence-validation/v2",
+        "valid": not findings,
+        "advisory": True,
+        "evidence": evidence if not findings else None,
+        "attribution": attribution,
+        "findings": findings,
+    }
+
+
+def build_wasm_compiler_evidence_v2(manifest, program_src, wasm_bytes, builder_components):
+    """Bind one artifact to this builder while retaining later verifier attribution."""
+    profile_result = build_wasm_compiler_profile(_GATE_COMPILER_SURFACE, builder_components)
+    if not profile_result["valid"]:
+        return _compiler_evidence_v2_validation(
+            None,
+            _compiler_evidence_v2_attribution(),
+            _compiler_evidence_findings("builder_profile", profile_result["findings"]),
+        )
+    profile = profile_result["profile"]
+    attribution = _compiler_evidence_v2_attribution(profile, profile)
+    artifact_result = build_wasm_artifact_binding(manifest, program_src, wasm_bytes)
+    if not artifact_result["valid"]:
+        return _compiler_evidence_v2_validation(
+            None, attribution, _compiler_evidence_findings("artifact", artifact_result["findings"])
+        )
+    equivalence = verify_wasm_source_equivalence(program_src, wasm_bytes)
+    if not equivalence["valid"]:
+        findings = [
+            {"path": "builder_source_equivalence", "code": "wasm-source-mismatch", "message": message}
+            for message in equivalence["findings"]
+        ]
+        return _compiler_evidence_v2_validation(None, attribution, findings)
+    binding = artifact_result["binding"]
+    if profile["wasm_abi_version"] != binding["wasm_abi_version"]:
+        return _compiler_evidence_v2_validation(None, attribution, [{
+            "path": "wasm_abi_version",
+            "code": "compiler-artifact-abi-mismatch",
+            "message": "builder compiler profile and artifact binding use different WASM ABI versions",
+        }])
+    evidence = {
+        "schema": "loom-gate-wasm-compiler-evidence/v2",
+        "kind": "wasm-compiler",
+        "status": "pass",
+        "builder_surface": _GATE_COMPILER_SURFACE,
+        "builder_profile": profile,
+        "builder_profile_sha256": profile["profile_sha256"],
+        "artifact_binding": binding,
+        "artifact_binding_sha256": hashlib.sha256(_artifact_json(binding).encode("utf-8")).hexdigest(),
+        "builder_source_equivalence": equivalence,
+    }
+    evidence["evidence_sha256"] = hashlib.sha256(_artifact_json(evidence).encode("utf-8")).hexdigest()
+    return _compiler_evidence_v2_validation(evidence, attribution, [])
+
+
+def verify_wasm_compiler_evidence_v2(
+    evidence,
+    manifest,
+    program_src,
+    wasm_bytes,
+    builder_surface,
+    builder_components,
+    verifier_components,
+):
+    """Verify builder identity before attributing source/artifact equivalence."""
+    expected_keys = {
+        "schema", "kind", "status", "builder_surface", "builder_profile",
+        "builder_profile_sha256", "artifact_binding", "artifact_binding_sha256",
+        "builder_source_equivalence", "evidence_sha256",
+    }
+    findings = []
+    if not isinstance(evidence, dict):
+        return _compiler_evidence_v2_validation(None, _compiler_evidence_v2_attribution(), [{
+            "path": "evidence", "code": "expected-object", "message": "compiler evidence must be an object",
+        }])
+    for key in sorted(set(evidence) - expected_keys, key=str):
+        findings.append({"path": "evidence." + str(key), "code": "unknown-field", "message": "unknown compiler evidence field"})
+    for key in sorted(expected_keys - set(evidence)):
+        findings.append({"path": "evidence." + key, "code": "missing-field", "message": "missing compiler evidence field"})
+    if evidence.get("schema") != "loom-gate-wasm-compiler-evidence/v2":
+        findings.append({"path": "evidence.schema", "code": "unsupported-schema", "message": "expected loom-gate-wasm-compiler-evidence/v2"})
+    if evidence.get("kind") != "wasm-compiler":
+        findings.append({"path": "evidence.kind", "code": "unsupported-kind", "message": "expected wasm-compiler"})
+    if evidence.get("status") != "pass":
+        findings.append({"path": "evidence.status", "code": "unsupported-status", "message": "expected pass"})
+    if evidence.get("builder_surface") != builder_surface:
+        findings.append({"path": "evidence.builder_surface", "code": "builder-surface-mismatch", "message": "evidence builder surface does not match trusted-host input"})
+    if set(evidence) >= expected_keys:
+        body = {key: evidence[key] for key in expected_keys if key != "evidence_sha256"}
+        try:
+            digest = hashlib.sha256(_artifact_json(body).encode("utf-8")).hexdigest()
+        except (TypeError, ValueError):
+            findings.append({"path": "evidence", "code": "non-canonical-evidence", "message": "compiler evidence fields must be canonical JSON values"})
+        else:
+            if evidence.get("evidence_sha256") != digest:
+                findings.append({"path": "evidence.evidence_sha256", "code": "evidence-hash-mismatch", "message": "compiler evidence hash does not match its canonical fields"})
+    builder_profile_result = verify_wasm_compiler_profile(
+        evidence.get("builder_profile"), builder_surface, builder_components
+    )
+    findings.extend(_compiler_evidence_findings("builder_profile", builder_profile_result["findings"]))
+    builder_profile = builder_profile_result["profile"] if builder_profile_result["valid"] else None
+    if builder_profile is not None and evidence.get("builder_profile_sha256") != builder_profile["profile_sha256"]:
+        findings.append({
+            "path": "evidence.builder_profile_sha256",
+            "code": "profile-reference-mismatch",
+            "message": "evidence does not reference its verified builder profile",
+        })
+    verifier_profile_result = build_wasm_compiler_profile(_GATE_COMPILER_SURFACE, verifier_components)
+    findings.extend(_compiler_evidence_findings("verifier_profile", verifier_profile_result["findings"]))
+    verifier_profile = verifier_profile_result["profile"] if verifier_profile_result["valid"] else None
+    attribution = _compiler_evidence_v2_attribution(builder_profile, verifier_profile)
+    if findings:
+        return _compiler_evidence_v2_validation(None, attribution, findings)
+    if builder_profile != verifier_profile:
+        return _compiler_evidence_v2_validation(None, attribution, [{
+            "path": "compiler_profiles",
+            "code": "wasm-compiler-drift",
+            "message": "builder and verifier compiler profiles differ",
+        }])
+    expected = build_wasm_compiler_evidence_v2(manifest, program_src, wasm_bytes, builder_components)
+    if not expected["valid"]:
+        return _compiler_evidence_v2_validation(None, attribution, expected["findings"])
+    if evidence != expected["evidence"]:
+        return _compiler_evidence_v2_validation(None, attribution, [{
+            "path": "evidence",
+            "code": "compiler-evidence-mismatch",
+            "message": "compiler evidence does not match the exact builder, manifest, source, or WASM inputs",
+        }])
+    return _compiler_evidence_v2_validation(evidence, attribution, [])
+
+
 def _wasm_source_maps(program_src, defs):
     node_path_by_id = {}
     span_by_path = {}

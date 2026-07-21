@@ -26,6 +26,7 @@ WASM_TRUST_V2_DOC = ROOT / "docs" / "wasm_trust_provenance_v2.md"
 WASM_EQUIVALENCE_DOC = ROOT / "docs" / "wasm_source_equivalence_v1.md"
 COMPILER_PROVENANCE_DOC = ROOT / "docs" / "compiler_provenance_v1.md"
 COMPILER_EVIDENCE_DOC = ROOT / "docs" / "gate_compiler_evidence_v1.md"
+COMPILER_EVIDENCE_V2_DOC = ROOT / "docs" / "gate_compiler_evidence_v2.md"
 COMPILER_RECEIPT_DOC = ROOT / "docs" / "gate_compiler_receipt_v3.md"
 ACTION_BINDING_DOC = ROOT / "docs" / "action_binding_v0.md"
 WASM_ARTIFACT_DOC = ROOT / "docs" / "gate_wasm_artifact_v1.md"
@@ -534,6 +535,30 @@ def _check_compiler_evidence_doc() -> None:
         raise SystemExit("docs parity: compiler evidence contract drift: missing " + ", ".join(missing))
 
 
+def _check_compiler_evidence_v2_doc() -> None:
+    words = " ".join(COMPILER_EVIDENCE_V2_DOC.read_text().split())
+    required = (
+        "LOOM Gate WASM Compiler Evidence v2",
+        "normative, deterministic, read-only, advisory, and non-authorizing",
+        "loom.build_wasm_compiler_evidence_v2(",
+        "loom.verify_wasm_compiler_evidence_v2(",
+        "loom-gate-wasm-compiler-evidence-validation/v2",
+        "loom-gate-wasm-compiler-evidence/v2",
+        "builder_profile_sha256",
+        "verifier profile",
+        "wasm-compiler-drift",
+        "do not report `wasm-source-mismatch`",
+        "A bare profile hash is never sufficient builder provenance",
+        "Cross-surface verification therefore fails",
+        "never executes the supplied WASM",
+        "Receipt v3 and Workflow v3 continue to compose unchanged Compiler Evidence v1",
+        "Existing Gate manifest, observation, artifact, receipt, workflow, approval",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: compiler evidence v2 contract drift: missing " + ", ".join(missing))
+
+
 def _check_compiler_receipt_doc() -> None:
     text = COMPILER_RECEIPT_DOC.read_text()
     words = " ".join(text.split())
@@ -587,6 +612,28 @@ def _check_compiler_evidence_surface_parity() -> None:
         raise SystemExit("docs parity: compiler evidence surface failed to build")
     modular_evidence = modular_result["evidence"]
     standalone_evidence = standalone_result["evidence"]
+    modular_v2_result = modular.build_wasm_compiler_evidence_v2(manifest, source, wasm, modular_components)
+    standalone_v2_result = standalone.build_wasm_compiler_evidence_v2(manifest, source, wasm, standalone_components)
+    if not modular_v2_result["valid"] or not standalone_v2_result["valid"]:
+        raise SystemExit("docs parity: compiler evidence v2 surface failed to build")
+    modular_v2 = modular_v2_result["evidence"]
+    standalone_v2 = standalone_v2_result["evidence"]
+    modular_v2_self = modular.verify_wasm_compiler_evidence_v2(
+        modular_v2, manifest, source, wasm,
+        "modular-python", modular_components, modular_components,
+    )
+    standalone_v2_self = standalone.verify_wasm_compiler_evidence_v2(
+        standalone_v2, manifest, source, wasm,
+        "standalone-python", standalone_components, standalone_components,
+    )
+    modular_checks_standalone_v2 = modular.verify_wasm_compiler_evidence_v2(
+        standalone_v2, manifest, source, wasm,
+        "standalone-python", standalone_components, modular_components,
+    )
+    standalone_checks_modular_v2 = standalone.verify_wasm_compiler_evidence_v2(
+        modular_v2, manifest, source, wasm,
+        "modular-python", modular_components, standalone_components,
+    )
     observation = {
         "schema": "loom-gate-observation/v1",
         "result": "completed",
@@ -629,6 +676,21 @@ def _check_compiler_evidence_surface_parity() -> None:
         and modular_workflow["schema"] == standalone_workflow["schema"] == "loom-gate-workflow/v3"
         and modular_workflow["compiler_evidence"]["surface"] == "modular-python"
         and standalone_workflow["compiler_evidence"]["surface"] == "standalone-python"
+        and modular_v2["builder_surface"] == "modular-python"
+        and standalone_v2["builder_surface"] == "standalone-python"
+        and modular_v2["artifact_binding"] == standalone_v2["artifact_binding"]
+        and modular_v2["builder_source_equivalence"] == standalone_v2["builder_source_equivalence"]
+        and modular_v2["builder_profile_sha256"] != standalone_v2["builder_profile_sha256"]
+        and modular_v2_self["valid"]
+        and standalone_v2_self["valid"]
+        and modular_v2_self["attribution"]["relation"] == "same"
+        and standalone_v2_self["attribution"]["relation"] == "same"
+        and not modular_checks_standalone_v2["valid"]
+        and not standalone_checks_modular_v2["valid"]
+        and modular_checks_standalone_v2["attribution"]["relation"] == "different"
+        and standalone_checks_modular_v2["attribution"]["relation"] == "different"
+        and [item["code"] for item in modular_checks_standalone_v2["findings"]] == ["wasm-compiler-drift"]
+        and [item["code"] for item in standalone_checks_modular_v2["findings"]] == ["wasm-compiler-drift"]
     )
     if not contract:
         raise SystemExit("docs parity: compiler evidence surface identity drift")
@@ -765,6 +827,7 @@ def main() -> int:
     _check_wasm_equivalence_doc()
     _check_compiler_provenance_doc()
     _check_compiler_evidence_doc()
+    _check_compiler_evidence_v2_doc()
     _check_compiler_receipt_doc()
     _check_compiler_evidence_surface_parity()
     _check_action_binding_doc()

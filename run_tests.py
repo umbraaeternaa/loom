@@ -2124,6 +2124,63 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         rejected_cross_surface = _loom.build_wasm_compiler_evidence(manifest, artifact_src, artifact_wasm, other_components)
         rejected_compiler_source = _loom.build_wasm_compiler_evidence(manifest, artifact_src.replace("human 7", "human 8"), artifact_wasm, compiler_components)
         rejected_compiler_wasm = _loom.build_wasm_compiler_evidence(manifest, artifact_src, tampered_body_wasm, compiler_components)
+        compiler_evidence_v2_result = _loom.build_wasm_compiler_evidence_v2(
+            manifest, artifact_src, artifact_wasm, compiler_components
+        )
+        compiler_evidence_v2 = compiler_evidence_v2_result["evidence"]
+        verified_compiler_evidence_v2 = _loom.verify_wasm_compiler_evidence_v2(
+            compiler_evidence_v2, manifest, artifact_src, artifact_wasm,
+            running_surface, compiler_components, compiler_components,
+        )
+        drifted_verifier_components = dict(compiler_components)
+        drifted_verifier_components[changed_component_path] += b"\n# verifier drift"
+        rejected_compiler_drift_v2 = _loom.verify_wasm_compiler_evidence_v2(
+            compiler_evidence_v2, manifest, artifact_src, artifact_wasm,
+            running_surface, compiler_components, drifted_verifier_components,
+        )
+        rejected_drift_and_wasm_v2 = _loom.verify_wasm_compiler_evidence_v2(
+            compiler_evidence_v2, manifest, artifact_src, tampered_body_wasm,
+            running_surface, compiler_components, drifted_verifier_components,
+        )
+        rejected_compiler_wasm_v2 = _loom.verify_wasm_compiler_evidence_v2(
+            compiler_evidence_v2, manifest, artifact_src, tampered_body_wasm,
+            running_surface, compiler_components, compiler_components,
+        )
+        rejected_compiler_source_v2 = _loom.verify_wasm_compiler_evidence_v2(
+            compiler_evidence_v2, manifest, artifact_src.replace("human 7", "human 8"), artifact_wasm,
+            running_surface, compiler_components, compiler_components,
+        )
+        forged_compiler_evidence_v2 = json.loads(json.dumps(compiler_evidence_v2))
+        forged_profile_v2 = forged_compiler_evidence_v2["builder_profile"]
+        forged_profile_v2["components"][0]["sha256"] = "0" * 64
+        forged_profile_v2["profile_sha256"] = hashlib.sha256(_loom._artifact_json({
+            key: value for key, value in forged_profile_v2.items() if key != "profile_sha256"
+        }).encode("utf-8")).hexdigest()
+        forged_compiler_evidence_v2["builder_profile_sha256"] = forged_profile_v2["profile_sha256"]
+        forged_compiler_evidence_v2["evidence_sha256"] = hashlib.sha256(_loom._artifact_json({
+            key: value for key, value in forged_compiler_evidence_v2.items() if key != "evidence_sha256"
+        }).encode("utf-8")).hexdigest()
+        rejected_forged_profile_v2 = _loom.verify_wasm_compiler_evidence_v2(
+            forged_compiler_evidence_v2, manifest, artifact_src, artifact_wasm,
+            running_surface, compiler_components, compiler_components,
+        )
+        unknown_compiler_evidence_v2 = json.loads(json.dumps(compiler_evidence_v2))
+        unknown_compiler_evidence_v2["extension"] = "not-negotiated"
+        unknown_compiler_evidence_v2["evidence_sha256"] = hashlib.sha256(_loom._artifact_json({
+            key: value for key, value in unknown_compiler_evidence_v2.items() if key != "evidence_sha256"
+        }).encode("utf-8")).hexdigest()
+        rejected_unknown_evidence_v2 = _loom.verify_wasm_compiler_evidence_v2(
+            unknown_compiler_evidence_v2, manifest, artifact_src, artifact_wasm,
+            running_surface, compiler_components, compiler_components,
+        )
+        rejected_missing_builder_v2 = _loom.verify_wasm_compiler_evidence_v2(
+            compiler_evidence_v2, manifest, artifact_src, artifact_wasm,
+            running_surface, missing_compiler_components, compiler_components,
+        )
+        rejected_extra_verifier_v2 = _loom.verify_wasm_compiler_evidence_v2(
+            compiler_evidence_v2, manifest, artifact_src, artifact_wasm,
+            running_surface, compiler_components, extra_compiler_components,
+        )
         compiler_receipt_result = _loom.build_wasm_compiler_receipt(
             manifest, artifact_observation, artifact_src, artifact_wasm, compiler_components
         )
@@ -2304,6 +2361,36 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and rejected_compiler_source["valid"] is False
             and rejected_compiler_wasm["valid"] is False
             and any(item["code"] == "wasm-source-mismatch" for item in rejected_compiler_wasm["findings"])
+            and compiler_evidence_v2_result["schema"] == "loom-gate-wasm-compiler-evidence-validation/v2"
+            and compiler_evidence_v2_result["valid"] is True
+            and compiler_evidence_v2["schema"] == "loom-gate-wasm-compiler-evidence/v2"
+            and compiler_evidence_v2["builder_surface"] == running_surface
+            and compiler_evidence_v2["builder_profile_sha256"] == compiler_evidence_v2["builder_profile"]["profile_sha256"]
+            and compiler_evidence_v2["artifact_binding"] == artifact_binding
+            and compiler_evidence_v2["builder_source_equivalence"]["valid"] is True
+            and len(compiler_evidence_v2["evidence_sha256"]) == 64
+            and compiler_evidence_v2_result["attribution"]["relation"] == "same"
+            and verified_compiler_evidence_v2["valid"] is True
+            and verified_compiler_evidence_v2["attribution"]["relation"] == "same"
+            and rejected_compiler_drift_v2["valid"] is False
+            and rejected_compiler_drift_v2["attribution"]["relation"] == "different"
+            and [item["code"] for item in rejected_compiler_drift_v2["findings"]] == ["wasm-compiler-drift"]
+            and rejected_drift_and_wasm_v2["valid"] is False
+            and [item["code"] for item in rejected_drift_and_wasm_v2["findings"]] == ["wasm-compiler-drift"]
+            and rejected_compiler_wasm_v2["valid"] is False
+            and any(item["code"] == "wasm-source-mismatch" for item in rejected_compiler_wasm_v2["findings"])
+            and not any(item["code"] == "wasm-compiler-drift" for item in rejected_compiler_wasm_v2["findings"])
+            and rejected_compiler_source_v2["valid"] is False
+            and any(item["code"] == "invalid-trust-receipt" for item in rejected_compiler_source_v2["findings"])
+            and rejected_forged_profile_v2["valid"] is False
+            and any(item["code"] == "compiler-profile-mismatch" for item in rejected_forged_profile_v2["findings"])
+            and not any(item["code"] == "wasm-compiler-drift" for item in rejected_forged_profile_v2["findings"])
+            and rejected_unknown_evidence_v2["valid"] is False
+            and any(item["code"] == "unknown-field" for item in rejected_unknown_evidence_v2["findings"])
+            and rejected_missing_builder_v2["valid"] is False
+            and any(item["code"] == "missing-component" for item in rejected_missing_builder_v2["findings"])
+            and rejected_extra_verifier_v2["valid"] is False
+            and any(item["code"] == "unknown-component" for item in rejected_extra_verifier_v2["findings"])
             and compiler_receipt_result["schema"] == "loom-gate-receipt-v3-validation/v1"
             and compiler_receipt_result["valid"] is True
             and compiler_receipt["schema"] == "loom-gate-receipt/v3"

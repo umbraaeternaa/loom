@@ -54,7 +54,10 @@ experimental, and what LOOM does not claim yet.
   and non-authorizing.
 - Gate Compiler Evidence v1 binds that exact profile to Artifact Binding v1 and
   Source Equivalence v1 while fixing identity to the running implementation
-  surface. Compiler Receipt v3 composes that evidence with Receipt v2 and
+  surface. Additive Compiler Evidence v2 compares exact trusted-host builder
+  and verifier profiles before source equivalence, reporting compiler drift
+  separately from downstream same-profile artifact validation. Compiler Receipt v3
+  continues to compose unchanged v1 evidence with Receipt v2 and
   exposes Workflow v3 without changing earlier receipt or workflow schemas.
   `loom gate-workflow-v3` and the Playground expose this route without
   collecting components, signing, approving, or executing host actions.
