@@ -125,7 +125,10 @@ Source Equivalence result without changing earlier Gate schemas. The additive
 [`Compiler Evidence v2`](docs/gate_compiler_evidence_v2.md) compares exact
 builder and verifier profiles before source equivalence, separating
 `wasm-compiler-drift` from downstream same-profile artifact validation without
-changing v1. The additive
+changing v1. Additive [`Compiler Receipt v4`](docs/gate_compiler_receipt_v4.md)
+composes that builder evidence with Artifact Receipt v2 while preserving
+structured verifier attribution outside immutable receipt content. The
+existing
 [`Compiler Receipt v3`](docs/gate_compiler_receipt_v3.md) composes observation,
 artifact evidence, and that exact compiler identity into one closed receipt and
 an explicit Workflow v3 route.

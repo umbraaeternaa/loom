@@ -2200,6 +2200,84 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             compiler_receipt, manifest, artifact_observation, artifact_src, artifact_wasm, changed_components
         )
         compiler_workflow = _loom.build_gate_workflow_v3(manifest)
+        compiler_receipt_v4_result = _loom.build_wasm_compiler_receipt_v4(
+            manifest, artifact_observation, artifact_src, artifact_wasm, compiler_components
+        )
+        compiler_receipt_v4 = compiler_receipt_v4_result["receipt"]
+        verified_compiler_receipt_v4 = _loom.verify_wasm_compiler_receipt_v4(
+            compiler_receipt_v4, manifest, artifact_observation, artifact_src, artifact_wasm,
+            running_surface, compiler_components, compiler_components,
+        )
+        rejected_compiler_receipt_drift_v4 = _loom.verify_wasm_compiler_receipt_v4(
+            compiler_receipt_v4, manifest, artifact_observation, artifact_src, artifact_wasm,
+            running_surface, compiler_components, drifted_verifier_components,
+        )
+        rejected_receipt_drift_and_wasm_v4 = _loom.verify_wasm_compiler_receipt_v4(
+            compiler_receipt_v4, manifest, artifact_observation, artifact_src, tampered_body_wasm,
+            running_surface, compiler_components, drifted_verifier_components,
+        )
+        rejected_compiler_receipt_wasm_v4 = _loom.verify_wasm_compiler_receipt_v4(
+            compiler_receipt_v4, manifest, artifact_observation, artifact_src, tampered_body_wasm,
+            running_surface, compiler_components, compiler_components,
+        )
+        rejected_compiler_receipt_source_v4 = _loom.verify_wasm_compiler_receipt_v4(
+            compiler_receipt_v4, manifest, artifact_observation,
+            artifact_src.replace("human 7", "human 8"), artifact_wasm,
+            running_surface, compiler_components, compiler_components,
+        )
+        changed_artifact_observation = json.loads(json.dumps(artifact_observation))
+        changed_artifact_observation["evidence"][0]["detail"] = "PASS changed syntax evidence"
+        rejected_compiler_receipt_observation_v4 = _loom.verify_wasm_compiler_receipt_v4(
+            compiler_receipt_v4, manifest, changed_artifact_observation, artifact_src, artifact_wasm,
+            running_surface, compiler_components, compiler_components,
+        )
+        rejected_receipt_drift_and_observation_v4 = _loom.verify_wasm_compiler_receipt_v4(
+            compiler_receipt_v4, manifest, changed_artifact_observation, artifact_src, artifact_wasm,
+            running_surface, compiler_components, drifted_verifier_components,
+        )
+        forged_compiler_receipt_v4 = json.loads(json.dumps(compiler_receipt_v4))
+        forged_compiler_receipt_v4["compiler_evidence"] = forged_compiler_evidence_v2
+        forged_compiler_receipt_v4["compiler_evidence_sha256"] = forged_compiler_evidence_v2["evidence_sha256"]
+        forged_compiler_receipt_v4["receipt_sha256"] = hashlib.sha256(_loom._artifact_json({
+            key: value for key, value in forged_compiler_receipt_v4.items() if key != "receipt_sha256"
+        }).encode("utf-8")).hexdigest()
+        rejected_forged_compiler_receipt_v4 = _loom.verify_wasm_compiler_receipt_v4(
+            forged_compiler_receipt_v4, manifest, artifact_observation, artifact_src, artifact_wasm,
+            running_surface, compiler_components, compiler_components,
+        )
+        v1_compiler_receipt_v4 = json.loads(json.dumps(compiler_receipt_v4))
+        v1_compiler_receipt_v4["compiler_evidence"] = compiler_evidence
+        v1_compiler_receipt_v4["compiler_evidence_sha256"] = compiler_evidence["evidence_sha256"]
+        v1_compiler_receipt_v4["receipt_sha256"] = hashlib.sha256(_loom._artifact_json({
+            key: value for key, value in v1_compiler_receipt_v4.items() if key != "receipt_sha256"
+        }).encode("utf-8")).hexdigest()
+        rejected_v1_compiler_receipt_v4 = _loom.verify_wasm_compiler_receipt_v4(
+            v1_compiler_receipt_v4, manifest, artifact_observation, artifact_src, artifact_wasm,
+            running_surface, compiler_components, compiler_components,
+        )
+        rebound_compiler_receipt_v4 = json.loads(json.dumps(compiler_receipt_v4))
+        rebound_compiler_receipt_v4["compiler_evidence_sha256"] = "0" * 64
+        rebound_compiler_receipt_v4["receipt_sha256"] = hashlib.sha256(_loom._artifact_json({
+            key: value for key, value in rebound_compiler_receipt_v4.items() if key != "receipt_sha256"
+        }).encode("utf-8")).hexdigest()
+        rejected_rebound_compiler_receipt_v4 = _loom.verify_wasm_compiler_receipt_v4(
+            rebound_compiler_receipt_v4, manifest, artifact_observation, artifact_src, artifact_wasm,
+            running_surface, compiler_components, compiler_components,
+        )
+        unknown_compiler_receipt_v4 = json.loads(json.dumps(compiler_receipt_v4))
+        unknown_compiler_receipt_v4["extension"] = "not-negotiated"
+        unknown_compiler_receipt_v4["receipt_sha256"] = hashlib.sha256(_loom._artifact_json({
+            key: value for key, value in unknown_compiler_receipt_v4.items() if key != "receipt_sha256"
+        }).encode("utf-8")).hexdigest()
+        rejected_unknown_compiler_receipt_v4 = _loom.verify_wasm_compiler_receipt_v4(
+            unknown_compiler_receipt_v4, manifest, artifact_observation, artifact_src, artifact_wasm,
+            running_surface, compiler_components, compiler_components,
+        )
+        rejected_missing_builder_receipt_v4 = _loom.verify_wasm_compiler_receipt_v4(
+            compiler_receipt_v4, manifest, artifact_observation, artifact_src, artifact_wasm,
+            running_surface, missing_compiler_components, compiler_components,
+        )
+        compiler_workflow_v4 = _loom.build_gate_workflow_v4(manifest)
         binding_protocol = "local-process/v1"
         binding_authority = "urn:loom:host:operator-gate"
         binding_input = {
@@ -2413,6 +2491,58 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
                 "artifact-evidence", "compiler-evidence", "compiler-receipt", "finish"
             ]
             and compiler_workflow["steps"][-4]["command"] == "loom.build_wasm_artifact_evidence(manifest, source, wasm_bytes)"
+            and compiler_receipt_v4_result["schema"] == "loom-gate-receipt-v4-validation/v1"
+            and compiler_receipt_v4_result["valid"] is True
+            and compiler_receipt_v4_result["compiler_attribution"]["relation"] == "same"
+            and compiler_receipt_v4["schema"] == "loom-gate-receipt/v4"
+            and compiler_receipt_v4["artifact_evidence"] == artifact_evidence
+            and compiler_receipt_v4["compiler_evidence"] == compiler_evidence_v2
+            and compiler_receipt_v4["compiler_evidence_sha256"] == compiler_evidence_v2["evidence_sha256"]
+            and compiler_receipt_v4["manifest_sha256"] == artifact_evidence["manifest_sha256"]
+            and compiler_receipt_v4["manifest_sha256"] == compiler_evidence_v2["artifact_binding"]["manifest_sha256"]
+            and compiler_receipt_v4["compiler_evidence"]["artifact_binding"] == compiler_receipt_v4["artifact_evidence"]["binding"]
+            and compiler_receipt_v4["compiler_evidence"]["artifact_binding_sha256"] == compiler_receipt_v4["artifact_evidence"]["binding_sha256"]
+            and compiler_receipt_v4["compiler_evidence"]["builder_profile"]["wasm_abi_version"] == compiler_receipt_v4["artifact_evidence"]["binding"]["wasm_abi_version"]
+            and len(compiler_receipt_v4["receipt_sha256"]) == 64
+            and verified_compiler_receipt_v4["valid"] is True
+            and verified_compiler_receipt_v4["compiler_attribution"]["relation"] == "same"
+            and rejected_compiler_receipt_drift_v4["valid"] is False
+            and rejected_compiler_receipt_drift_v4["compiler_attribution"]["relation"] == "different"
+            and [item["code"] for item in rejected_compiler_receipt_drift_v4["findings"]] == ["wasm-compiler-drift"]
+            and rejected_receipt_drift_and_wasm_v4["valid"] is False
+            and [item["code"] for item in rejected_receipt_drift_and_wasm_v4["findings"]] == ["wasm-compiler-drift"]
+            and rejected_compiler_receipt_wasm_v4["valid"] is False
+            and any(item["code"] == "wasm-source-mismatch" for item in rejected_compiler_receipt_wasm_v4["findings"])
+            and rejected_compiler_receipt_source_v4["valid"] is False
+            and any(item["code"] == "invalid-trust-receipt" for item in rejected_compiler_receipt_source_v4["findings"])
+            and rejected_compiler_receipt_observation_v4["valid"] is False
+            and any(item["code"] == "receipt-mismatch" for item in rejected_compiler_receipt_observation_v4["findings"])
+            and rejected_receipt_drift_and_observation_v4["valid"] is False
+            and [item["code"] for item in rejected_receipt_drift_and_observation_v4["findings"]] == ["wasm-compiler-drift"]
+            and rejected_forged_compiler_receipt_v4["valid"] is False
+            and any(item["code"] == "compiler-profile-mismatch" for item in rejected_forged_compiler_receipt_v4["findings"])
+            and rejected_v1_compiler_receipt_v4["valid"] is False
+            and any(item["code"] == "unsupported-schema" for item in rejected_v1_compiler_receipt_v4["findings"])
+            and rejected_rebound_compiler_receipt_v4["valid"] is False
+            and any(item["code"] == "compiler-evidence-hash-mismatch" for item in rejected_rebound_compiler_receipt_v4["findings"])
+            and rejected_unknown_compiler_receipt_v4["valid"] is False
+            and any(item["code"] == "unknown-field" for item in rejected_unknown_compiler_receipt_v4["findings"])
+            and rejected_missing_builder_receipt_v4["valid"] is False
+            and any(item["code"] == "missing-component" for item in rejected_missing_builder_receipt_v4["findings"])
+            and compiler_workflow_v4["schema"] == "loom-gate-workflow/v4"
+            and compiler_workflow_v4["compiler_evidence"]["schema"] == "loom-gate-wasm-compiler-evidence/v2"
+            and compiler_workflow_v4["compiler_evidence"]["builder_surface"] == running_surface
+            and compiler_workflow_v4["compiler_evidence"]["verifier_surface"] == running_surface
+            and compiler_workflow_v4["compiler_evidence"]["builder_component_input"] == "trusted-host-exact-bytes"
+            and compiler_workflow_v4["compiler_evidence"]["verifier_component_input"] == "trusted-host-exact-bytes"
+            and compiler_workflow_v4["compiler_evidence"]["build_api"] == "build_wasm_compiler_evidence_v2"
+            and compiler_workflow_v4["compiler_evidence"]["verify_api"] == "verify_wasm_compiler_evidence_v2"
+            and compiler_workflow_v4["compiler_evidence"]["receipt_api"] == "build_wasm_compiler_receipt_v4"
+            and [step["id"] for step in compiler_workflow_v4["steps"]][-4:] == [
+                "artifact-evidence", "compiler-evidence", "compiler-receipt", "finish"
+            ]
+            and compiler_workflow_v4["steps"][-3]["command"] == "loom.build_wasm_compiler_evidence_v2(manifest, source, wasm_bytes, builder_components)"
+            and compiler_workflow_v4["steps"][-2]["command"] == "loom.build_wasm_compiler_receipt_v4(manifest, observation, source, wasm_bytes, builder_components)"
             and interface_result["valid"] is True
             and interface_binding["schema"] == "loom-interface-binding/v0"
             and interface_binding["protocol"] == binding_protocol

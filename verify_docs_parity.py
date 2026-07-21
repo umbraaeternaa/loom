@@ -28,6 +28,7 @@ COMPILER_PROVENANCE_DOC = ROOT / "docs" / "compiler_provenance_v1.md"
 COMPILER_EVIDENCE_DOC = ROOT / "docs" / "gate_compiler_evidence_v1.md"
 COMPILER_EVIDENCE_V2_DOC = ROOT / "docs" / "gate_compiler_evidence_v2.md"
 COMPILER_RECEIPT_DOC = ROOT / "docs" / "gate_compiler_receipt_v3.md"
+COMPILER_RECEIPT_V4_DOC = ROOT / "docs" / "gate_compiler_receipt_v4.md"
 ACTION_BINDING_DOC = ROOT / "docs" / "action_binding_v0.md"
 WASM_ARTIFACT_DOC = ROOT / "docs" / "gate_wasm_artifact_v1.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
@@ -584,6 +585,30 @@ def _check_compiler_receipt_doc() -> None:
         raise SystemExit("docs parity: compiler receipt v3 contract drift: missing " + ", ".join(missing))
 
 
+def _check_compiler_receipt_v4_doc() -> None:
+    words = " ".join(COMPILER_RECEIPT_V4_DOC.read_text().split())
+    required = (
+        "LOOM Gate WASM Compiler Receipt v4 and Workflow v4",
+        "normative, deterministic, advisory, and non-authorizing",
+        "loom.build_wasm_compiler_receipt_v4(",
+        "loom.verify_wasm_compiler_receipt_v4(",
+        "loom.build_gate_workflow_v4(manifest)",
+        "loom-gate-receipt-v4-validation/v1",
+        "loom-gate-receipt/v4",
+        "compiler_attribution",
+        "compiler_evidence_sha256",
+        "wasm-compiler-drift",
+        "do not add source or generic receipt mismatch",
+        "artifact-evidence -> compiler-evidence -> compiler-receipt -> finish",
+        "Initial v4 does not add a CLI command or Playground route",
+        "performs no filesystem collection",
+        "Receipt v1-v3, Workflow v1-v3",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: compiler receipt v4 contract drift: missing " + ", ".join(missing))
+
+
 def _check_compiler_evidence_surface_parity() -> None:
     import loom as modular
     spec = importlib.util.spec_from_file_location("loom_docs_compiler_evidence", DOCS_LOOM)
@@ -650,6 +675,34 @@ def _check_compiler_evidence_surface_parity() -> None:
     )
     modular_workflow = modular.build_gate_workflow_v3(manifest)
     standalone_workflow = standalone.build_gate_workflow_v3(manifest)
+    modular_receipt_v4_result = modular.build_wasm_compiler_receipt_v4(
+        manifest, observation, source, wasm, modular_components
+    )
+    standalone_receipt_v4_result = standalone.build_wasm_compiler_receipt_v4(
+        manifest, observation, source, wasm, standalone_components
+    )
+    if not modular_receipt_v4_result["valid"] or not standalone_receipt_v4_result["valid"]:
+        raise SystemExit("docs parity: compiler receipt v4 surface failed to build")
+    modular_receipt_v4 = modular_receipt_v4_result["receipt"]
+    standalone_receipt_v4 = standalone_receipt_v4_result["receipt"]
+    modular_receipt_v4_self = modular.verify_wasm_compiler_receipt_v4(
+        modular_receipt_v4, manifest, observation, source, wasm,
+        "modular-python", modular_components, modular_components,
+    )
+    standalone_receipt_v4_self = standalone.verify_wasm_compiler_receipt_v4(
+        standalone_receipt_v4, manifest, observation, source, wasm,
+        "standalone-python", standalone_components, standalone_components,
+    )
+    modular_checks_standalone_receipt_v4 = modular.verify_wasm_compiler_receipt_v4(
+        standalone_receipt_v4, manifest, observation, source, wasm,
+        "standalone-python", standalone_components, modular_components,
+    )
+    standalone_checks_modular_receipt_v4 = standalone.verify_wasm_compiler_receipt_v4(
+        modular_receipt_v4, manifest, observation, source, wasm,
+        "modular-python", modular_components, standalone_components,
+    )
+    modular_workflow_v4 = modular.build_gate_workflow_v4(manifest)
+    standalone_workflow_v4 = standalone.build_gate_workflow_v4(manifest)
     contract = (
         modular_evidence["surface"] == "modular-python"
         and standalone_evidence["surface"] == "standalone-python"
@@ -691,6 +744,30 @@ def _check_compiler_evidence_surface_parity() -> None:
         and standalone_checks_modular_v2["attribution"]["relation"] == "different"
         and [item["code"] for item in modular_checks_standalone_v2["findings"]] == ["wasm-compiler-drift"]
         and [item["code"] for item in standalone_checks_modular_v2["findings"]] == ["wasm-compiler-drift"]
+        and modular_receipt_v4["schema"] == standalone_receipt_v4["schema"] == "loom-gate-receipt/v4"
+        and modular_receipt_v4["artifact_evidence"] == standalone_receipt_v4["artifact_evidence"]
+        and modular_receipt_v4["compiler_evidence"] == modular_v2
+        and standalone_receipt_v4["compiler_evidence"] == standalone_v2
+        and modular_receipt_v4["compiler_evidence_sha256"] == modular_v2["evidence_sha256"]
+        and standalone_receipt_v4["compiler_evidence_sha256"] == standalone_v2["evidence_sha256"]
+        and modular_receipt_v4["receipt_sha256"] != standalone_receipt_v4["receipt_sha256"]
+        and modular_receipt_v4_self["valid"]
+        and standalone_receipt_v4_self["valid"]
+        and modular_receipt_v4_self["compiler_attribution"]["relation"] == "same"
+        and standalone_receipt_v4_self["compiler_attribution"]["relation"] == "same"
+        and not modular_checks_standalone_receipt_v4["valid"]
+        and not standalone_checks_modular_receipt_v4["valid"]
+        and modular_checks_standalone_receipt_v4["compiler_attribution"]["relation"] == "different"
+        and standalone_checks_modular_receipt_v4["compiler_attribution"]["relation"] == "different"
+        and [item["code"] for item in modular_checks_standalone_receipt_v4["findings"]] == ["wasm-compiler-drift"]
+        and [item["code"] for item in standalone_checks_modular_receipt_v4["findings"]] == ["wasm-compiler-drift"]
+        and modular_workflow_v4["schema"] == standalone_workflow_v4["schema"] == "loom-gate-workflow/v4"
+        and modular_workflow_v4["compiler_evidence"]["builder_surface"] == "modular-python"
+        and standalone_workflow_v4["compiler_evidence"]["builder_surface"] == "standalone-python"
+        and modular_workflow_v4["compiler_evidence"]["verifier_surface"] == "modular-python"
+        and standalone_workflow_v4["compiler_evidence"]["verifier_surface"] == "standalone-python"
+        and modular_workflow_v4["compiler_evidence"]["receipt_api"] == "build_wasm_compiler_receipt_v4"
+        and standalone_workflow_v4["compiler_evidence"]["receipt_api"] == "build_wasm_compiler_receipt_v4"
     )
     if not contract:
         raise SystemExit("docs parity: compiler evidence surface identity drift")
@@ -829,6 +906,7 @@ def main() -> int:
     _check_compiler_evidence_doc()
     _check_compiler_evidence_v2_doc()
     _check_compiler_receipt_doc()
+    _check_compiler_receipt_v4_doc()
     _check_compiler_evidence_surface_parity()
     _check_action_binding_doc()
     _check_action_binding_parity()

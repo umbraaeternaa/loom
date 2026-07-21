@@ -56,8 +56,10 @@ experimental, and what LOOM does not claim yet.
   Source Equivalence v1 while fixing identity to the running implementation
   surface. Additive Compiler Evidence v2 compares exact trusted-host builder
   and verifier profiles before source equivalence, reporting compiler drift
-  separately from downstream same-profile artifact validation. Compiler Receipt v3
-  continues to compose unchanged v1 evidence with Receipt v2 and
+  separately from downstream same-profile artifact validation. Compiler
+  Receipt v4 composes builder evidence v2 with Artifact Receipt v2 and exposes
+  a pure Workflow v4 API while leaving CLI/Playground integration deferred.
+  Compiler Receipt v3 continues to compose unchanged v1 evidence with Receipt v2 and
   exposes Workflow v3 without changing earlier receipt or workflow schemas.
   `loom gate-workflow-v3` and the Playground expose this route without
   collecting components, signing, approving, or executing host actions.

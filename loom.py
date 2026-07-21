@@ -901,6 +901,37 @@ def build_gate_workflow_v3(manifest):
     return workflow
 
 
+def build_gate_workflow_v4(manifest):
+    """Return the Gate route with builder/verifier attribution in receipt v4."""
+    workflow = build_gate_workflow_v3(manifest)
+    workflow["schema"] = "loom-gate-workflow/v4"
+    workflow["compiler_evidence"] = {
+        "schema": "loom-gate-wasm-compiler-evidence/v2",
+        "kind": "wasm-compiler",
+        "required": True,
+        "builder_surface": _GATE_COMPILER_SURFACE,
+        "verifier_surface": _GATE_COMPILER_SURFACE,
+        "builder_component_input": "trusted-host-exact-bytes",
+        "verifier_component_input": "trusted-host-exact-bytes",
+        "build_api": "build_wasm_compiler_evidence_v2",
+        "verify_api": "verify_wasm_compiler_evidence_v2",
+        "receipt_api": "build_wasm_compiler_receipt_v4",
+    }
+    if workflow["valid"] and workflow["decision"] != "reject":
+        for step in workflow["steps"]:
+            if step["id"] == "compiler-evidence":
+                step.update({
+                    "description": "Bind the builder compiler and preserve later verifier attribution.",
+                    "command": "loom.build_wasm_compiler_evidence_v2(manifest, source, wasm_bytes, builder_components)",
+                })
+            elif step["id"] == "compiler-receipt":
+                step.update({
+                    "description": "Build receipt v4 from observation, artifact evidence, and builder evidence v2.",
+                    "command": "loom.build_wasm_compiler_receipt_v4(manifest, observation, source, wasm_bytes, builder_components)",
+                })
+    return workflow
+
+
 _CLI_FRONTEND.metadata["gate_workflow_v3_builder"] = build_gate_workflow_v3
 
 
@@ -1020,6 +1051,159 @@ def verify_wasm_compiler_receipt(receipt, manifest, observation, program_src, wa
             "message": "WASM compiler receipt does not match the exact Gate and compiler inputs",
         }])
     return _wasm_receipt_v3_validation(receipt, [])
+
+
+def _wasm_receipt_v4_validation(receipt, compiler_attribution, findings):
+    return {
+        "schema": "loom-gate-receipt-v4-validation/v1",
+        "valid": not findings,
+        "advisory": True,
+        "receipt": receipt if not findings else None,
+        "compiler_attribution": compiler_attribution,
+        "findings": findings,
+    }
+
+
+def _compiler_receipt_v4_cross_link_findings(receipt):
+    findings = []
+    artifact_evidence = receipt["artifact_evidence"]
+    compiler_evidence = receipt["compiler_evidence"]
+    artifact_binding = artifact_evidence["binding"]
+    compiler_binding = compiler_evidence["artifact_binding"]
+    if receipt["manifest_sha256"] != artifact_evidence["manifest_sha256"]:
+        findings.append({
+            "path": "artifact_evidence.manifest_sha256",
+            "code": "receipt-artifact-manifest-mismatch",
+            "message": "receipt and artifact evidence must bind the same manifest",
+        })
+    if receipt["manifest_sha256"] != compiler_binding["manifest_sha256"]:
+        findings.append({
+            "path": "compiler_evidence.artifact_binding.manifest_sha256",
+            "code": "receipt-compiler-manifest-mismatch",
+            "message": "receipt and compiler evidence must bind the same manifest",
+        })
+    if compiler_binding != artifact_binding:
+        findings.append({
+            "path": "compiler_evidence.artifact_binding",
+            "code": "compiler-artifact-binding-mismatch",
+            "message": "compiler and receipt evidence must bind the same exact artifact",
+        })
+    if compiler_evidence["artifact_binding_sha256"] != artifact_evidence["binding_sha256"]:
+        findings.append({
+            "path": "compiler_evidence.artifact_binding_sha256",
+            "code": "compiler-artifact-hash-mismatch",
+            "message": "compiler and receipt evidence must use the same artifact binding hash",
+        })
+    if receipt["compiler_evidence_sha256"] != compiler_evidence["evidence_sha256"]:
+        findings.append({
+            "path": "compiler_evidence_sha256",
+            "code": "compiler-evidence-hash-mismatch",
+            "message": "receipt does not reference its embedded compiler evidence",
+        })
+    if compiler_evidence["builder_profile"]["wasm_abi_version"] != artifact_binding["wasm_abi_version"]:
+        findings.append({
+            "path": "compiler_evidence.builder_profile.wasm_abi_version",
+            "code": "compiler-artifact-abi-mismatch",
+            "message": "builder compiler profile and artifact evidence use different WASM ABI versions",
+        })
+    return findings
+
+
+def build_wasm_compiler_receipt_v4(manifest, observation, program_src, wasm_bytes, builder_components):
+    """Build receipt v4 from Artifact Receipt v2 and builder-issued Compiler Evidence v2."""
+    artifact_receipt = build_wasm_artifact_receipt(manifest, observation, program_src, wasm_bytes)
+    compiler = build_wasm_compiler_evidence_v2(manifest, program_src, wasm_bytes, builder_components)
+    attribution = compiler["attribution"]
+    findings = list(artifact_receipt["findings"])
+    if not compiler["valid"]:
+        findings.extend(_compiler_evidence_findings("compiler_evidence", compiler["findings"]))
+    if findings:
+        return _wasm_receipt_v4_validation(None, attribution, findings)
+    body = dict(artifact_receipt["receipt"])
+    body.pop("receipt_sha256", None)
+    body["schema"] = "loom-gate-receipt/v4"
+    body["compiler_evidence"] = compiler["evidence"]
+    body["compiler_evidence_sha256"] = compiler["evidence"]["evidence_sha256"]
+    findings.extend(_compiler_receipt_v4_cross_link_findings(body))
+    if findings:
+        return _wasm_receipt_v4_validation(None, attribution, findings)
+    body["receipt_sha256"] = hashlib.sha256(_artifact_json(body).encode("utf-8")).hexdigest()
+    return _wasm_receipt_v4_validation(body, attribution, [])
+
+
+def verify_wasm_compiler_receipt_v4(
+    receipt,
+    manifest,
+    observation,
+    program_src,
+    wasm_bytes,
+    builder_surface,
+    builder_components,
+    verifier_components,
+):
+    """Verify receipt structure and compiler attribution before artifact/observation checks."""
+    attribution = _compiler_evidence_v2_attribution()
+    findings = []
+    expected_keys = {
+        "schema", "advisory", "manifest_sha256", "policy", "policy_decision",
+        "agent", "result", "repositories", "files_changed", "actions_observed",
+        "evidence", "artifact_evidence", "compiler_evidence",
+        "compiler_evidence_sha256", "receipt_sha256",
+    }
+    if not isinstance(receipt, dict):
+        return _wasm_receipt_v4_validation(None, attribution, [{
+            "path": "receipt", "code": "expected-object", "message": "compiler receipt must be an object",
+        }])
+    for key in sorted(set(receipt) - expected_keys, key=str):
+        findings.append({"path": "receipt." + str(key), "code": "unknown-field", "message": "unknown compiler receipt field"})
+    for key in sorted(expected_keys - set(receipt)):
+        findings.append({"path": "receipt." + key, "code": "missing-field", "message": "missing compiler receipt field"})
+    if receipt.get("schema") != "loom-gate-receipt/v4":
+        findings.append({"path": "receipt.schema", "code": "unsupported-schema", "message": "expected loom-gate-receipt/v4"})
+    if receipt.get("advisory") is not True:
+        findings.append({"path": "receipt.advisory", "code": "invalid-advisory", "message": "compiler receipt must remain advisory"})
+    if set(receipt) >= expected_keys:
+        body = {key: receipt[key] for key in expected_keys if key != "receipt_sha256"}
+        try:
+            digest = hashlib.sha256(_artifact_json(body).encode("utf-8")).hexdigest()
+        except (TypeError, ValueError):
+            findings.append({"path": "receipt", "code": "non-canonical-receipt", "message": "compiler receipt fields must be canonical JSON values"})
+        else:
+            if receipt.get("receipt_sha256") != digest:
+                findings.append({"path": "receipt.receipt_sha256", "code": "receipt-hash-mismatch", "message": "receipt hash does not match its canonical fields"})
+    if findings:
+        return _wasm_receipt_v4_validation(None, attribution, findings)
+    compiler_check = verify_wasm_compiler_evidence_v2(
+        receipt["compiler_evidence"], manifest, program_src, wasm_bytes,
+        builder_surface, builder_components, verifier_components,
+    )
+    attribution = compiler_check["attribution"]
+    if not compiler_check["valid"]:
+        return _wasm_receipt_v4_validation(
+            None, attribution, _compiler_evidence_findings("compiler_evidence", compiler_check["findings"])
+        )
+    artifact_check = verify_wasm_artifact_evidence(
+        receipt["artifact_evidence"], manifest, program_src, wasm_bytes
+    )
+    if not artifact_check["valid"]:
+        return _wasm_receipt_v4_validation(
+            None, attribution, _compiler_evidence_findings("artifact_evidence", artifact_check["findings"])
+        )
+    findings = _compiler_receipt_v4_cross_link_findings(receipt)
+    if findings:
+        return _wasm_receipt_v4_validation(None, attribution, findings)
+    expected = build_wasm_compiler_receipt_v4(
+        manifest, observation, program_src, wasm_bytes, builder_components
+    )
+    if not expected["valid"]:
+        return _wasm_receipt_v4_validation(None, attribution, expected["findings"])
+    if receipt != expected["receipt"]:
+        return _wasm_receipt_v4_validation(None, attribution, [{
+            "path": "receipt",
+            "code": "receipt-mismatch",
+            "message": "WASM compiler receipt v4 does not match the exact Gate and builder inputs",
+        }])
+    return _wasm_receipt_v4_validation(receipt, attribution, [])
 
 
 def collect_observation(manifest, result, actions_observed, evidence):
