@@ -30,6 +30,7 @@ COMPILER_EVIDENCE_V2_DOC = ROOT / "docs" / "gate_compiler_evidence_v2.md"
 COMPILER_RECEIPT_DOC = ROOT / "docs" / "gate_compiler_receipt_v3.md"
 COMPILER_RECEIPT_V4_DOC = ROOT / "docs" / "gate_compiler_receipt_v4.md"
 ACTION_BINDING_DOC = ROOT / "docs" / "action_binding_v0.md"
+ACTION_SEMANTICS_DOC = ROOT / "docs" / "action_semantics_v0.md"
 WASM_ARTIFACT_DOC = ROOT / "docs" / "gate_wasm_artifact_v1.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
 
@@ -825,6 +826,133 @@ def _check_action_binding_parity() -> None:
         raise SystemExit("docs parity: modular and standalone action bindings diverged")
 
 
+def _check_action_semantics_doc() -> None:
+    words = " ".join(ACTION_SEMANTICS_DOC.read_text().split())
+    required = (
+        "LOOM Action Semantics v0",
+        "normative, deterministic, pure, advisory, and non-authorizing",
+        "build_action_semantics_v0(",
+        "verify_action_semantics_v0(",
+        "loom-action-semantics-validation/v0",
+        "loom-action-semantics/v0",
+        "loom-action-source-limits/v0",
+        "loom-action-target-mediation/v0",
+        "operator-required",
+        '(ffi "operator-gate" "<tool-binding-sha256>")',
+        "declared == performed == required == capabilities == [FFI]",
+        "wasm-compiler-drift",
+        "do not add source, manifest, tool-input, semantic, or generic mismatch",
+        "performs no filesystem collection",
+        "executes no command",
+        "Existing Gate, Tool/Interface Binding, Compiler Evidence v1/v2",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: action semantics v0 contract drift: missing " + ", ".join(missing))
+
+
+def _check_action_semantics_parity() -> None:
+    import loom as modular
+    spec = importlib.util.spec_from_file_location("loom_docs_action_semantics", DOCS_LOOM)
+    if spec is None or spec.loader is None:
+        raise SystemExit("docs parity: could not load standalone action semantics surface")
+    standalone = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(standalone)
+    manifest = {
+        "schema": "loom-gate-manifest/v1",
+        "agent": {"id": "codex", "role": "code"},
+        "task": {
+            "summary": "Bind one exact checked process action",
+            "intent": "Pin effects, compiler identity, and operator-gated host authority",
+        },
+        "repositories": [],
+        "read_paths": [],
+        "write_paths": [],
+        "actions": ["process"],
+        "evidence_required": [],
+    }
+    validation = modular.validate_manifest(manifest)
+    input_value = {
+        "action": "process",
+        "manifest_sha256": validation["manifest_sha256"],
+    }
+    protocol = "local-process/v1"
+    authority = "urn:loom:host:operator-gate"
+    modular_tool_result = modular.build_tool_binding(
+        protocol, authority, "process", input_value
+    )
+    standalone_tool_result = standalone.build_tool_binding(
+        protocol, authority, "process", input_value
+    )
+    if modular_tool_result != standalone_tool_result or not modular_tool_result["valid"]:
+        raise SystemExit("docs parity: action semantics tool fixture diverged")
+    tool = modular_tool_result["binding"]
+    source = (
+        '(defx main (FFI!) (fn () (seamN 1 (FFI) '
+        f'(ffi "operator-gate" "{tool["binding_sha256"]}"))))'
+    )
+    wasm = modular.compile_wasm(source)
+    if standalone.compile_wasm(source) != wasm:
+        raise SystemExit("docs parity: action semantics WASM fixture diverged")
+    modular_paths = (
+        "loom.py", "loom_parse.py", "loom_checker.py", "loom_bounds.py",
+        "loom_recursion.py", "loom_frontend.py", "loom_wasm.py",
+    )
+    modular_components = {path: ROOT.joinpath(path).read_bytes() for path in modular_paths}
+    standalone_components = {"docs/loom.py": DOCS_LOOM.read_bytes()}
+    modular_result = modular.build_action_semantics_v0(
+        manifest, tool, input_value, source, wasm, modular_components, "main"
+    )
+    standalone_result = standalone.build_action_semantics_v0(
+        manifest, tool, input_value, source, wasm, standalone_components, "main"
+    )
+    if not modular_result["valid"] or not standalone_result["valid"]:
+        raise SystemExit("docs parity: action semantics surface failed to build")
+    modular_semantics = modular_result["semantics"]
+    standalone_semantics = standalone_result["semantics"]
+    modular_self = modular.verify_action_semantics_v0(
+        modular_semantics, manifest, tool, input_value, source, wasm,
+        "modular-python", modular_components, modular_components, "main",
+    )
+    standalone_self = standalone.verify_action_semantics_v0(
+        standalone_semantics, manifest, tool, input_value, source, wasm,
+        "standalone-python", standalone_components, standalone_components, "main",
+    )
+    modular_checks_standalone = modular.verify_action_semantics_v0(
+        standalone_semantics, manifest, tool, input_value, source, wasm,
+        "standalone-python", standalone_components, modular_components, "main",
+    )
+    standalone_checks_modular = standalone.verify_action_semantics_v0(
+        modular_semantics, manifest, tool, input_value, source, wasm,
+        "modular-python", modular_components, standalone_components, "main",
+    )
+    shared_fields = (
+        "schema", "advisory", "manifest_sha256", "policy", "policy_decision",
+        "tool_binding", "tool_binding_sha256", "artifact_binding_sha256",
+        "entrypoint", "checker_verdict", "checker_verdict_sha256",
+        "effect_contract", "source_limits", "target_mediation",
+    )
+    contract = (
+        all(modular_semantics[key] == standalone_semantics[key] for key in shared_fields)
+        and modular_semantics["compiler_evidence"]["builder_surface"] == "modular-python"
+        and standalone_semantics["compiler_evidence"]["builder_surface"] == "standalone-python"
+        and modular_semantics["compiler_evidence_sha256"] != standalone_semantics["compiler_evidence_sha256"]
+        and modular_semantics["semantics_sha256"] != standalone_semantics["semantics_sha256"]
+        and modular_self["valid"]
+        and standalone_self["valid"]
+        and modular_self["compiler_attribution"]["relation"] == "same"
+        and standalone_self["compiler_attribution"]["relation"] == "same"
+        and not modular_checks_standalone["valid"]
+        and not standalone_checks_modular["valid"]
+        and modular_checks_standalone["compiler_attribution"]["relation"] == "different"
+        and standalone_checks_modular["compiler_attribution"]["relation"] == "different"
+        and [item["code"] for item in modular_checks_standalone["findings"]] == ["wasm-compiler-drift"]
+        and [item["code"] for item in standalone_checks_modular["findings"]] == ["wasm-compiler-drift"]
+    )
+    if not contract:
+        raise SystemExit("docs parity: modular and standalone action semantics diverged")
+
+
 def _check_wasm_artifact_doc() -> None:
     text = WASM_ARTIFACT_DOC.read_text()
     words = " ".join(text.split())
@@ -910,6 +1038,8 @@ def main() -> int:
     _check_compiler_evidence_surface_parity()
     _check_action_binding_doc()
     _check_action_binding_parity()
+    _check_action_semantics_doc()
+    _check_action_semantics_parity()
     _check_wasm_artifact_doc()
     _check_secret_credential_policy_doc()
     _check_pyodide_import_boundary()

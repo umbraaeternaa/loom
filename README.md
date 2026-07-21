@@ -137,6 +137,10 @@ an explicit Workflow v3 route.
 non-authorizing Action Capsule primitive. It content-addresses the exact local
 process plan/attempt interface, authority, operation, and normalized JSON input.
 It does not execute, approve, claim, delegate, or grant authority.
+[`Action Semantics v0`](docs/action_semantics_v0.md) adds a deliberately narrow
+one-action proof: one checked `main`, exact required `FFI`, `seamN 1`, and a
+literal Tool Binding hash are composed with Compiler Evidence v2. It remains
+advisory and does not invoke the bound process or create approval authority.
 
 Certified recursion can also use [`Proven Value Bounds v1`](docs/proven_value_bounds_v1.md):
 the checker derives conservative i31 and list-length upper bounds through

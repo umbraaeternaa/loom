@@ -67,6 +67,10 @@ experimental, and what LOOM does not claim yet.
   `local-process/v1` plan/attempt contract, operator-gate authority, `process`
   operation, and normalized portable JSON input. It is advisory and performs no
   execution, signing, approval, claim, delegation, or capability grant.
+- Action Semantics v0 composes exactly one process-bound `main`, required `FFI`,
+  `seamN 1`, a literal Tool Binding hash, checker verdict, and Compiler Evidence
+  v2. It remains pure and advisory; it does not invoke the tool or grant
+  authority.
 - Deterministic property fuzz smoke is part of the citadel.
 
 ## Experimental or bounded
@@ -75,6 +79,8 @@ experimental, and what LOOM does not claim yet.
 - Action Capsule v0 and an additive Approval v2 that binds the exact capsule
   hash remain future contracts; Interface and Tool Binding v0 does not imply
   either authority or an authorizing lifecycle.
+- Multi-action semantics, Action Capsule composition, Approval v2, capsule
+  claims, and real host mediation remain future contracts.
 - The Gate is a verification and lifecycle layer; it does not magically confine
   arbitrary external tools unless those tools are routed through the bounded
   host lifecycle.

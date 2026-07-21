@@ -1206,6 +1206,362 @@ def verify_wasm_compiler_receipt_v4(
     return _wasm_receipt_v4_validation(receipt, attribution, [])
 
 
+_ACTION_SEMANTICS_SCHEMA = "loom-action-semantics/v0"
+_ACTION_SEMANTICS_VALIDATION_SCHEMA = "loom-action-semantics-validation/v0"
+_ACTION_SOURCE_LIMITS_SCHEMA = "loom-action-source-limits/v0"
+_ACTION_TARGET_MEDIATION_SCHEMA = "loom-action-target-mediation/v0"
+_ACTION_ENTRYPOINT = "main"
+_ACTION_COMPONENT = "operator-gate"
+
+
+def _action_semantics_validation(semantics, compiler_attribution, findings):
+    return {
+        "schema": _ACTION_SEMANTICS_VALIDATION_SCHEMA,
+        "valid": not findings,
+        "advisory": True,
+        "semantics": semantics if not findings else None,
+        "compiler_attribution": compiler_attribution,
+        "findings": findings,
+    }
+
+
+def _action_semantics_attribution():
+    return _compiler_evidence_v2_attribution()
+
+
+def _action_semantics_prefixed(path, findings):
+    return [{
+        "path": path + ("." + item["path"] if item.get("path") else ""),
+        "code": item["code"],
+        "message": item["message"],
+    } for item in findings]
+
+
+def _action_closed_findings(value, path, expected_keys):
+    findings = []
+    if not isinstance(value, dict):
+        return [{"path": path, "code": "expected-object", "message": path + " must be an object"}]
+    for key in sorted(set(value) - expected_keys, key=str):
+        findings.append({"path": path + "." + str(key), "code": "unknown-field", "message": "unknown action semantics field"})
+    for key in sorted(expected_keys - set(value)):
+        findings.append({"path": path + "." + key, "code": "missing-field", "message": "missing action semantics field"})
+    return findings
+
+
+def _action_tool_structure_findings(binding):
+    keys = {
+        "schema", "protocol", "authority", "operation", "interface_binding",
+        "interface_binding_sha256", "input_sha256", "output_contract_sha256", "binding_sha256",
+    }
+    findings = _action_closed_findings(binding, "semantics.tool_binding", keys)
+    if not isinstance(binding, dict):
+        return findings
+    if binding.get("schema") != _TOOL_BINDING_SCHEMA:
+        findings.append({"path": "semantics.tool_binding.schema", "code": "unsupported-schema", "message": "expected loom-tool-binding/v0"})
+    if binding.get("protocol") != _LOCAL_PROCESS_PROTOCOL:
+        findings.append({"path": "semantics.tool_binding.protocol", "code": "protocol-mismatch", "message": "expected local-process/v1"})
+    if binding.get("authority") != _LOCAL_PROCESS_AUTHORITY:
+        findings.append({"path": "semantics.tool_binding.authority", "code": "authority-mismatch", "message": "expected the operator-gate authority"})
+    if binding.get("operation") != "process":
+        findings.append({"path": "semantics.tool_binding.operation", "code": "operation-mismatch", "message": "expected process"})
+    for key in ("interface_binding_sha256", "input_sha256", "output_contract_sha256", "binding_sha256"):
+        if not _binding_is_sha256(binding.get(key)):
+            findings.append({"path": "semantics.tool_binding." + key, "code": "expected-sha256", "message": key + " must be lowercase SHA-256 hex"})
+    interface = verify_interface_binding(binding.get("interface_binding"), _LOCAL_PROCESS_PROTOCOL)
+    findings.extend(_action_semantics_prefixed("semantics.tool_binding.interface_binding", interface["findings"]))
+    if interface["valid"] and binding.get("interface_binding_sha256") != interface["binding"]["binding_sha256"]:
+        findings.append({"path": "semantics.tool_binding.interface_binding_sha256", "code": "interface-hash-mismatch", "message": "tool binding does not reference its embedded interface"})
+    if binding.get("output_contract_sha256") != _binding_sha256(_local_process_output_contract()):
+        findings.append({"path": "semantics.tool_binding.output_contract_sha256", "code": "output-contract-mismatch", "message": "tool binding has the wrong process output contract"})
+    if set(binding) == keys:
+        unsigned = {key: binding[key] for key in sorted(keys - {"binding_sha256"})}
+        if binding.get("binding_sha256") != _binding_sha256(unsigned):
+            findings.append({"path": "semantics.tool_binding.binding_sha256", "code": "binding-hash-mismatch", "message": "tool binding hash does not match its canonical fields"})
+    return findings
+
+
+def _action_semantics_context(manifest, tool_binding, tool_input, entrypoint):
+    findings = []
+    validation = validate_manifest(manifest)
+    findings.extend(_action_semantics_prefixed("manifest", validation["findings"]))
+    normalized_manifest = validation["normalized_manifest"] if validation["valid"] else None
+    if normalized_manifest is not None:
+        if normalized_manifest["schema"] != "loom-gate-manifest/v1":
+            findings.append({"path": "manifest.schema", "code": "unsupported-action-manifest", "message": "Action Semantics v0 requires loom-gate-manifest/v1"})
+        if normalized_manifest["actions"] != ["process"]:
+            findings.append({"path": "manifest.actions", "code": "process-only-required", "message": "Action Semantics v0 requires exactly the process action"})
+    decision = evaluate_manifest(manifest)
+    if validation["valid"] and decision["decision"] != "operator-required":
+        findings.append({"path": "manifest", "code": "operator-required", "message": "Action Semantics v0 requires an operator-required Gate decision"})
+    normalized_input, input_findings = _normalize_binding_json(tool_input)
+    findings.extend(_action_semantics_prefixed("tool_input", input_findings))
+    expected_input = {
+        "action": "process",
+        "manifest_sha256": validation["manifest_sha256"],
+    } if validation["valid"] else None
+    if not input_findings and normalized_input != expected_input:
+        findings.append({"path": "tool_input", "code": "action-input-mismatch", "message": "tool input must contain only process and the exact manifest hash"})
+    tool_check = verify_tool_binding(
+        tool_binding, _LOCAL_PROCESS_PROTOCOL, _LOCAL_PROCESS_AUTHORITY, "process", tool_input
+    )
+    findings.extend(_action_semantics_prefixed("tool_binding", tool_check["findings"]))
+    if not isinstance(entrypoint, str) or entrypoint != _ACTION_ENTRYPOINT:
+        findings.append({"path": "entrypoint", "code": "unsupported-entrypoint", "message": "Action Semantics v0 requires entrypoint 'main'"})
+    return {
+        "validation": validation,
+        "manifest": normalized_manifest,
+        "decision": decision,
+        "tool_input": normalized_input,
+        "tool_binding": tool_check["binding"] if tool_check["valid"] else None,
+    }, findings
+
+
+def _action_source_contract(program_src, binding_sha256):
+    findings = []
+    try:
+        program = parse(program_src)
+    except LoomError as error:
+        return None, [{"path": "source", "code": "parse-error", "message": str(error)}]
+    verdict = build_verdict(program_src)
+    if verdict["verdict"] != "accept":
+        findings.append({"path": "source", "code": "checker-rejected", "message": "Action Semantics source must pass the LOOM checker"})
+        return None, findings
+    if len(program) != 1:
+        findings.append({"path": "source", "code": "single-main-required", "message": "Action Semantics v0 requires exactly one top-level form"})
+        return None, findings
+    top = program[0]
+    if not (isinstance(top, list) and len(top) == 4 and _is_symbol(top[0]) and str(top[0]) == "defx"):
+        findings.append({"path": "source", "code": "invalid-main-shape", "message": "expected one defx main form"})
+        return None, findings
+    if not (_is_symbol(top[1]) and str(top[1]) == _ACTION_ENTRYPOINT):
+        findings.append({"path": "source.main", "code": "invalid-main-name", "message": "entrypoint must be symbol main"})
+    effects = top[2]
+    if not (isinstance(effects, list) and len(effects) == 1 and _is_symbol(effects[0]) and str(effects[0]) == "FFI!"):
+        findings.append({"path": "source.main.effects", "code": "exact-ffi-required", "message": "main must declare exactly FFI!"})
+    fn = top[3]
+    if not (isinstance(fn, list) and len(fn) == 3 and _is_symbol(fn[0]) and str(fn[0]) == "fn"):
+        findings.append({"path": "source.main", "code": "invalid-main-function", "message": "main must contain one function body expression"})
+        return None, findings
+    if fn[1] != []:
+        findings.append({"path": "source.main.parameters", "code": "zero-arguments-required", "message": "Action Semantics v0 main must take no arguments"})
+    meter = fn[2]
+    if not (isinstance(meter, list) and len(meter) == 4 and _is_symbol(meter[0]) and str(meter[0]) == "seamN"):
+        findings.append({"path": "source.main.body", "code": "outer-meter-required", "message": "main must contain one outer seamN expression"})
+        return None, findings
+    if type(meter[1]) is not int or meter[1] != 1:
+        findings.append({"path": "source.main.body.quantum", "code": "single-effect-required", "message": "outer seamN quantum must be exactly 1"})
+    meter_effects = meter[2]
+    if not (isinstance(meter_effects, list) and len(meter_effects) == 1 and _is_symbol(meter_effects[0]) and str(meter_effects[0]) == "FFI"):
+        findings.append({"path": "source.main.body.effects", "code": "ffi-meter-required", "message": "outer seamN must meter exactly FFI"})
+    foreign = meter[3]
+    if not (isinstance(foreign, list) and len(foreign) == 3 and _is_symbol(foreign[0]) and str(foreign[0]) == "ffi"):
+        findings.append({"path": "source.main.body", "code": "direct-ffi-required", "message": "meter body must be one direct ffi call"})
+        return None, findings
+    if not (type(foreign[1]) is str and foreign[1] == _ACTION_COMPONENT):
+        findings.append({"path": "source.main.body.ffi.component", "code": "component-mismatch", "message": "ffi component must be quoted operator-gate"})
+    if not (type(foreign[2]) is str and foreign[2] == binding_sha256):
+        findings.append({"path": "source.main.body.ffi.binding", "code": "tool-binding-literal-mismatch", "message": "ffi argument must be the quoted exact Tool Binding hash"})
+    expected_function = {
+        "name": "main",
+        "declared_effects": ["FFI"],
+        "performed_effects": ["FFI"],
+        "required_effects": ["FFI"],
+        "capabilities": ["FFI"],
+        "status": "review",
+        "findings": [],
+    }
+    if verdict["function_count"] != 1 or verdict["finding_count"] != 0 or verdict["functions"] != [expected_function]:
+        findings.append({"path": "checker_verdict", "code": "checker-contract-mismatch", "message": "checker verdict must describe exactly one honest required FFI main"})
+    if findings:
+        return None, findings
+    return {
+        "verdict": verdict,
+        "effect_contract": {
+            "declared": ["FFI"],
+            "performed": ["FFI"],
+            "required": ["FFI"],
+            "capabilities": ["FFI"],
+        },
+        "source_limits": {
+            "schema": _ACTION_SOURCE_LIMITS_SCHEMA,
+            "scope": "entrypoint-invocation",
+            "effect_meters": [{
+                "effect": "FFI", "maximum": 1, "counted_max_path": 1, "mechanism": "seamN/v1",
+            }],
+            "recursive_calls": None,
+        },
+    }, []
+
+
+def _action_semantics_structure_findings(semantics):
+    outer_keys = {
+        "schema", "advisory", "manifest_sha256", "policy", "policy_decision",
+        "tool_binding", "tool_binding_sha256", "compiler_evidence",
+        "compiler_evidence_sha256", "artifact_binding_sha256", "entrypoint",
+        "checker_verdict", "checker_verdict_sha256", "effect_contract",
+        "source_limits", "target_mediation", "semantics_sha256",
+    }
+    findings = _action_closed_findings(semantics, "semantics", outer_keys)
+    if not isinstance(semantics, dict):
+        return findings
+    if semantics.get("schema") != _ACTION_SEMANTICS_SCHEMA:
+        findings.append({"path": "semantics.schema", "code": "unsupported-schema", "message": "expected loom-action-semantics/v0"})
+    if semantics.get("advisory") is not True:
+        findings.append({"path": "semantics.advisory", "code": "invalid-advisory", "message": "Action Semantics must remain advisory"})
+    for key in (
+        "manifest_sha256", "tool_binding_sha256", "compiler_evidence_sha256",
+        "artifact_binding_sha256", "checker_verdict_sha256", "semantics_sha256",
+    ):
+        if not _binding_is_sha256(semantics.get(key)):
+            findings.append({"path": "semantics." + key, "code": "expected-sha256", "message": key + " must be lowercase SHA-256 hex"})
+    findings.extend(_action_tool_structure_findings(semantics.get("tool_binding")))
+    nested = (
+        ("entrypoint", {"function", "arguments", "arguments_sha256", "reachable_functions"}),
+        ("effect_contract", {"declared", "performed", "required", "capabilities"}),
+        ("source_limits", {"schema", "scope", "effect_meters", "recursive_calls"}),
+        ("target_mediation", {
+            "schema", "profile", "foreign_component", "source_binding_literal",
+            "protocol", "authority", "operation", "input_sha256", "output_contract_sha256",
+        }),
+    )
+    for key, expected in nested:
+        findings.extend(_action_closed_findings(semantics.get(key), "semantics." + key, expected))
+    verdict = semantics.get("checker_verdict")
+    if not isinstance(verdict, dict) or verdict.get("schema") != "loom-verdict/v1":
+        findings.append({"path": "semantics.checker_verdict", "code": "unsupported-checker-verdict", "message": "expected loom-verdict/v1"})
+    elif semantics.get("checker_verdict_sha256") != _binding_sha256(verdict):
+        findings.append({"path": "semantics.checker_verdict_sha256", "code": "checker-verdict-hash-mismatch", "message": "checker verdict hash does not match its canonical fields"})
+    compiler = semantics.get("compiler_evidence")
+    if not isinstance(compiler, dict):
+        findings.append({"path": "semantics.compiler_evidence", "code": "expected-object", "message": "compiler evidence must be an object"})
+    else:
+        if semantics.get("compiler_evidence_sha256") != compiler.get("evidence_sha256"):
+            findings.append({"path": "semantics.compiler_evidence_sha256", "code": "compiler-evidence-hash-mismatch", "message": "semantics does not reference embedded compiler evidence"})
+        if semantics.get("artifact_binding_sha256") != compiler.get("artifact_binding_sha256"):
+            findings.append({"path": "semantics.artifact_binding_sha256", "code": "artifact-binding-hash-mismatch", "message": "semantics does not reference compiler artifact binding"})
+    tool = semantics.get("tool_binding")
+    if isinstance(tool, dict) and semantics.get("tool_binding_sha256") != tool.get("binding_sha256"):
+        findings.append({"path": "semantics.tool_binding_sha256", "code": "tool-binding-hash-mismatch", "message": "semantics does not reference embedded tool binding"})
+    if set(semantics) >= outer_keys:
+        body = {key: semantics[key] for key in outer_keys if key != "semantics_sha256"}
+        try:
+            digest = _binding_sha256(body)
+        except (TypeError, ValueError):
+            findings.append({"path": "semantics", "code": "non-canonical-semantics", "message": "Action Semantics fields must be canonical JSON values"})
+        else:
+            if semantics.get("semantics_sha256") != digest:
+                findings.append({"path": "semantics.semantics_sha256", "code": "semantics-hash-mismatch", "message": "Action Semantics hash does not match its canonical fields"})
+    return findings
+
+
+def build_action_semantics_v0(
+    manifest, tool_binding, tool_input, program_src, wasm_bytes, builder_components, entrypoint
+):
+    """Build one pure, non-authorizing semantic binding for an exact process action."""
+    context, findings = _action_semantics_context(manifest, tool_binding, tool_input, entrypoint)
+    attribution = _action_semantics_attribution()
+    if findings:
+        return _action_semantics_validation(None, attribution, findings)
+    compiler = build_wasm_compiler_evidence_v2(manifest, program_src, wasm_bytes, builder_components)
+    attribution = compiler["attribution"]
+    if not compiler["valid"]:
+        return _action_semantics_validation(
+            None, attribution, _action_semantics_prefixed("compiler_evidence", compiler["findings"])
+        )
+    binding = context["tool_binding"]
+    source_contract, source_findings = _action_source_contract(program_src, binding["binding_sha256"])
+    if source_findings:
+        return _action_semantics_validation(None, attribution, source_findings)
+    evidence = compiler["evidence"]
+    verdict = source_contract["verdict"]
+    body = {
+        "schema": _ACTION_SEMANTICS_SCHEMA,
+        "advisory": True,
+        "manifest_sha256": context["validation"]["manifest_sha256"],
+        "policy": context["decision"]["policy"],
+        "policy_decision": context["decision"]["decision"],
+        "tool_binding": binding,
+        "tool_binding_sha256": binding["binding_sha256"],
+        "compiler_evidence": evidence,
+        "compiler_evidence_sha256": evidence["evidence_sha256"],
+        "artifact_binding_sha256": evidence["artifact_binding_sha256"],
+        "entrypoint": {
+            "function": _ACTION_ENTRYPOINT,
+            "arguments": [],
+            "arguments_sha256": _binding_sha256([]),
+            "reachable_functions": [_ACTION_ENTRYPOINT],
+        },
+        "checker_verdict": verdict,
+        "checker_verdict_sha256": _binding_sha256(verdict),
+        "effect_contract": source_contract["effect_contract"],
+        "source_limits": source_contract["source_limits"],
+        "target_mediation": {
+            "schema": _ACTION_TARGET_MEDIATION_SCHEMA,
+            "profile": "local-process-ffi-binding/v0",
+            "foreign_component": _ACTION_COMPONENT,
+            "source_binding_literal": binding["binding_sha256"],
+            "protocol": binding["protocol"],
+            "authority": binding["authority"],
+            "operation": binding["operation"],
+            "input_sha256": binding["input_sha256"],
+            "output_contract_sha256": binding["output_contract_sha256"],
+        },
+    }
+    body["semantics_sha256"] = _binding_sha256(body)
+    return _action_semantics_validation(body, attribution, [])
+
+
+def verify_action_semantics_v0(
+    semantics,
+    manifest,
+    tool_binding,
+    tool_input,
+    program_src,
+    wasm_bytes,
+    builder_surface,
+    builder_components,
+    verifier_components,
+    entrypoint,
+):
+    """Verify structure and compiler attribution before exact action semantics."""
+    attribution = _action_semantics_attribution()
+    findings = _action_semantics_structure_findings(semantics)
+    if findings:
+        return _action_semantics_validation(None, attribution, findings)
+    compiler = verify_wasm_compiler_evidence_v2(
+        semantics["compiler_evidence"], manifest, program_src, wasm_bytes,
+        builder_surface, builder_components, verifier_components,
+    )
+    attribution = compiler["attribution"]
+    if not compiler["valid"]:
+        return _action_semantics_validation(
+            None, attribution, _action_semantics_prefixed("compiler_evidence", compiler["findings"])
+        )
+    context, context_findings = _action_semantics_context(
+        manifest, tool_binding, tool_input, entrypoint
+    )
+    if context_findings:
+        return _action_semantics_validation(None, attribution, context_findings)
+    source_contract, source_findings = _action_source_contract(
+        program_src, context["tool_binding"]["binding_sha256"]
+    )
+    if source_findings:
+        return _action_semantics_validation(None, attribution, source_findings)
+    expected = build_action_semantics_v0(
+        manifest, tool_binding, tool_input, program_src, wasm_bytes,
+        builder_components, entrypoint,
+    )
+    if not expected["valid"]:
+        return _action_semantics_validation(None, attribution, expected["findings"])
+    if semantics != expected["semantics"]:
+        return _action_semantics_validation(None, attribution, [{
+            "path": "semantics",
+            "code": "action-semantics-mismatch",
+            "message": "Action Semantics does not match the exact manifest, tool, compiler, source, or effect inputs",
+        }])
+    return _action_semantics_validation(semantics, attribution, [])
+
+
 def collect_observation(manifest, result, actions_observed, evidence):
     """Collect read-only Git facts for a LOOM Gate observation."""
     return _loom_observer.collect_observation(manifest, result, actions_observed, evidence)

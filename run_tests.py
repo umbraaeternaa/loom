@@ -2361,6 +2361,267 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             binding_protocol, binding_authority, "process", {"e\u0301": 1, "\u00e9": 2}
         )
         rejected_protocol = _loom.build_interface_binding("mcp/2025-11-25")
+        semantics_manifest = {
+            "schema": "loom-gate-manifest/v1",
+            "agent": {"id": "codex", "role": "code"},
+            "task": {
+                "summary": "Bind one exact checked process action",
+                "intent": "Pin LOOM effects, compiler identity, and operator-gated host authority",
+            },
+            "repositories": [],
+            "read_paths": [],
+            "write_paths": [],
+            "actions": ["process"],
+            "evidence_required": [],
+        }
+        semantics_manifest_validation = _loom.validate_manifest(semantics_manifest)
+        semantics_input = {
+            "action": "process",
+            "manifest_sha256": semantics_manifest_validation["manifest_sha256"],
+        }
+        semantics_tool_result = _loom.build_tool_binding(
+            binding_protocol, binding_authority, "process", semantics_input
+        )
+        semantics_tool = semantics_tool_result["binding"]
+        semantics_src = (
+            '(defx main (FFI!) (fn () (seamN 1 (FFI) '
+            f'(ffi "operator-gate" "{semantics_tool["binding_sha256"]}"))))'
+        )
+        semantics_wasm = _loom.compile_wasm(semantics_src)
+        semantics_result = _loom.build_action_semantics_v0(
+            semantics_manifest, semantics_tool, semantics_input, semantics_src,
+            semantics_wasm, compiler_components, "main",
+        )
+        action_semantics = semantics_result["semantics"]
+        verified_action_semantics = _loom.verify_action_semantics_v0(
+            action_semantics, semantics_manifest, semantics_tool, semantics_input,
+            semantics_src, semantics_wasm, running_surface, compiler_components,
+            compiler_components, "main",
+        )
+        rejected_action_drift = _loom.verify_action_semantics_v0(
+            action_semantics, semantics_manifest, semantics_tool, semantics_input,
+            semantics_src, semantics_wasm, running_surface, compiler_components,
+            drifted_verifier_components, "main",
+        )
+        rejected_action_drift_and_input = _loom.verify_action_semantics_v0(
+            action_semantics, semantics_manifest, semantics_tool,
+            {**semantics_input, "extension": "not-negotiated"},
+            semantics_src, semantics_wasm, running_surface, compiler_components,
+            drifted_verifier_components, "main",
+        )
+        semantics_tampered_wasm = semantics_wasm + b"\x00\x01\x00"
+        rejected_action_wasm = _loom.verify_action_semantics_v0(
+            action_semantics, semantics_manifest, semantics_tool, semantics_input,
+            semantics_src, semantics_tampered_wasm, running_surface,
+            compiler_components, compiler_components, "main",
+        )
+        semantics_wrong_binding_src = semantics_src.replace(
+            semantics_tool["binding_sha256"], "0" * 64
+        )
+        rejected_action_binding_literal = _loom.build_action_semantics_v0(
+            semantics_manifest, semantics_tool, semantics_input,
+            semantics_wrong_binding_src, _loom.compile_wasm(semantics_wrong_binding_src),
+            compiler_components, "main",
+        )
+        semantics_wrong_meter_src = semantics_src.replace("seamN 1", "seamN 2")
+        rejected_action_meter = _loom.build_action_semantics_v0(
+            semantics_manifest, semantics_tool, semantics_input,
+            semantics_wrong_meter_src, _loom.compile_wasm(semantics_wrong_meter_src),
+            compiler_components, "main",
+        )
+        semantics_extra_function_src = semantics_src + " (def helper () (fn () 0))"
+        rejected_action_extra_function = _loom.build_action_semantics_v0(
+            semantics_manifest, semantics_tool, semantics_input,
+            semantics_extra_function_src, _loom.compile_wasm(semantics_extra_function_src),
+            compiler_components, "main",
+        )
+        rejected_action_extra_input = _loom.build_action_semantics_v0(
+            semantics_manifest, semantics_tool,
+            {**semantics_input, "extension": "not-negotiated"},
+            semantics_src, semantics_wasm, compiler_components, "main",
+        )
+        tampered_action_effects = json.loads(json.dumps(action_semantics))
+        tampered_action_effects["effect_contract"]["declared"].append("Net")
+        tampered_action_effects["semantics_sha256"] = _loom._binding_sha256({
+            key: value for key, value in tampered_action_effects.items()
+            if key != "semantics_sha256"
+        })
+        rejected_action_effects = _loom.verify_action_semantics_v0(
+            tampered_action_effects, semantics_manifest, semantics_tool, semantics_input,
+            semantics_src, semantics_wasm, running_surface, compiler_components,
+            compiler_components, "main",
+        )
+        unknown_action_semantics = json.loads(json.dumps(action_semantics))
+        unknown_action_semantics["extension"] = "not-negotiated"
+        rejected_action_extension = _loom.verify_action_semantics_v0(
+            unknown_action_semantics, semantics_manifest, semantics_tool, semantics_input,
+            semantics_src, semantics_wasm, running_surface, compiler_components,
+            compiler_components, "main",
+        )
+        v1_action_semantics = json.loads(json.dumps(action_semantics))
+        v1_action_semantics["compiler_evidence"] = compiler_evidence
+        v1_action_semantics["compiler_evidence_sha256"] = compiler_evidence["evidence_sha256"]
+        v1_action_semantics["artifact_binding_sha256"] = compiler_evidence["artifact_binding_sha256"]
+        v1_action_semantics["semantics_sha256"] = _loom._binding_sha256({
+            key: value for key, value in v1_action_semantics.items()
+            if key != "semantics_sha256"
+        })
+        rejected_action_v1_evidence = _loom.verify_action_semantics_v0(
+            v1_action_semantics, semantics_manifest, semantics_tool, semantics_input,
+            semantics_src, semantics_wasm, running_surface, compiler_components,
+            compiler_components, "main",
+        )
+
+        def _rehash_action_semantics(candidate):
+            candidate["semantics_sha256"] = _loom._binding_sha256({
+                key: value for key, value in candidate.items()
+                if key != "semantics_sha256"
+            })
+            return candidate
+
+        drift_manifest = json.loads(json.dumps(semantics_manifest))
+        drift_manifest["task"]["summary"] = "Different process action"
+        drift_tool = json.loads(json.dumps(semantics_tool))
+        drift_tool["authority"] = "urn:loom:host:different"
+        drift_source = semantics_src.replace("defx main", "defx other", 1)
+        action_drift_matrix = [
+            _loom.verify_action_semantics_v0(
+                action_semantics, drift_manifest, semantics_tool, semantics_input,
+                semantics_src, semantics_wasm, running_surface, compiler_components,
+                drifted_verifier_components, "main",
+            ),
+            _loom.verify_action_semantics_v0(
+                action_semantics, semantics_manifest, drift_tool, semantics_input,
+                semantics_src, semantics_wasm, running_surface, compiler_components,
+                drifted_verifier_components, "main",
+            ),
+            _loom.verify_action_semantics_v0(
+                action_semantics, semantics_manifest, semantics_tool, semantics_input,
+                drift_source, semantics_wasm, running_surface, compiler_components,
+                drifted_verifier_components, "main",
+            ),
+            _loom.verify_action_semantics_v0(
+                action_semantics, semantics_manifest, semantics_tool, semantics_input,
+                semantics_src, semantics_tampered_wasm, running_surface,
+                compiler_components, drifted_verifier_components, "main",
+            ),
+            _loom.verify_action_semantics_v0(
+                action_semantics, semantics_manifest, semantics_tool, semantics_input,
+                semantics_src, semantics_wasm, running_surface, compiler_components,
+                drifted_verifier_components, "other",
+            ),
+        ]
+        rejected_action_source = _loom.verify_action_semantics_v0(
+            action_semantics, semantics_manifest, semantics_tool, semantics_input,
+            drift_source, _loom.compile_wasm(drift_source), running_surface,
+            compiler_components, compiler_components, "main",
+        )
+        invalid_action_manifests = []
+        for mutate in ("extra-field", "extra-action", "wrong-action"):
+            candidate = json.loads(json.dumps(semantics_manifest))
+            if mutate == "extra-field":
+                candidate["approval"] = "+"
+            elif mutate == "extra-action":
+                candidate["actions"] = ["process", "read"]
+            else:
+                candidate["actions"] = ["read"]
+            invalid_action_manifests.append(_loom.build_action_semantics_v0(
+                candidate, semantics_tool, semantics_input, semantics_src,
+                semantics_wasm, compiler_components, "main",
+            ))
+        invalid_action_inputs = [
+            _loom.build_action_semantics_v0(
+                semantics_manifest, semantics_tool, candidate, semantics_src,
+                semantics_wasm, compiler_components, "main",
+            )
+            for candidate in (
+                {"manifest_sha256": semantics_input["manifest_sha256"]},
+                {**semantics_input, "action": "read"},
+                {**semantics_input, "manifest_sha256": "0" * 64},
+                {**semantics_input, "extension": "not-negotiated"},
+                {**semantics_input, "value": 1.5},
+            )
+        ]
+        tampered_action_tool = json.loads(json.dumps(semantics_tool))
+        tampered_action_tool["authority"] = "urn:loom:host:ambient"
+        tampered_action_tool["binding_sha256"] = _loom._binding_sha256({
+            key: value for key, value in tampered_action_tool.items()
+            if key != "binding_sha256"
+        })
+        rejected_action_tool = _loom.build_action_semantics_v0(
+            semantics_manifest, tampered_action_tool, semantics_input, semantics_src,
+            semantics_wasm, compiler_components, "main",
+        )
+        alternate_input = {
+            "action": "process",
+            "manifest_sha256": semantics_input["manifest_sha256"],
+            "label": "alternate",
+        }
+        alternate_tool = _loom.build_tool_binding(
+            binding_protocol, binding_authority, "process", alternate_input
+        )["binding"]
+        alternate_binding_src = semantics_src.replace(
+            semantics_tool["binding_sha256"], alternate_tool["binding_sha256"]
+        )
+        rejected_action_alternate_binding = _loom.build_action_semantics_v0(
+            semantics_manifest, semantics_tool, semantics_input, alternate_binding_src,
+            _loom.compile_wasm(alternate_binding_src), compiler_components, "main",
+        )
+        source_mutations = (
+            semantics_src.replace("defx main", "defx other", 1),
+            semantics_src.replace("fn ()", "fn (x)", 1),
+            semantics_src.replace("(FFI!)", "(FFI! IO)", 1),
+            semantics_src.replace('ffi "operator-gate"', 'ffi "other"', 1),
+            semantics_src.replace(
+                '(ffi "operator-gate"',
+                '(seamN 1 (FFI) (ffi "operator-gate"',
+                1,
+            ).replace('"))))', '")))))', 1),
+        )
+        rejected_action_sources = [
+            _loom.build_action_semantics_v0(
+                semantics_manifest, semantics_tool, semantics_input, candidate,
+                _loom.compile_wasm(candidate), compiler_components, "main",
+            )
+            for candidate in source_mutations
+        ]
+        checker_action_tamper = json.loads(json.dumps(action_semantics))
+        checker_action_tamper["checker_verdict"]["function_count"] = 2
+        checker_action_tamper["checker_verdict_sha256"] = _loom._binding_sha256(
+            checker_action_tamper["checker_verdict"]
+        )
+        source_limit_action_tamper = json.loads(json.dumps(action_semantics))
+        source_limit_action_tamper["source_limits"]["effect_meters"][0]["maximum"] = 2
+        target_action_tamper = json.loads(json.dumps(action_semantics))
+        target_action_tamper["target_mediation"]["operation"] = "different"
+        advisory_action_tamper = json.loads(json.dumps(action_semantics))
+        advisory_action_tamper["advisory"] = False
+        missing_action_field = json.loads(json.dumps(action_semantics))
+        missing_action_field.pop("target_mediation")
+        action_immutable_tampers = [
+            _rehash_action_semantics(candidate)
+            for candidate in (
+                checker_action_tamper, source_limit_action_tamper,
+                target_action_tamper, advisory_action_tamper,
+            )
+        ] + [missing_action_field]
+        rejected_action_immutable_tampers = [
+            _loom.verify_action_semantics_v0(
+                candidate, semantics_manifest, semantics_tool, semantics_input,
+                semantics_src, semantics_wasm, running_surface, compiler_components,
+                compiler_components, "main",
+            )
+            for candidate in action_immutable_tampers
+        ]
+        rejected_action_missing_components = _loom.build_action_semantics_v0(
+            semantics_manifest, semantics_tool, semantics_input, semantics_src,
+            semantics_wasm, missing_compiler_components, "main",
+        )
+        rejected_action_extra_verifier = _loom.verify_action_semantics_v0(
+            action_semantics, semantics_manifest, semantics_tool, semantics_input,
+            semantics_src, semantics_wasm, running_surface, compiler_components,
+            extra_compiler_components, "main",
+        )
         manifest_contract_ok = (
             valid["valid"] is True
             and valid["advisory"] is True
@@ -2573,6 +2834,88 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and any(item["code"] == "normalized-key-collision" for item in rejected_key_collision["findings"])
             and rejected_protocol["valid"] is False
             and any(item["code"] == "unsupported-protocol" for item in rejected_protocol["findings"])
+            and semantics_manifest_validation["valid"] is True
+            and semantics_tool_result["valid"] is True
+            and semantics_result["valid"] is True
+            and action_semantics["schema"] == "loom-action-semantics/v0"
+            and action_semantics["advisory"] is True
+            and action_semantics["manifest_sha256"] == semantics_manifest_validation["manifest_sha256"]
+            and action_semantics["policy_decision"] == "operator-required"
+            and action_semantics["tool_binding"] == semantics_tool
+            and action_semantics["tool_binding_sha256"] == semantics_tool["binding_sha256"]
+            and action_semantics["compiler_evidence"]["schema"] == "loom-gate-wasm-compiler-evidence/v2"
+            and action_semantics["compiler_evidence_sha256"] == action_semantics["compiler_evidence"]["evidence_sha256"]
+            and action_semantics["artifact_binding_sha256"] == action_semantics["compiler_evidence"]["artifact_binding_sha256"]
+            and action_semantics["entrypoint"] == {
+                "function": "main",
+                "arguments": [],
+                "arguments_sha256": _loom._binding_sha256([]),
+                "reachable_functions": ["main"],
+            }
+            and action_semantics["effect_contract"] == {
+                "declared": ["FFI"], "performed": ["FFI"],
+                "required": ["FFI"], "capabilities": ["FFI"],
+            }
+            and action_semantics["source_limits"] == {
+                "schema": "loom-action-source-limits/v0",
+                "scope": "entrypoint-invocation",
+                "effect_meters": [{
+                    "effect": "FFI", "maximum": 1, "counted_max_path": 1,
+                    "mechanism": "seamN/v1",
+                }],
+                "recursive_calls": None,
+            }
+            and action_semantics["target_mediation"] == {
+                "schema": "loom-action-target-mediation/v0",
+                "profile": "local-process-ffi-binding/v0",
+                "foreign_component": "operator-gate",
+                "source_binding_literal": semantics_tool["binding_sha256"],
+                "protocol": binding_protocol,
+                "authority": binding_authority,
+                "operation": "process",
+                "input_sha256": semantics_tool["input_sha256"],
+                "output_contract_sha256": semantics_tool["output_contract_sha256"],
+            }
+            and len(action_semantics["checker_verdict_sha256"]) == 64
+            and len(action_semantics["semantics_sha256"]) == 64
+            and verified_action_semantics["valid"] is True
+            and verified_action_semantics["compiler_attribution"]["relation"] == "same"
+            and rejected_action_drift["valid"] is False
+            and rejected_action_drift["compiler_attribution"]["relation"] == "different"
+            and [item["code"] for item in rejected_action_drift["findings"]] == ["wasm-compiler-drift"]
+            and rejected_action_drift_and_input["valid"] is False
+            and [item["code"] for item in rejected_action_drift_and_input["findings"]] == ["wasm-compiler-drift"]
+            and rejected_action_wasm["valid"] is False
+            and any(item["code"] == "wasm-source-mismatch" for item in rejected_action_wasm["findings"])
+            and rejected_action_binding_literal["valid"] is False
+            and any(item["code"] == "tool-binding-literal-mismatch" for item in rejected_action_binding_literal["findings"])
+            and rejected_action_meter["valid"] is False
+            and any(item["code"] == "single-effect-required" for item in rejected_action_meter["findings"])
+            and rejected_action_extra_function["valid"] is False
+            and any(item["code"] == "single-main-required" for item in rejected_action_extra_function["findings"])
+            and rejected_action_extra_input["valid"] is False
+            and any(item["code"] == "action-input-mismatch" for item in rejected_action_extra_input["findings"])
+            and rejected_action_effects["valid"] is False
+            and any(item["code"] == "action-semantics-mismatch" for item in rejected_action_effects["findings"])
+            and rejected_action_extension["valid"] is False
+            and any(item["code"] == "unknown-field" for item in rejected_action_extension["findings"])
+            and rejected_action_v1_evidence["valid"] is False
+            and any(item["code"] == "unsupported-schema" for item in rejected_action_v1_evidence["findings"])
+            and all(
+                result["valid"] is False
+                and result["compiler_attribution"]["relation"] == "different"
+                and [item["code"] for item in result["findings"]] == ["wasm-compiler-drift"]
+                for result in action_drift_matrix
+            )
+            and rejected_action_source["valid"] is False
+            and all(result["valid"] is False for result in invalid_action_manifests)
+            and all(result["valid"] is False for result in invalid_action_inputs)
+            and rejected_action_tool["valid"] is False
+            and rejected_action_alternate_binding["valid"] is False
+            and all(result["valid"] is False for result in rejected_action_sources)
+            and all(result["valid"] is False for result in rejected_action_immutable_tampers)
+            and rejected_action_missing_components["valid"] is False
+            and rejected_action_extra_verifier["valid"] is False
         )
         ok += manifest_contract_ok
         print(f"  {'ok  ' if manifest_contract_ok else 'FAIL'} gate: deterministic fail-closed task manifest v1")
