@@ -85,7 +85,9 @@ experimental, and what LOOM does not claim yet.
   Capsule hash remain future contracts; Action Capsule v0 does not imply either
   concrete host intent or an authorizing lifecycle.
 - Multi-action semantics, Approval v2, Capsule claims, real host mediation,
-  execution results, and Receipt v4 remain future contracts.
+  and terminal Action Capsule Result v0 remain future contracts. Compiler
+  Receipt v4 is already stable evidence and is not embedded in the
+  pre-execution Capsule because no execution observation exists yet.
 - The Gate is a verification and lifecycle layer; it does not magically confine
   arbitrary external tools unless those tools are routed through the bounded
   host lifecycle.

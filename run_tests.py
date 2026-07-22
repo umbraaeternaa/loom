@@ -4959,6 +4959,10 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         readme = Path(__file__).with_name("README.md").read_text()
         rdoc_words = " ".join(rdoc.split())
         recurrence_words = " ".join(recurrence_doc.split())
+        stable_section = rdoc.split("## Stable today", 1)[1].split("\n## ", 1)[0]
+        bounded_section = rdoc.split("## Experimental or bounded", 1)[1].split("\n## ", 1)[0]
+        stable_words = " ".join(stable_section.split())
+        bounded_words = " ".join(bounded_section.split())
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
@@ -4969,7 +4973,10 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "Parser, checker, interpreter, and CLI facade." in rdoc
             and "WebAssembly/WAT backend for the published supported surface" in rdoc
             and "LOOM Gate advisory contracts" in rdoc
+            and "Compiler Receipt v4" in stable_words
             and "Experimental or bounded" in rdoc
+            and "terminal Action Capsule Result v0 remain future contracts" in bounded_words
+            and "Receipt v4 remain future contracts" not in rdoc_words
             and "does not magically confine arbitrary external tools" in rdoc_words
             and "Native operator signing is intentionally outside the public language runtime." in rdoc
             and "Portable Meter Frame v1 is implemented by the reference interpreter, the generated Python and JavaScript backends, and WASM." in rdoc_words

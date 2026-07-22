@@ -167,10 +167,12 @@ or process result. Therefore Capsule v0 cannot identify what a host would
 actually invoke and cannot be approved for execution.
 
 Exact loom-action-invocation-binding/v0 must be designed and implemented before
-Approval v2. Approval v2, claim, trusted host mediation, result, and Receipt v4
-remain separate future contracts. Capsule v0 contains no nonce, timestamp,
-expiry, signature, key, token, delegation, ambient authority, approval, claim,
-ledger state, execution output, or freshness assertion.
+Approval v2. Approval v2, claim, trusted host mediation, and terminal Action
+Capsule Result v0 remain separate future contracts. Compiler Receipt v4 already
+exists as stable evidence, but the pre-execution Capsule does not embed it
+because no execution observation exists yet. Capsule v0 contains no nonce,
+timestamp, expiry, signature, key, token, delegation, ambient authority,
+approval, claim, ledger state, execution output, or freshness assertion.
 
 Existing Gate, Interface/Tool Binding, Action Semantics, Compiler Evidence,
 Receipt, Workflow, approval, and claim schemas remain unchanged. No CLI,

@@ -845,11 +845,14 @@ def _check_action_semantics_doc() -> None:
         "do not add source, manifest, tool-input, semantic, or generic mismatch",
         "performs no filesystem collection",
         "executes no command",
+        "Compiler Receipt v4 already exists as a separate stable evidence contract",
         "Existing Gate, Tool/Interface Binding, Compiler Evidence v1/v2",
     )
     missing = [needle for needle in required if needle not in words]
     if missing:
         raise SystemExit("docs parity: action semantics v0 contract drift: missing " + ", ".join(missing))
+    if "Receipt v4 remain separate future contracts" in words:
+        raise SystemExit("docs parity: action semantics v0 misclassifies stable Compiler Receipt v4 as future")
 
 
 def _check_action_semantics_parity() -> None:
@@ -975,12 +978,16 @@ def _check_action_capsule_doc() -> None:
         "does not add source, manifest, tool-input",
         "execute no command",
         "cannot be approved for execution",
+        "terminal Action Capsule Result v0 remain separate future contracts",
+        "Compiler Receipt v4 already exists as stable evidence",
         "Existing Gate, Interface/Tool Binding, Action Semantics, Compiler Evidence",
         "No CLI, Playground, MCP, A2A, WASI, identity, or host-executor adapter",
     )
     missing = [needle for needle in required if needle not in words]
     if missing:
         raise SystemExit("docs parity: action capsule v0 contract drift: missing " + ", ".join(missing))
+    if "Receipt v4 remain separate future contracts" in words:
+        raise SystemExit("docs parity: action capsule v0 misclassifies stable Compiler Receipt v4 as future")
 
 
 def _check_action_capsule_parity() -> None:

@@ -146,7 +146,8 @@ profile hash or Tool Binding hash is never sufficient evidence.
 ## Boundary
 
 - Action Semantics v0 is not an Action Capsule, signature, operator approval,
-  execution claim, terminal result, or Receipt v4.
+  execution claim, terminal result, or attached Compiler Receipt v4. Compiler
+  Receipt v4 already exists as a separate stable evidence contract.
 - `seamN 1` meters LOOM runtime FFI requests. It does not itself meter host
   process side effects; a future trusted-host mediation contract must charge
   before real invocation.
