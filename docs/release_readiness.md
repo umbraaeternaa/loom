@@ -71,16 +71,21 @@ experimental, and what LOOM does not claim yet.
   `seamN 1`, a literal Tool Binding hash, checker verdict, and Compiler Evidence
   v2. It remains pure and advisory; it does not invoke the tool or grant
   authority.
+- Action Capsule v0 deterministically composes the normalized manifest, exact
+  Gate decision, declaration-only actor, complete Action Semantics, cross-linked
+  hashes, fixed execution class, and fixed lifecycle. It remains pure,
+  `concrete_invocation: unbound`, `authorization: none`, and
+  `approval_eligible: false`.
 - Deterministic property fuzz smoke is part of the citadel.
 
 ## Experimental or bounded
 
 - LOOM is still a research kernel, not a package-manager ecosystem.
-- Action Capsule v0 and an additive Approval v2 that binds the exact capsule
-  hash remain future contracts; Interface and Tool Binding v0 does not imply
-  either authority or an authorizing lifecycle.
-- Multi-action semantics, Action Capsule composition, Approval v2, capsule
-  claims, and real host mediation remain future contracts.
+- Exact Invocation Binding v0 and an additive Approval v2 that binds the exact
+  Capsule hash remain future contracts; Action Capsule v0 does not imply either
+  concrete host intent or an authorizing lifecycle.
+- Multi-action semantics, Approval v2, Capsule claims, real host mediation,
+  execution results, and Receipt v4 remain future contracts.
 - The Gate is a verification and lifecycle layer; it does not magically confine
   arbitrary external tools unless those tools are routed through the bounded
   host lifecycle.

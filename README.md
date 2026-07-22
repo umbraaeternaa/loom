@@ -141,6 +141,11 @@ It does not execute, approve, claim, delegate, or grant authority.
 one-action proof: one checked `main`, exact required `FFI`, `seamN 1`, and a
 literal Tool Binding hash are composed with Compiler Evidence v2. It remains
 advisory and does not invoke the bound process or create approval authority.
+[`Action Capsule v0`](docs/action_capsule_v0.md) closes the normalized
+manifest, exact Gate decision, declaration-only actor, and complete Action
+Semantics into one deterministic semantic subject. Its concrete invocation is
+explicitly `unbound`, authorization is `none`, and it is not approval
+eligible; Invocation Binding v0 must exist before Approval v2 can authorize it.
 
 Certified recursion can also use [`Proven Value Bounds v1`](docs/proven_value_bounds_v1.md):
 the checker derives conservative i31 and list-length upper bounds through

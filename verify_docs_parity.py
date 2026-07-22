@@ -31,6 +31,7 @@ COMPILER_RECEIPT_DOC = ROOT / "docs" / "gate_compiler_receipt_v3.md"
 COMPILER_RECEIPT_V4_DOC = ROOT / "docs" / "gate_compiler_receipt_v4.md"
 ACTION_BINDING_DOC = ROOT / "docs" / "action_binding_v0.md"
 ACTION_SEMANTICS_DOC = ROOT / "docs" / "action_semantics_v0.md"
+ACTION_CAPSULE_DOC = ROOT / "docs" / "action_capsule_v0.md"
 WASM_ARTIFACT_DOC = ROOT / "docs" / "gate_wasm_artifact_v1.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
 
@@ -953,6 +954,138 @@ def _check_action_semantics_parity() -> None:
         raise SystemExit("docs parity: modular and standalone action semantics diverged")
 
 
+def _check_action_capsule_doc() -> None:
+    words = " ".join(ACTION_CAPSULE_DOC.read_text().split())
+    required = (
+        "LOOM Action Capsule v0",
+        "normative, deterministic, pure, advisory, and non-authorizing",
+        "build_action_capsule_v0(",
+        "verify_action_capsule_v0(",
+        "loom-action-capsule-validation/v0",
+        "loom-action-capsule/v0",
+        "loom-action-actor-declaration/v0",
+        "loom-action-capsule-bindings/v0",
+        "loom-action-execution-class/v0",
+        "loom-action-capsule-lifecycle/v0",
+        'concrete_invocation: "unbound"',
+        'authorization: "none"',
+        "approval_eligible: false",
+        "loom-action-invocation-binding/v0",
+        "wasm-compiler-drift",
+        "does not add source, manifest, tool-input",
+        "execute no command",
+        "cannot be approved for execution",
+        "Existing Gate, Interface/Tool Binding, Action Semantics, Compiler Evidence",
+        "No CLI, Playground, MCP, A2A, WASI, identity, or host-executor adapter",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: action capsule v0 contract drift: missing " + ", ".join(missing))
+
+
+def _check_action_capsule_parity() -> None:
+    import loom as modular
+    spec = importlib.util.spec_from_file_location("loom_docs_action_capsule", DOCS_LOOM)
+    if spec is None or spec.loader is None:
+        raise SystemExit("docs parity: could not load standalone Action Capsule surface")
+    standalone = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(standalone)
+    manifest = {
+        "schema": "loom-gate-manifest/v1",
+        "agent": {"id": "codex", "role": "code"},
+        "task": {
+            "summary": "Compose one exact checked process capsule",
+            "intent": "Pin semantics while leaving concrete invocation unbound",
+        },
+        "repositories": [],
+        "read_paths": [],
+        "write_paths": [],
+        "actions": ["process"],
+        "evidence_required": [],
+    }
+    validation = modular.validate_manifest(manifest)
+    input_value = {
+        "action": "process",
+        "manifest_sha256": validation["manifest_sha256"],
+    }
+    protocol = "local-process/v1"
+    authority = "urn:loom:host:operator-gate"
+    modular_tool = modular.build_tool_binding(
+        protocol, authority, "process", input_value
+    )
+    standalone_tool = standalone.build_tool_binding(
+        protocol, authority, "process", input_value
+    )
+    if modular_tool != standalone_tool or not modular_tool["valid"]:
+        raise SystemExit("docs parity: Action Capsule tool fixture diverged")
+    tool = modular_tool["binding"]
+    source = (
+        '(defx main (FFI!) (fn () (seamN 1 (FFI) '
+        f'(ffi "operator-gate" "{tool["binding_sha256"]}"))))'
+    )
+    wasm = modular.compile_wasm(source)
+    if standalone.compile_wasm(source) != wasm:
+        raise SystemExit("docs parity: Action Capsule WASM fixture diverged")
+    modular_paths = (
+        "loom.py", "loom_parse.py", "loom_checker.py", "loom_bounds.py",
+        "loom_recursion.py", "loom_frontend.py", "loom_wasm.py",
+    )
+    modular_components = {path: ROOT.joinpath(path).read_bytes() for path in modular_paths}
+    standalone_components = {"docs/loom.py": DOCS_LOOM.read_bytes()}
+    modular_result = modular.build_action_capsule_v0(
+        manifest, tool, input_value, source, wasm, modular_components, "main"
+    )
+    standalone_result = standalone.build_action_capsule_v0(
+        manifest, tool, input_value, source, wasm, standalone_components, "main"
+    )
+    if not modular_result["valid"] or not standalone_result["valid"]:
+        raise SystemExit("docs parity: Action Capsule surface failed to build")
+    modular_capsule = modular_result["capsule"]
+    standalone_capsule = standalone_result["capsule"]
+    modular_self = modular.verify_action_capsule_v0(
+        modular_capsule, manifest, tool, input_value, source, wasm,
+        "modular-python", modular_components, modular_components, "main",
+    )
+    standalone_self = standalone.verify_action_capsule_v0(
+        standalone_capsule, manifest, tool, input_value, source, wasm,
+        "standalone-python", standalone_components, standalone_components, "main",
+    )
+    modular_checks_standalone = modular.verify_action_capsule_v0(
+        standalone_capsule, manifest, tool, input_value, source, wasm,
+        "standalone-python", standalone_components, modular_components, "main",
+    )
+    standalone_checks_modular = standalone.verify_action_capsule_v0(
+        modular_capsule, manifest, tool, input_value, source, wasm,
+        "modular-python", modular_components, standalone_components, "main",
+    )
+    shared_fields = (
+        "schema", "advisory", "manifest", "manifest_sha256", "gate_decision",
+        "declared_actor", "execution_class", "lifecycle",
+    )
+    contract = (
+        all(modular_capsule[key] == standalone_capsule[key] for key in shared_fields)
+        and modular_capsule["bindings"]["tool_binding_sha256"] == standalone_capsule["bindings"]["tool_binding_sha256"]
+        and modular_capsule["bindings"]["artifact_binding_sha256"] == standalone_capsule["bindings"]["artifact_binding_sha256"]
+        and modular_capsule["bindings"]["compiler_evidence_sha256"] != standalone_capsule["bindings"]["compiler_evidence_sha256"]
+        and modular_capsule["capsule_sha256"] != standalone_capsule["capsule_sha256"]
+        and modular_capsule["execution_class"]["concrete_invocation"] == "unbound"
+        and modular_capsule["lifecycle"]["authorization"] == "none"
+        and modular_capsule["lifecycle"]["approval_eligible"] is False
+        and modular_self["valid"]
+        and standalone_self["valid"]
+        and modular_self["compiler_attribution"]["relation"] == "same"
+        and standalone_self["compiler_attribution"]["relation"] == "same"
+        and not modular_checks_standalone["valid"]
+        and not standalone_checks_modular["valid"]
+        and modular_checks_standalone["compiler_attribution"]["relation"] == "different"
+        and standalone_checks_modular["compiler_attribution"]["relation"] == "different"
+        and [item["code"] for item in modular_checks_standalone["findings"]] == ["wasm-compiler-drift"]
+        and [item["code"] for item in standalone_checks_modular["findings"]] == ["wasm-compiler-drift"]
+    )
+    if not contract:
+        raise SystemExit("docs parity: modular and standalone Action Capsule diverged")
+
+
 def _check_wasm_artifact_doc() -> None:
     text = WASM_ARTIFACT_DOC.read_text()
     words = " ".join(text.split())
@@ -1040,6 +1173,8 @@ def main() -> int:
     _check_action_binding_parity()
     _check_action_semantics_doc()
     _check_action_semantics_parity()
+    _check_action_capsule_doc()
+    _check_action_capsule_parity()
     _check_wasm_artifact_doc()
     _check_secret_credential_policy_doc()
     _check_pyodide_import_boundary()

@@ -2622,6 +2622,145 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             semantics_src, semantics_wasm, running_surface, compiler_components,
             extra_compiler_components, "main",
         )
+        capsule_result = _loom.build_action_capsule_v0(
+            semantics_manifest, semantics_tool, semantics_input, semantics_src,
+            semantics_wasm, compiler_components, "main",
+        )
+        action_capsule = capsule_result["capsule"]
+        repeated_capsule = _loom.build_action_capsule_v0(
+            semantics_manifest, semantics_tool, semantics_input, semantics_src,
+            semantics_wasm, compiler_components, "main",
+        )
+        reordered_manifest = {
+            key: semantics_manifest[key] for key in reversed(tuple(semantics_manifest))
+        }
+        reordered_capsule = _loom.build_action_capsule_v0(
+            reordered_manifest, semantics_tool, semantics_input, semantics_src,
+            semantics_wasm, compiler_components, "main",
+        )
+        verified_action_capsule = _loom.verify_action_capsule_v0(
+            action_capsule, semantics_manifest, semantics_tool, semantics_input,
+            semantics_src, semantics_wasm, running_surface, compiler_components,
+            compiler_components, "main",
+        )
+        rejected_capsule_drift = _loom.verify_action_capsule_v0(
+            action_capsule, semantics_manifest, semantics_tool, semantics_input,
+            semantics_src, semantics_wasm, running_surface, compiler_components,
+            drifted_verifier_components, "main",
+        )
+        capsule_drift_matrix = [
+            _loom.verify_action_capsule_v0(
+                action_capsule, drift_manifest, semantics_tool, semantics_input,
+                semantics_src, semantics_wasm, running_surface, compiler_components,
+                drifted_verifier_components, "main",
+            ),
+            _loom.verify_action_capsule_v0(
+                action_capsule, semantics_manifest, drift_tool, semantics_input,
+                semantics_src, semantics_wasm, running_surface, compiler_components,
+                drifted_verifier_components, "main",
+            ),
+            _loom.verify_action_capsule_v0(
+                action_capsule, semantics_manifest, semantics_tool, semantics_input,
+                drift_source, semantics_wasm, running_surface, compiler_components,
+                drifted_verifier_components, "main",
+            ),
+            _loom.verify_action_capsule_v0(
+                action_capsule, semantics_manifest, semantics_tool, semantics_input,
+                semantics_src, semantics_tampered_wasm, running_surface,
+                compiler_components, drifted_verifier_components, "main",
+            ),
+            _loom.verify_action_capsule_v0(
+                action_capsule, semantics_manifest, semantics_tool, semantics_input,
+                semantics_src, semantics_wasm, running_surface, compiler_components,
+                drifted_verifier_components, "other",
+            ),
+        ]
+
+        def _rehash_action_capsule(candidate):
+            candidate["capsule_sha256"] = _loom._binding_sha256({
+                key: value for key, value in candidate.items()
+                if key != "capsule_sha256"
+            })
+            return candidate
+
+        capsule_actor_tamper = json.loads(json.dumps(action_capsule))
+        capsule_actor_tamper["declared_actor"]["id"] = "operator"
+        capsule_decision_tamper = json.loads(json.dumps(action_capsule))
+        capsule_decision_tamper["gate_decision"]["policy"] = "ambient/v0"
+        capsule_binding_tamper = json.loads(json.dumps(action_capsule))
+        capsule_binding_tamper["bindings"]["tool_binding_sha256"] = "0" * 64
+        capsule_semantic_tamper = json.loads(json.dumps(action_capsule))
+        capsule_semantic_tamper["action_semantics"] = tampered_action_effects
+        capsule_semantic_tamper["action_semantics_sha256"] = tampered_action_effects["semantics_sha256"]
+        capsule_v1_evidence = json.loads(json.dumps(action_capsule))
+        capsule_v1_evidence["action_semantics"] = v1_action_semantics
+        capsule_v1_evidence["action_semantics_sha256"] = v1_action_semantics["semantics_sha256"]
+        capsule_v1_evidence["bindings"]["compiler_evidence_sha256"] = v1_action_semantics["compiler_evidence_sha256"]
+        capsule_v1_evidence["bindings"]["artifact_binding_sha256"] = v1_action_semantics["artifact_binding_sha256"]
+        capsule_immutable_tampers = [
+            _rehash_action_capsule(candidate)
+            for candidate in (
+                capsule_actor_tamper, capsule_decision_tamper,
+                capsule_binding_tamper, capsule_semantic_tamper, capsule_v1_evidence,
+            )
+        ]
+        for field, value in (
+            ("protocol", "other/v0"),
+            ("authority", "urn:loom:host:ambient"),
+            ("operation", "read"),
+            ("foreign_component", "other"),
+            ("maximum_ffi_requests", 2),
+            ("maximum_ffi_requests", True),
+            ("concrete_invocation", "bound"),
+            ("host_boundary", "ambient"),
+        ):
+            candidate = json.loads(json.dumps(action_capsule))
+            candidate["execution_class"][field] = value
+            capsule_immutable_tampers.append(_rehash_action_capsule(candidate))
+        for field, value in (
+            ("authorization", "operator"),
+            ("approval_eligible", True),
+            ("approval_eligible", 0),
+            ("required_before_authorization", []),
+            ("required_after_attempt", []),
+        ):
+            candidate = json.loads(json.dumps(action_capsule))
+            candidate["lifecycle"][field] = value
+            capsule_immutable_tampers.append(_rehash_action_capsule(candidate))
+        rejected_capsule_immutable_tampers = [
+            _loom.verify_action_capsule_v0(
+                candidate, semantics_manifest, semantics_tool, semantics_input,
+                semantics_src, semantics_wasm, running_surface, compiler_components,
+                compiler_components, "main",
+            )
+            for candidate in capsule_immutable_tampers
+        ]
+        capsule_unknown = json.loads(json.dumps(action_capsule))
+        capsule_unknown["approval"] = "+"
+        capsule_missing = json.loads(json.dumps(action_capsule))
+        capsule_missing.pop("lifecycle")
+        rejected_capsule_shapes = [
+            _loom.verify_action_capsule_v0(
+                candidate, semantics_manifest, semantics_tool, semantics_input,
+                semantics_src, semantics_wasm, running_surface, compiler_components,
+                compiler_components, "main",
+            )
+            for candidate in (None, capsule_unknown, capsule_missing)
+        ]
+        rejected_capsule_source = _loom.verify_action_capsule_v0(
+            action_capsule, semantics_manifest, semantics_tool, semantics_input,
+            drift_source, _loom.compile_wasm(drift_source), running_surface,
+            compiler_components, compiler_components, "main",
+        )
+        rejected_capsule_missing_components = _loom.build_action_capsule_v0(
+            semantics_manifest, semantics_tool, semantics_input, semantics_src,
+            semantics_wasm, missing_compiler_components, "main",
+        )
+        rejected_capsule_extra_verifier = _loom.verify_action_capsule_v0(
+            action_capsule, semantics_manifest, semantics_tool, semantics_input,
+            semantics_src, semantics_wasm, running_surface, compiler_components,
+            extra_compiler_components, "main",
+        )
         manifest_contract_ok = (
             valid["valid"] is True
             and valid["advisory"] is True
@@ -2916,6 +3055,73 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and all(result["valid"] is False for result in rejected_action_immutable_tampers)
             and rejected_action_missing_components["valid"] is False
             and rejected_action_extra_verifier["valid"] is False
+            and capsule_result["schema"] == "loom-action-capsule-validation/v0"
+            and capsule_result["valid"] is True
+            and capsule_result["advisory"] is True
+            and action_capsule["schema"] == "loom-action-capsule/v0"
+            and action_capsule["manifest"] == semantics_manifest_validation["normalized_manifest"]
+            and action_capsule["manifest_sha256"] == semantics_manifest_validation["manifest_sha256"]
+            and action_capsule["gate_decision"] == _loom.evaluate_manifest(semantics_manifest)
+            and action_capsule["declared_actor"] == {
+                "schema": "loom-action-actor-declaration/v0",
+                "profile": "manifest-declared/v0",
+                "id": "codex",
+                "role": "code",
+                "identity_assurance": "declaration-only",
+            }
+            and action_capsule["action_semantics"] == action_semantics
+            and action_capsule["action_semantics_sha256"] == action_semantics["semantics_sha256"]
+            and action_capsule["bindings"] == {
+                "schema": "loom-action-capsule-bindings/v0",
+                "tool_binding_sha256": action_semantics["tool_binding_sha256"],
+                "compiler_evidence_sha256": action_semantics["compiler_evidence_sha256"],
+                "artifact_binding_sha256": action_semantics["artifact_binding_sha256"],
+            }
+            and action_capsule["execution_class"] == {
+                "schema": "loom-action-execution-class/v0",
+                "protocol": binding_protocol,
+                "authority": binding_authority,
+                "operation": "process",
+                "foreign_component": "operator-gate",
+                "maximum_ffi_requests": 1,
+                "concrete_invocation": "unbound",
+                "host_boundary": "no-shell/no-network-by-default",
+            }
+            and action_capsule["lifecycle"] == {
+                "schema": "loom-action-capsule-lifecycle/v0",
+                "authorization": "none",
+                "approval_eligible": False,
+                "required_before_authorization": [
+                    "loom-action-invocation-binding/v0",
+                    "loom-action-capsule-approval/v2",
+                    "loom-action-capsule-claim/v0",
+                    "loom-action-host-mediation/v0",
+                ],
+                "required_after_attempt": [
+                    "loom-action-capsule-result/v0",
+                    "loom-gate-receipt/v4",
+                ],
+            }
+            and len(action_capsule["capsule_sha256"]) == 64
+            and not ({"nonce", "timestamp", "expiry", "signature", "approval", "claim"} & set(action_capsule))
+            and repeated_capsule == capsule_result
+            and reordered_capsule == capsule_result
+            and verified_action_capsule["valid"] is True
+            and verified_action_capsule["compiler_attribution"]["relation"] == "same"
+            and rejected_capsule_drift["valid"] is False
+            and rejected_capsule_drift["compiler_attribution"]["relation"] == "different"
+            and [item["code"] for item in rejected_capsule_drift["findings"]] == ["wasm-compiler-drift"]
+            and all(
+                result["valid"] is False
+                and result["compiler_attribution"]["relation"] == "different"
+                and [item["code"] for item in result["findings"]] == ["wasm-compiler-drift"]
+                for result in capsule_drift_matrix
+            )
+            and rejected_capsule_source["valid"] is False
+            and all(result["valid"] is False for result in rejected_capsule_immutable_tampers)
+            and all(result["valid"] is False for result in rejected_capsule_shapes)
+            and rejected_capsule_missing_components["valid"] is False
+            and rejected_capsule_extra_verifier["valid"] is False
         )
         ok += manifest_contract_ok
         print(f"  {'ok  ' if manifest_contract_ok else 'FAIL'} gate: deterministic fail-closed task manifest v1")

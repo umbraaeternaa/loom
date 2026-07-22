@@ -5444,6 +5444,22 @@ _ACTION_SOURCE_LIMITS_SCHEMA = "loom-action-source-limits/v0"
 _ACTION_TARGET_MEDIATION_SCHEMA = "loom-action-target-mediation/v0"
 _ACTION_ENTRYPOINT = "main"
 _ACTION_COMPONENT = "operator-gate"
+_ACTION_CAPSULE_SCHEMA = "loom-action-capsule/v0"
+_ACTION_CAPSULE_VALIDATION_SCHEMA = "loom-action-capsule-validation/v0"
+_ACTION_ACTOR_SCHEMA = "loom-action-actor-declaration/v0"
+_ACTION_CAPSULE_BINDINGS_SCHEMA = "loom-action-capsule-bindings/v0"
+_ACTION_EXECUTION_CLASS_SCHEMA = "loom-action-execution-class/v0"
+_ACTION_CAPSULE_LIFECYCLE_SCHEMA = "loom-action-capsule-lifecycle/v0"
+_ACTION_CAPSULE_REQUIRED_BEFORE = (
+    "loom-action-invocation-binding/v0",
+    "loom-action-capsule-approval/v2",
+    "loom-action-capsule-claim/v0",
+    "loom-action-host-mediation/v0",
+)
+_ACTION_CAPSULE_REQUIRED_AFTER = (
+    "loom-action-capsule-result/v0",
+    "loom-gate-receipt/v4",
+)
 
 
 def _action_semantics_validation(semantics, compiler_attribution, findings):
@@ -5792,6 +5808,288 @@ def verify_action_semantics_v0(
             "message": "Action Semantics does not match the exact manifest, tool, compiler, source, or effect inputs",
         }])
     return _action_semantics_validation(semantics, attribution, [])
+
+
+def _action_capsule_validation(capsule, compiler_attribution, findings):
+    return {
+        "schema": _ACTION_CAPSULE_VALIDATION_SCHEMA,
+        "valid": not findings,
+        "advisory": True,
+        "capsule": capsule if not findings else None,
+        "compiler_attribution": compiler_attribution,
+        "findings": findings,
+    }
+
+
+def _action_capsule_prefixed(path, findings):
+    return [{
+        "path": path + ("." + item["path"] if item.get("path") else ""),
+        "code": item["code"],
+        "message": item["message"],
+    } for item in findings]
+
+
+def _action_capsule_closed_findings(value, path, expected_keys):
+    findings = []
+    if not isinstance(value, dict):
+        return [{"path": path, "code": "expected-object", "message": path + " must be an object"}]
+    for key in sorted(set(value) - expected_keys, key=str):
+        findings.append({"path": path + "." + str(key), "code": "unknown-field", "message": "unknown Action Capsule field"})
+    for key in sorted(expected_keys - set(value)):
+        findings.append({"path": path + "." + key, "code": "missing-field", "message": "missing Action Capsule field"})
+    return findings
+
+
+def _action_capsule_issue_list_findings(value, path):
+    if not isinstance(value, list):
+        return [{"path": path, "code": "expected-array", "message": path + " must be an array"}]
+    findings = []
+    keys = {"path", "code", "message"}
+    for index, item in enumerate(value):
+        item_path = f"{path}[{index}]"
+        findings.extend(_action_capsule_closed_findings(item, item_path, keys))
+        if isinstance(item, dict):
+            for key in keys:
+                if key in item and not isinstance(item[key], str):
+                    findings.append({"path": item_path + "." + key, "code": "expected-string", "message": key + " must be a string"})
+    return findings
+
+
+def _action_capsule_body(normalized_manifest, manifest_sha256, decision, semantics):
+    tool = semantics["tool_binding"]
+    mediation = semantics["target_mediation"]
+    meter = semantics["source_limits"]["effect_meters"][0]
+    return {
+        "schema": _ACTION_CAPSULE_SCHEMA,
+        "advisory": True,
+        "manifest": normalized_manifest,
+        "manifest_sha256": manifest_sha256,
+        "gate_decision": decision,
+        "declared_actor": {
+            "schema": _ACTION_ACTOR_SCHEMA,
+            "profile": "manifest-declared/v0",
+            "id": normalized_manifest["agent"]["id"],
+            "role": normalized_manifest["agent"]["role"],
+            "identity_assurance": "declaration-only",
+        },
+        "action_semantics": semantics,
+        "action_semantics_sha256": semantics["semantics_sha256"],
+        "bindings": {
+            "schema": _ACTION_CAPSULE_BINDINGS_SCHEMA,
+            "tool_binding_sha256": semantics["tool_binding_sha256"],
+            "compiler_evidence_sha256": semantics["compiler_evidence_sha256"],
+            "artifact_binding_sha256": semantics["artifact_binding_sha256"],
+        },
+        "execution_class": {
+            "schema": _ACTION_EXECUTION_CLASS_SCHEMA,
+            "protocol": tool["protocol"],
+            "authority": tool["authority"],
+            "operation": tool["operation"],
+            "foreign_component": mediation["foreign_component"],
+            "maximum_ffi_requests": meter["maximum"],
+            "concrete_invocation": "unbound",
+            "host_boundary": tool["interface_binding"]["descriptor"]["executor_boundary"],
+        },
+        "lifecycle": {
+            "schema": _ACTION_CAPSULE_LIFECYCLE_SCHEMA,
+            "authorization": "none",
+            "approval_eligible": False,
+            "required_before_authorization": list(_ACTION_CAPSULE_REQUIRED_BEFORE),
+            "required_after_attempt": list(_ACTION_CAPSULE_REQUIRED_AFTER),
+        },
+    }
+
+
+def _action_capsule_structure_findings(capsule):
+    outer_keys = {
+        "schema", "advisory", "manifest", "manifest_sha256", "gate_decision",
+        "declared_actor", "action_semantics", "action_semantics_sha256",
+        "bindings", "execution_class", "lifecycle", "capsule_sha256",
+    }
+    findings = _action_capsule_closed_findings(capsule, "capsule", outer_keys)
+    if not isinstance(capsule, dict):
+        return findings
+    if capsule.get("schema") != _ACTION_CAPSULE_SCHEMA:
+        findings.append({"path": "capsule.schema", "code": "unsupported-schema", "message": "expected loom-action-capsule/v0"})
+    if capsule.get("advisory") is not True:
+        findings.append({"path": "capsule.advisory", "code": "invalid-advisory", "message": "Action Capsule must remain advisory"})
+    for key in ("manifest_sha256", "action_semantics_sha256", "capsule_sha256"):
+        if not _binding_is_sha256(capsule.get(key)):
+            findings.append({"path": "capsule." + key, "code": "expected-sha256", "message": key + " must be lowercase SHA-256 hex"})
+
+    manifest_check = validate_manifest(capsule.get("manifest"))
+    findings.extend(_action_capsule_prefixed("capsule.manifest", manifest_check["findings"]))
+    if manifest_check["valid"]:
+        if manifest_check["normalized_manifest"]["schema"] != "loom-gate-manifest/v1":
+            findings.append({"path": "capsule.manifest.schema", "code": "unsupported-action-manifest", "message": "Action Capsule v0 requires loom-gate-manifest/v1"})
+        if capsule.get("manifest") != manifest_check["normalized_manifest"]:
+            findings.append({"path": "capsule.manifest", "code": "non-normalized-manifest", "message": "embedded manifest must already be normalized"})
+        if capsule.get("manifest_sha256") != manifest_check["manifest_sha256"]:
+            findings.append({"path": "capsule.manifest_sha256", "code": "manifest-hash-mismatch", "message": "capsule does not reference its embedded manifest"})
+
+    decision = capsule.get("gate_decision")
+    decision_keys = {"schema", "advisory", "policy", "manifest_sha256", "decision", "reasons", "violations"}
+    findings.extend(_action_capsule_closed_findings(decision, "capsule.gate_decision", decision_keys))
+    if isinstance(decision, dict):
+        if decision.get("schema") != "loom-gate-decision/v1":
+            findings.append({"path": "capsule.gate_decision.schema", "code": "unsupported-schema", "message": "expected loom-gate-decision/v1"})
+        if decision.get("advisory") is not True:
+            findings.append({"path": "capsule.gate_decision.advisory", "code": "invalid-advisory", "message": "Gate decision must remain advisory"})
+        if decision.get("decision") != "operator-required":
+            findings.append({"path": "capsule.gate_decision.decision", "code": "operator-required", "message": "Action Capsule v0 requires an operator-required decision"})
+        if decision.get("violations") != []:
+            findings.append({"path": "capsule.gate_decision.violations", "code": "decision-violations", "message": "Action Capsule v0 cannot contain Gate violations"})
+        if decision.get("manifest_sha256") != capsule.get("manifest_sha256"):
+            findings.append({"path": "capsule.gate_decision.manifest_sha256", "code": "manifest-hash-mismatch", "message": "Gate decision does not reference the embedded manifest"})
+        findings.extend(_action_capsule_issue_list_findings(decision.get("reasons"), "capsule.gate_decision.reasons"))
+        findings.extend(_action_capsule_issue_list_findings(decision.get("violations"), "capsule.gate_decision.violations"))
+
+    actor = capsule.get("declared_actor")
+    actor_keys = {"schema", "profile", "id", "role", "identity_assurance"}
+    findings.extend(_action_capsule_closed_findings(actor, "capsule.declared_actor", actor_keys))
+    if isinstance(actor, dict):
+        fixed_actor = {
+            "schema": _ACTION_ACTOR_SCHEMA,
+            "profile": "manifest-declared/v0",
+            "identity_assurance": "declaration-only",
+        }
+        for key, value in fixed_actor.items():
+            if actor.get(key) != value:
+                findings.append({"path": "capsule.declared_actor." + key, "code": "actor-declaration-mismatch", "message": key + " must preserve declaration-only actor semantics"})
+
+    semantics_findings = _action_semantics_structure_findings(capsule.get("action_semantics"))
+    embedded_findings = []
+    for item in semantics_findings:
+        item = dict(item)
+        if item.get("path", "").startswith("semantics."):
+            item["path"] = item["path"][len("semantics."):]
+        elif item.get("path") == "semantics":
+            item["path"] = ""
+        embedded_findings.append(item)
+    findings.extend(_action_capsule_prefixed("capsule.action_semantics", embedded_findings))
+    semantics = capsule.get("action_semantics")
+    if isinstance(semantics, dict) and capsule.get("action_semantics_sha256") != semantics.get("semantics_sha256"):
+        findings.append({"path": "capsule.action_semantics_sha256", "code": "action-semantics-hash-mismatch", "message": "capsule does not reference embedded Action Semantics"})
+
+    bindings = capsule.get("bindings")
+    binding_keys = {"schema", "tool_binding_sha256", "compiler_evidence_sha256", "artifact_binding_sha256"}
+    findings.extend(_action_capsule_closed_findings(bindings, "capsule.bindings", binding_keys))
+    if isinstance(bindings, dict):
+        if bindings.get("schema") != _ACTION_CAPSULE_BINDINGS_SCHEMA:
+            findings.append({"path": "capsule.bindings.schema", "code": "unsupported-schema", "message": "expected loom-action-capsule-bindings/v0"})
+        for key in binding_keys - {"schema"}:
+            if not _binding_is_sha256(bindings.get(key)):
+                findings.append({"path": "capsule.bindings." + key, "code": "expected-sha256", "message": key + " must be lowercase SHA-256 hex"})
+            if isinstance(semantics, dict) and bindings.get(key) != semantics.get(key):
+                findings.append({"path": "capsule.bindings." + key, "code": "binding-hash-mismatch", "message": key + " does not match embedded Action Semantics"})
+
+    execution = capsule.get("execution_class")
+    execution_keys = {
+        "schema", "protocol", "authority", "operation", "foreign_component",
+        "maximum_ffi_requests", "concrete_invocation", "host_boundary",
+    }
+    findings.extend(_action_capsule_closed_findings(execution, "capsule.execution_class", execution_keys))
+    if isinstance(execution, dict):
+        fixed_execution = {
+            "schema": _ACTION_EXECUTION_CLASS_SCHEMA,
+            "protocol": _LOCAL_PROCESS_PROTOCOL,
+            "authority": _LOCAL_PROCESS_AUTHORITY,
+            "operation": "process",
+            "foreign_component": _ACTION_COMPONENT,
+            "concrete_invocation": "unbound",
+            "host_boundary": "no-shell/no-network-by-default",
+        }
+        for key, value in fixed_execution.items():
+            if execution.get(key) != value:
+                findings.append({"path": "capsule.execution_class." + key, "code": "execution-class-mismatch", "message": key + " violates the fixed Action Capsule v0 execution class"})
+        if type(execution.get("maximum_ffi_requests")) is not int or execution.get("maximum_ffi_requests") != 1:
+            findings.append({"path": "capsule.execution_class.maximum_ffi_requests", "code": "execution-class-mismatch", "message": "maximum_ffi_requests must be the integer 1"})
+
+    lifecycle = capsule.get("lifecycle")
+    lifecycle_keys = {"schema", "authorization", "approval_eligible", "required_before_authorization", "required_after_attempt"}
+    findings.extend(_action_capsule_closed_findings(lifecycle, "capsule.lifecycle", lifecycle_keys))
+    if isinstance(lifecycle, dict):
+        fixed_lifecycle = {
+            "schema": _ACTION_CAPSULE_LIFECYCLE_SCHEMA,
+            "authorization": "none",
+            "required_before_authorization": list(_ACTION_CAPSULE_REQUIRED_BEFORE),
+            "required_after_attempt": list(_ACTION_CAPSULE_REQUIRED_AFTER),
+        }
+        for key, value in fixed_lifecycle.items():
+            if lifecycle.get(key) != value:
+                findings.append({"path": "capsule.lifecycle." + key, "code": "lifecycle-mismatch", "message": key + " violates the fixed non-authorizing lifecycle"})
+        if lifecycle.get("approval_eligible") is not False:
+            findings.append({"path": "capsule.lifecycle.approval_eligible", "code": "lifecycle-mismatch", "message": "approval_eligible must be the boolean false"})
+
+    if set(capsule) >= outer_keys:
+        body = {key: capsule[key] for key in outer_keys if key != "capsule_sha256"}
+        try:
+            digest = _binding_sha256(body)
+        except (TypeError, ValueError):
+            findings.append({"path": "capsule", "code": "non-canonical-capsule", "message": "Action Capsule fields must be canonical JSON values"})
+        else:
+            if capsule.get("capsule_sha256") != digest:
+                findings.append({"path": "capsule.capsule_sha256", "code": "capsule-hash-mismatch", "message": "Action Capsule hash does not match its canonical fields"})
+    return findings
+
+
+def build_action_capsule_v0(
+    manifest, tool_binding, tool_input, program_src, wasm_bytes, builder_components, entrypoint
+):
+    """Build one pure, deterministic, advisory, and non-authorizing Action Capsule."""
+    semantics_result = build_action_semantics_v0(
+        manifest, tool_binding, tool_input, program_src, wasm_bytes,
+        builder_components, entrypoint,
+    )
+    attribution = semantics_result["compiler_attribution"]
+    if not semantics_result["valid"]:
+        return _action_capsule_validation(
+            None, attribution,
+            _action_capsule_prefixed("action_semantics", semantics_result["findings"]),
+        )
+    validation = validate_manifest(manifest)
+    normalized = validation["normalized_manifest"]
+    body = _action_capsule_body(
+        normalized, validation["manifest_sha256"], evaluate_manifest(normalized),
+        semantics_result["semantics"],
+    )
+    body["capsule_sha256"] = _binding_sha256(body)
+    return _action_capsule_validation(body, attribution, [])
+
+
+def verify_action_capsule_v0(
+    capsule, manifest, tool_binding, tool_input, program_src, wasm_bytes,
+    builder_surface, builder_components, verifier_components, entrypoint,
+):
+    """Verify Capsule structure and compiler attribution before exact composition."""
+    attribution = _action_semantics_attribution()
+    findings = _action_capsule_structure_findings(capsule)
+    if findings:
+        return _action_capsule_validation(None, attribution, findings)
+    semantics_check = verify_action_semantics_v0(
+        capsule["action_semantics"], manifest, tool_binding, tool_input,
+        program_src, wasm_bytes, builder_surface, builder_components,
+        verifier_components, entrypoint,
+    )
+    attribution = semantics_check["compiler_attribution"]
+    if not semantics_check["valid"]:
+        return _action_capsule_validation(
+            None, attribution,
+            _action_capsule_prefixed("action_semantics", semantics_check["findings"]),
+        )
+    expected = build_action_capsule_v0(
+        manifest, tool_binding, tool_input, program_src, wasm_bytes,
+        builder_components, entrypoint,
+    )
+    if not expected["valid"]:
+        return _action_capsule_validation(None, attribution, expected["findings"])
+    if capsule != expected["capsule"]:
+        return _action_capsule_validation(None, attribution, [{
+            "path": "capsule",
+            "code": "action-capsule-mismatch",
+            "message": "Action Capsule does not match the exact manifest, decision, actor, semantics, or lifecycle inputs",
+        }])
+    return _action_capsule_validation(capsule, attribution, [])
 
 
 def _emit_verdict_json(verdict):
