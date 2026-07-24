@@ -570,7 +570,7 @@ You can also use the **Sponsor** button at the top of the repo (same Monobank ja
 
 ## About
 
-Built solo, in the open, from Ukraine 🇺🇦, by **Volodymyr Natoptanyi** (`umbraaeternaa`).
+Built solo, in the open, from Ukraine 🇺🇦, by `umbraaeternaa`.
 Part of a line of sovereign, local-first security & AI work — see also
 [CHIMERA](https://github.com/umbraaeternaa/macbastion).
 
