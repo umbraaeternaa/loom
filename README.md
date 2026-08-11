@@ -13,15 +13,15 @@ declaration is honest before a single line runs.
 
 🌐 **[Visit the live site → umbraaeternaa.github.io/loom »](https://umbraaeternaa.github.io/loom/)** &nbsp;·&nbsp; 🎬 **[Watch — LOOM in 30 seconds »](media/LOOM_intro.mp4)**
 
-LOOM is a small (~1900-line) s-expression language: a parser, a **static effect checker**, an
+LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 489 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 492 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 489/489 citadel checks
+PASS — 492/492 citadel checks
 ```
 
 ## The idea in one screen
@@ -146,6 +146,21 @@ manifest, exact Gate decision, declaration-only actor, and complete Action
 Semantics into one deterministic semantic subject. Its concrete invocation is
 explicitly `unbound`, authorization is `none`, and it is not approval
 eligible; Invocation Binding v0 must exist before Approval v2 can authorize it.
+[`Exact Invocation Binding v0`](docs/action_invocation_binding_v0.md) now binds
+that Capsule to one content-addressed host adapter, exact argv, cwd, committed
+environment, canonical stdin payload, timeout, and denied shell/network modes.
+It creates an exact Approval v2 subject but remains advisory and
+non-authorizing; it performs no host IO or execution.
+[`Exact Action Approval v2`](docs/action_approval_v2.md) gives the external
+operator issuer that exact subject: a closed request exposes the executable,
+argv, cwd, committed environment, stdin, timeout, and Capsule identity for
+review, then a short-lived RSA signature binds every hash. Verification
+rebuilds the Invocation Binding from all source/compiler inputs and reports
+`claim-required`; approval alone still cannot execute the process.
+[`Capsule Claim v0`](docs/action_claim_v0.md) then re-verifies that complete
+approval and atomically reserves its hash in a private SQLite ledger. Concurrent
+or replayed claims fail; success reports `host-mediation-required` and still
+does not remeasure the host, obtain credentials, or execute the process.
 
 Certified recursion can also use [`Proven Value Bounds v1`](docs/proven_value_bounds_v1.md):
 the checker derives conservative i31 and list-length upper bounds through
@@ -543,7 +558,7 @@ feature is added only with an adversarial test and must keep all checks green.
 
 The individual building blocks are **not new**: effect rows, algebraic effect handlers, and
 capability-style reasoning come from prior work like Koka, Eff, Unison, and OCaml 5's effects.
-LOOM does not claim to invent them — that's *why* the kernel still fits in ~600 lines. What it
+LOOM does not claim to invent them — that is why the kernel stays compact and auditable. What it
 explores is the **synthesis and framing**: one legible signature channel, checked at a trusted
 gate, as a **trust layer for AI-generated code**, with *reinterpreting handlers* as the
 primitive for containing untrusted effects. Feedback and criticism are very welcome —

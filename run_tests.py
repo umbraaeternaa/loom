@@ -2080,7 +2080,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             "actions_observed": ["read", "write", "test", "git-commit"],
             "evidence": [
                 {"kind": "syntax", "status": "pass", "detail": "PASS syntax"},
-                {"kind": "citadel", "status": "pass", "detail": "489/489"},
+                {"kind": "citadel", "status": "pass", "detail": "492/492"},
                 {"kind": "docs-parity", "status": "pass", "detail": "PASS docs parity"},
                 {"kind": "git-clean", "status": "pass", "detail": "clean"},
                 {"kind": "git-sync", "status": "pass", "detail": "HEAD == origin/main"},
@@ -3127,6 +3127,200 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         print(f"  {'ok  ' if manifest_contract_ok else 'FAIL'} gate: deterministic fail-closed task manifest v1")
     except Exception as e:
         print(f"  FAIL Gate manifest v1 contract: {e}")
+    try:                                               # Exact Invocation Binding must close host intent without granting authority
+        invocation_descriptor = {
+            "schema": "loom-local-process-invocation/v0",
+            "protocol": binding_protocol,
+            "authority": binding_authority,
+            "operation": "process",
+            "foreign_component": "operator-gate",
+            "adapter": {
+                "schema": "loom-host-adapter-identity/v0",
+                "executable_uri": "file:///opt/loom/operator-gate",
+                "artifact_sha256": hashlib.sha256(b"operator-gate-adapter-v0").hexdigest(),
+                "entrypoint": "process",
+            },
+            "argv": ["process", "--canonical-json"],
+            "working_directory_uri": "file:///workspace/loom",
+            "environment": [
+                {"name": "LOOM_MODE", "value_sha256": hashlib.sha256(b"bounded").hexdigest()},
+                {"name": "API_TOKEN", "value_sha256": hashlib.sha256(b"not-embedded-secret").hexdigest()},
+            ],
+            "stdin": {
+                "schema": "loom-action-invocation-stdin/v0",
+                "encoding": "canonical-json/utf-8",
+                "payload_sha256": semantics_tool["input_sha256"],
+            },
+            "timeout_ms": 30000,
+            "shell": "denied",
+            "network": "denied",
+        }
+        invocation_result = _loom.build_action_invocation_binding_v0(
+            semantics_manifest, semantics_tool, semantics_input, semantics_src,
+            semantics_wasm, compiler_components, "main", invocation_descriptor,
+        )
+        invocation_binding = invocation_result["binding"]
+        repeated_invocation = _loom.build_action_invocation_binding_v0(
+            semantics_manifest, semantics_tool, semantics_input, semantics_src,
+            semantics_wasm, compiler_components, "main",
+            {**invocation_descriptor, "environment": list(reversed(invocation_descriptor["environment"]))},
+        )
+        verified_invocation = _loom.verify_action_invocation_binding_v0(
+            invocation_binding, semantics_manifest, semantics_tool, semantics_input,
+            semantics_src, semantics_wasm, running_surface, compiler_components,
+            compiler_components, "main", invocation_descriptor,
+        )
+        rejected_invocation_drift = _loom.verify_action_invocation_binding_v0(
+            invocation_binding, semantics_manifest, semantics_tool, semantics_input,
+            semantics_src, semantics_wasm, running_surface, compiler_components,
+            drifted_verifier_components, "main", invocation_descriptor,
+        )
+
+        alternate_invocations = []
+        for path, value in (
+            (("adapter", "artifact_sha256"), "c" * 64),
+            (("argv",), ["process", "--different"]),
+            (("working_directory_uri",), "file:///workspace/other"),
+            (("environment",), [{"name": "API_TOKEN", "value_sha256": "d" * 64}]),
+            (("timeout_ms",), 45000),
+        ):
+            candidate = json.loads(json.dumps(invocation_descriptor))
+            if len(path) == 2:
+                candidate[path[0]][path[1]] = value
+            else:
+                candidate[path[0]] = value
+            alternate_invocations.append(candidate)
+        rejected_alternate_invocations = [
+            _loom.verify_action_invocation_binding_v0(
+                invocation_binding, semantics_manifest, semantics_tool, semantics_input,
+                semantics_src, semantics_wasm, running_surface, compiler_components,
+                compiler_components, "main", candidate,
+            )
+            for candidate in alternate_invocations
+        ]
+
+        invalid_invocations = []
+        for path, value in (
+            (("extension",), "not-negotiated"),
+            (("adapter", "executable_uri"), "/opt/loom/operator-gate"),
+            (("working_directory_uri",), "file:///workspace/../other"),
+            (("argv",), ["process", 1.5]),
+            (("environment",), [
+                {"name": "TOKEN", "value_sha256": "a" * 64},
+                {"name": "TOKEN", "value_sha256": "b" * 64},
+            ]),
+            (("stdin", "payload_sha256"), "0" * 64),
+            (("timeout_ms",), True),
+            (("network",), "allowed"),
+        ):
+            candidate = json.loads(json.dumps(invocation_descriptor))
+            if len(path) == 2:
+                candidate[path[0]][path[1]] = value
+            else:
+                candidate[path[0]] = value
+            invalid_invocations.append(candidate)
+        rejected_invalid_invocations = [
+            _loom.build_action_invocation_binding_v0(
+                semantics_manifest, semantics_tool, semantics_input, semantics_src,
+                semantics_wasm, compiler_components, "main", candidate,
+            )
+            for candidate in invalid_invocations
+        ]
+
+        def _rehash_action_invocation_binding(candidate):
+            unsigned_invocation = {
+                key: value for key, value in candidate["invocation"].items()
+                if key != "invocation_sha256"
+            }
+            candidate["invocation"]["invocation_sha256"] = _loom._binding_sha256(unsigned_invocation)
+            candidate["invocation_sha256"] = candidate["invocation"]["invocation_sha256"]
+            candidate["cross_links"]["adapter_artifact_sha256"] = candidate["invocation"]["adapter"]["artifact_sha256"]
+            candidate["binding_sha256"] = _loom._binding_sha256({
+                key: value for key, value in candidate.items()
+                if key != "binding_sha256"
+            })
+            return candidate
+
+        invocation_adapter_tamper = json.loads(json.dumps(invocation_binding))
+        invocation_adapter_tamper["invocation"]["adapter"]["artifact_sha256"] = "e" * 64
+        invocation_adapter_tamper = _rehash_action_invocation_binding(invocation_adapter_tamper)
+        rejected_rehashed_invocation = _loom.verify_action_invocation_binding_v0(
+            invocation_adapter_tamper, semantics_manifest, semantics_tool,
+            semantics_input, semantics_src, semantics_wasm, running_surface,
+            compiler_components, compiler_components, "main", invocation_descriptor,
+        )
+        invocation_lifecycle_tamper = json.loads(json.dumps(invocation_binding))
+        invocation_lifecycle_tamper["lifecycle"]["authorization"] = "operator"
+        invocation_lifecycle_tamper["binding_sha256"] = _loom._binding_sha256({
+            key: value for key, value in invocation_lifecycle_tamper.items()
+            if key != "binding_sha256"
+        })
+        rejected_invocation_lifecycle = _loom.verify_action_invocation_binding_v0(
+            invocation_lifecycle_tamper, semantics_manifest, semantics_tool,
+            semantics_input, semantics_src, semantics_wasm, running_surface,
+            compiler_components, compiler_components, "main", invocation_descriptor,
+        )
+        invocation_unknown = json.loads(json.dumps(invocation_binding))
+        invocation_unknown["approval"] = "+"
+        invocation_missing = json.loads(json.dumps(invocation_binding))
+        invocation_missing.pop("cross_links")
+        invocation_malformed_nested = json.loads(json.dumps(invocation_binding))
+        invocation_malformed_nested["capsule"]["bindings"] = None
+        rejected_invocation_shapes = [
+            _loom.verify_action_invocation_binding_v0(
+                candidate, semantics_manifest, semantics_tool, semantics_input,
+                semantics_src, semantics_wasm, running_surface, compiler_components,
+                compiler_components, "main", invocation_descriptor,
+            )
+            for candidate in (None, invocation_unknown, invocation_missing, invocation_malformed_nested)
+        ]
+        rejected_invocation_missing_components = _loom.build_action_invocation_binding_v0(
+            semantics_manifest, semantics_tool, semantics_input, semantics_src,
+            semantics_wasm, missing_compiler_components, "main", invocation_descriptor,
+        )
+        action_invocation_binding_ok = (
+            invocation_result["schema"] == "loom-action-invocation-binding-validation/v0"
+            and invocation_result["valid"] is True
+            and invocation_result["advisory"] is True
+            and invocation_binding["schema"] == "loom-action-invocation-binding/v0"
+            and invocation_binding["capsule"] == action_capsule
+            and invocation_binding["capsule_sha256"] == action_capsule["capsule_sha256"]
+            and invocation_binding["invocation"]["schema"] == "loom-local-process-invocation/v0"
+            and invocation_binding["invocation"]["adapter"]["artifact_sha256"] == invocation_descriptor["adapter"]["artifact_sha256"]
+            and invocation_binding["invocation"]["environment"] == sorted(invocation_descriptor["environment"], key=lambda item: item["name"])
+            and invocation_binding["invocation"]["stdin"]["payload_sha256"] == semantics_tool["input_sha256"]
+            and invocation_binding["cross_links"]["tool_binding_sha256"] == semantics_tool["binding_sha256"]
+            and invocation_binding["lifecycle"] == {
+                "schema": "loom-action-invocation-lifecycle/v0",
+                "authorization": "none",
+                "approval_eligible": True,
+                "approval_subject": "binding_sha256",
+                "required_next": [
+                    "loom-action-capsule-approval/v2",
+                    "loom-action-capsule-claim/v0",
+                    "loom-action-host-mediation/v0",
+                ],
+            }
+            and "not-embedded-secret" not in json.dumps(invocation_binding)
+            and repeated_invocation == invocation_result
+            and verified_invocation["valid"] is True
+            and verified_invocation["compiler_attribution"]["relation"] == "same"
+            and rejected_invocation_drift["valid"] is False
+            and rejected_invocation_drift["compiler_attribution"]["relation"] == "different"
+            and [item["code"] for item in rejected_invocation_drift["findings"]] == ["wasm-compiler-drift"]
+            and all(result["valid"] is False for result in rejected_alternate_invocations)
+            and all(result["valid"] is False for result in rejected_invalid_invocations)
+            and rejected_rehashed_invocation["valid"] is False
+            and any(item["code"] == "action-invocation-binding-mismatch" for item in rejected_rehashed_invocation["findings"])
+            and rejected_invocation_lifecycle["valid"] is False
+            and all(result["valid"] is False for result in rejected_invocation_shapes)
+            and rejected_invocation_missing_components["valid"] is False
+            and not ({"nonce", "timestamp", "expiry", "signature", "approval", "claim"} & set(invocation_binding))
+        )
+        ok += action_invocation_binding_ok
+        print(f"  {'ok  ' if action_invocation_binding_ok else 'FAIL'} gate: exact non-authorizing invocation binding v0")
+    except Exception as e:
+        print(f"  FAIL Action Invocation Binding v0 contract: {e}")
     try:                                               # Gate must stay behind the extracted loom_gate module boundary
         gate_impl = getattr(_loom, "_loom_gate", None)
         loom_file = Path(getattr(_loom, "__file__", ""))
@@ -3658,6 +3852,352 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         )
         ok += approval_contract_ok
         print(f"  {'ok  ' if approval_contract_ok else 'FAIL'} gate: signed one-use operator approval v1")
+        action_request_result = _loom.build_action_approval_request_v2(invocation_binding, "3" * 64)
+        action_request = action_request_result["request"]
+        action_request_same = _loom.build_action_approval_request_v2(
+            json.loads(json.dumps(invocation_binding)), "3" * 64,
+        )
+        action_request_validated = _loom.validate_action_approval_request_v2(action_request)
+        action_request_review_tamper = json.loads(json.dumps(action_request))
+        action_request_review_tamper["review"]["argv"] = ["process", "--hidden-change"]
+        action_request_review_body = dict(action_request_review_tamper)
+        action_request_review_body.pop("request_sha256")
+        action_request_review_tamper["request_sha256"] = hashlib.sha256(
+            canonical(action_request_review_body).encode(),
+        ).hexdigest()
+        rejected_action_review = _loom.validate_action_approval_request_v2(action_request_review_tamper)
+        action_request_unknown = json.loads(json.dumps(action_request)); action_request_unknown["approval"] = "+"
+        action_request_missing = json.loads(json.dumps(action_request)); action_request_missing.pop("review")
+        rejected_action_request_shapes = [
+            _loom.validate_action_approval_request_v2(candidate)
+            for candidate in (None, action_request_unknown, action_request_missing)
+        ]
+
+        action_issued = 1800000000000
+        action_approval_body = {
+            "schema": "loom-action-capsule-approval/v2",
+            "request_sha256": action_request["request_sha256"],
+            "challenge_sha256": action_request["challenge"]["challenge_sha256"],
+            "binding_sha256": invocation_binding["binding_sha256"],
+            "capsule_sha256": invocation_binding["capsule_sha256"],
+            "invocation_sha256": invocation_binding["invocation_sha256"],
+            "approval_scope": "exact-invocation",
+            "approver": "operator",
+            "decision": "approve",
+            "issued_at_unix_ms": action_issued,
+            "expires_at_unix_ms": action_issued + 300000,
+            "claim_required": True,
+            "key_sha256": key_hash,
+        }
+        action_approval = sign_approval(action_approval_body)
+
+        def verify_action_v2(candidate_approval, candidate_request=action_request, candidate_invocation=invocation_descriptor, now=action_issued + 1):
+            return _loom._verify_action_capsule_approval_v2(
+                candidate_approval, candidate_request, semantics_manifest,
+                semantics_tool, semantics_input, semantics_src, semantics_wasm,
+                running_surface, compiler_components, compiler_components,
+                "main", candidate_invocation, now, test_key,
+            )
+
+        verified_action_approval = verify_action_v2(action_approval)
+        expired_action = dict(action_approval_body, expires_at_unix_ms=action_issued + 1)
+        expired_action = sign_approval(expired_action)
+        rejected_expired_action = verify_action_v2(expired_action, now=action_issued + 1)
+        future_action = dict(action_approval_body, issued_at_unix_ms=action_issued + 10, expires_at_unix_ms=action_issued + 100)
+        future_action = sign_approval(future_action)
+        rejected_future_action = verify_action_v2(future_action)
+        long_action = dict(action_approval_body, expires_at_unix_ms=action_issued + 900001)
+        long_action = sign_approval(long_action)
+        rejected_long_action = verify_action_v2(long_action)
+        boolean_time_action = dict(action_approval_body, issued_at_unix_ms=True)
+        boolean_time_action = sign_approval(boolean_time_action)
+        rejected_boolean_time = verify_action_v2(boolean_time_action)
+        rebound_action = dict(action_approval_body, binding_sha256="f" * 64)
+        rebound_action = sign_approval(rebound_action)
+        rejected_rebound_action = verify_action_v2(rebound_action)
+        wrong_key_action = dict(action_approval_body, key_sha256="0" * 64)
+        wrong_key_action = sign_approval(wrong_key_action)
+        rejected_wrong_key_action = verify_action_v2(wrong_key_action)
+        extra_action = dict(action_approval_body, authority="agent")
+        extra_action = sign_approval(extra_action)
+        rejected_extra_action = verify_action_v2(extra_action)
+        invalid_signature_action = json.loads(json.dumps(action_approval))
+        invalid_signature_action["signature"] = (
+            ("0" if invalid_signature_action["signature"][0] != "0" else "1")
+            + invalid_signature_action["signature"][1:]
+        )
+        rejected_signature_action = verify_action_v2(invalid_signature_action)
+        rejected_boolean_now = verify_action_v2(action_approval, now=True)
+
+        alternate_descriptor = json.loads(json.dumps(invocation_descriptor))
+        alternate_descriptor["argv"] = ["process", "--alternate"]
+        alternate_binding_result = _loom.build_action_invocation_binding_v0(
+            semantics_manifest, semantics_tool, semantics_input, semantics_src,
+            semantics_wasm, compiler_components, "main", alternate_descriptor,
+        )
+        alternate_request = _loom.build_action_approval_request_v2(
+            alternate_binding_result["binding"], "4" * 64,
+        )["request"]
+        cross_request_action = dict(
+            action_approval_body,
+            request_sha256=alternate_request["request_sha256"],
+            challenge_sha256=alternate_request["challenge"]["challenge_sha256"],
+            binding_sha256=alternate_request["binding"]["binding_sha256"],
+            capsule_sha256=alternate_request["binding"]["capsule_sha256"],
+            invocation_sha256=alternate_request["binding"]["invocation_sha256"],
+        )
+        cross_request_action = sign_approval(cross_request_action)
+        rejected_cross_request = verify_action_v2(cross_request_action, alternate_request)
+
+        import importlib.util
+        issuer_path = Path(__file__).with_name("examples") / "native_issuer.py"
+        issuer_spec = importlib.util.spec_from_file_location("loom_action_approval_issuer", issuer_path)
+        issuer = importlib.util.module_from_spec(issuer_spec); issuer_spec.loader.exec_module(issuer)
+        issuer_private_key = {"algorithm": "rsa-pkcs1v15-sha256", "n": test_n_hex, "e": 65537, "d": format(test_d, "x")}
+        issuer_reviewed, issuer_approval, issuer_public = issuer.build_approval(
+            action_request, issuer_private_key, action_issued, 300000,
+        )
+        issuer_verified = verify_action_v2(issuer_approval)
+        with tempfile.TemporaryDirectory() as td:
+            pinned_key_path = Path(td) / "operator_public_key.json"
+            pinned_key_path.write_text(json.dumps(test_key), encoding="utf-8")
+            pinned_key_path.chmod(0o600)
+            if hasattr(_loom, "_loom_approval"):
+                key_path_owner = _loom._loom_approval
+                key_path_name = "_KEY_PATH"
+            else:
+                key_path_owner = _loom
+                key_path_name = "_GATE_KEY_PATH"
+            original_key_path = getattr(key_path_owner, key_path_name)
+            setattr(key_path_owner, key_path_name, pinned_key_path)
+            try:
+                pinned_issuer_verified = _loom.verify_action_capsule_approval_v2(
+                    issuer_approval, action_request, semantics_manifest,
+                    semantics_tool, semantics_input, semantics_src, semantics_wasm,
+                    running_surface, compiler_components, compiler_components,
+                    "main", invocation_descriptor, action_issued + 1,
+                )
+            finally:
+                setattr(key_path_owner, key_path_name, original_key_path)
+        action_approval_v2_ok = (
+            action_request_result["schema"] == "loom-action-approval-request-validation/v2"
+            and action_request_result["valid"] is True
+            and action_request_result["authorization"] == "none"
+            and action_request_same == action_request_result
+            and action_request_validated == action_request_result
+            and action_request["schema"] == "loom-action-approval-request/v2"
+            and action_request["challenge"]["schema"] == "loom-action-approval-challenge/v2"
+            and action_request["challenge"]["binding_sha256"] == invocation_binding["binding_sha256"]
+            and action_request["review"]["adapter"] == invocation_descriptor["adapter"]
+            and action_request["review"]["argv"] == invocation_descriptor["argv"]
+            and action_request["lifecycle"]["authorization"] == "none"
+            and action_request["lifecycle"]["approval_subject"] == "binding_sha256"
+            and action_request["lifecycle"]["claim_required"] is True
+            and "not-embedded-secret" not in json.dumps(action_request)
+            and rejected_action_review["valid"] is False
+            and any(item["code"] == "request-mismatch" for item in rejected_action_review["findings"])
+            and all(result["valid"] is False for result in rejected_action_request_shapes)
+            and verified_action_approval["valid"] is True
+            and verified_action_approval["authorization"] == "claim-required"
+            and verified_action_approval["approval"] == action_approval
+            and len(verified_action_approval["approval_sha256"]) == 64
+            and not rejected_expired_action["valid"]
+            and any(item["code"] == "approval-expired" for item in rejected_expired_action["findings"])
+            and not rejected_future_action["valid"]
+            and any(item["code"] == "approval-not-yet-valid" for item in rejected_future_action["findings"])
+            and not rejected_long_action["valid"]
+            and any(item["code"] == "invalid-validity-window" for item in rejected_long_action["findings"])
+            and not rejected_boolean_time["valid"]
+            and any(item["code"] == "invalid-issued-time" for item in rejected_boolean_time["findings"])
+            and not rejected_rebound_action["valid"]
+            and any(item["code"] == "approval-binding-mismatch" for item in rejected_rebound_action["findings"])
+            and not rejected_wrong_key_action["valid"]
+            and any(item["code"] == "key-mismatch" for item in rejected_wrong_key_action["findings"])
+            and not rejected_extra_action["valid"]
+            and any(item["code"] == "unknown-field" for item in rejected_extra_action["findings"])
+            and not rejected_signature_action["valid"]
+            and any(item["code"] == "invalid-signature" for item in rejected_signature_action["findings"])
+            and not rejected_boolean_now["valid"]
+            and any(item["code"] == "invalid-verification-time" for item in rejected_boolean_now["findings"])
+            and not rejected_cross_request["valid"]
+            and any(item["code"] == "action-invocation-binding-mismatch" for item in rejected_cross_request["findings"])
+            and issuer_reviewed == action_request
+            and issuer_public == test_key
+            and issuer_verified["valid"] is True
+            and pinned_issuer_verified["valid"] is True
+        )
+        ok += action_approval_v2_ok
+        print(f"  {'ok  ' if action_approval_v2_ok else 'FAIL'} gate: exact short-lived Action Approval v2")
+
+        def claim_action_v0(
+            ledger_path, candidate_approval=action_approval,
+            candidate_request=action_request,
+            candidate_invocation=invocation_descriptor,
+            now=action_issued + 1,
+        ):
+            return _loom._claim_action_capsule_approval_v0(
+                candidate_approval, candidate_request, semantics_manifest,
+                semantics_tool, semantics_input, semantics_src, semantics_wasm,
+                running_surface, compiler_components, compiler_components,
+                "main", candidate_invocation, now, test_key, ledger_path,
+            )
+
+        import sqlite3
+        with tempfile.TemporaryDirectory() as td:
+            action_claim_ledger = Path(td) / "gate" / "operator_approvals.sqlite3"
+            action_claimed = claim_action_v0(action_claim_ledger)
+            action_claim = action_claimed["claim"]
+            action_claim_replayed = claim_action_v0(action_claim_ledger)
+            action_claim_ledger_mode = action_claim_ledger.stat().st_mode & 0o777
+            action_claim_parent_mode = action_claim_ledger.parent.stat().st_mode & 0o777
+            with sqlite3.connect(action_claim_ledger) as connection:
+                action_claim_row = connection.execute(
+                    "SELECT approval_sha256,request_sha256,challenge_sha256,binding_sha256,"
+                    "capsule_sha256,invocation_sha256,claimed_at_unix_ms,"
+                    "approval_expires_at_unix_ms,claim_sha256,status "
+                    "FROM action_claims_v0",
+                ).fetchone()
+                action_claim_schema = connection.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='action_claims_v0'",
+                ).fetchone()
+                action_claim_foreign_objects = connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type IN ('trigger','view') "
+                    "AND tbl_name='action_claims_v0'",
+                ).fetchall()
+        action_claim_body = dict(action_claim); action_claim_hash = action_claim_body.pop("claim_sha256")
+
+        with tempfile.TemporaryDirectory() as td:
+            invalid_action_claim_ledger = Path(td) / "invalid.sqlite3"
+            invalid_action_claim = claim_action_v0(
+                invalid_action_claim_ledger, candidate_approval=invalid_signature_action,
+            )
+            invalid_action_claim_ledger_absent = not invalid_action_claim_ledger.exists()
+        with tempfile.TemporaryDirectory() as td:
+            expired_action_claim_ledger = Path(td) / "expired.sqlite3"
+            expired_action_claim = claim_action_v0(
+                expired_action_claim_ledger,
+                now=action_approval_body["expires_at_unix_ms"],
+            )
+            expired_action_claim_ledger_absent = not expired_action_claim_ledger.exists()
+        with tempfile.TemporaryDirectory() as td:
+            rebound_action_claim_ledger = Path(td) / "rebound.sqlite3"
+            rebound_action_claim = claim_action_v0(
+                rebound_action_claim_ledger,
+                candidate_approval=cross_request_action,
+                candidate_request=alternate_request,
+            )
+            rebound_action_claim_ledger_absent = not rebound_action_claim_ledger.exists()
+
+        from concurrent.futures import ThreadPoolExecutor
+        with tempfile.TemporaryDirectory() as td:
+            concurrent_action_claim_ledger = Path(td) / "concurrent.sqlite3"
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                concurrent_action_claims = list(pool.map(
+                    lambda _: claim_action_v0(concurrent_action_claim_ledger), range(8),
+                ))
+            with sqlite3.connect(concurrent_action_claim_ledger) as connection:
+                concurrent_action_claim_rows = connection.execute(
+                    "SELECT COUNT(*) FROM action_claims_v0",
+                ).fetchone()[0]
+
+        with tempfile.TemporaryDirectory() as td:
+            writable_action_claim_ledger = Path(td) / "writable.sqlite3"
+            writable_action_claim_ledger.write_bytes(b"")
+            writable_action_claim_ledger.chmod(0o666)
+            writable_action_claim = claim_action_v0(writable_action_claim_ledger)
+        with tempfile.TemporaryDirectory() as td:
+            action_claim_target = Path(td) / "target.sqlite3"
+            action_claim_target.write_bytes(b"unchanged")
+            symlink_action_claim_ledger = Path(td) / "linked.sqlite3"
+            symlink_action_claim_ledger.symlink_to(action_claim_target)
+            symlink_action_claim = claim_action_v0(symlink_action_claim_ledger)
+            symlink_action_claim_target_unchanged = action_claim_target.read_bytes() == b"unchanged"
+        with tempfile.TemporaryDirectory() as td:
+            foreign_schema_ledger = Path(td) / "foreign-schema.sqlite3"
+            with sqlite3.connect(foreign_schema_ledger) as connection:
+                connection.execute("CREATE TABLE action_claims_v0 (approval_sha256 TEXT)")
+            foreign_schema_ledger.chmod(0o600)
+            foreign_schema_claim = claim_action_v0(foreign_schema_ledger)
+
+        with tempfile.TemporaryDirectory() as td:
+            public_claim_key_path = Path(td) / "operator_public_key.json"
+            public_claim_key_path.write_text(json.dumps(test_key), encoding="utf-8")
+            public_claim_key_path.chmod(0o600)
+            public_claim_ledger_path = Path(td) / "operator_approvals.sqlite3"
+            if hasattr(_loom, "_loom_approval"):
+                public_claim_owner = _loom._loom_approval
+                public_claim_key_name = "_KEY_PATH"
+                public_claim_ledger_name = "_LEDGER_PATH"
+            else:
+                public_claim_owner = _loom
+                public_claim_key_name = "_GATE_KEY_PATH"
+                public_claim_ledger_name = "_GATE_LEDGER_PATH"
+            original_public_claim_key = getattr(public_claim_owner, public_claim_key_name)
+            original_public_claim_ledger = getattr(public_claim_owner, public_claim_ledger_name)
+            setattr(public_claim_owner, public_claim_key_name, public_claim_key_path)
+            setattr(public_claim_owner, public_claim_ledger_name, public_claim_ledger_path)
+            try:
+                public_action_claim = _loom.claim_action_capsule_approval_v0(
+                    action_approval, action_request, semantics_manifest,
+                    semantics_tool, semantics_input, semantics_src, semantics_wasm,
+                    running_surface, compiler_components, compiler_components,
+                    "main", invocation_descriptor, action_issued + 1,
+                )
+            finally:
+                setattr(public_claim_owner, public_claim_key_name, original_public_claim_key)
+                setattr(public_claim_owner, public_claim_ledger_name, original_public_claim_ledger)
+
+        action_claim_v0_ok = (
+            action_claimed["schema"] == "loom-action-capsule-claim-validation/v0"
+            and action_claimed["valid"] is True
+            and action_claimed["advisory"] is False
+            and action_claimed["authorization"] == "host-mediation-required"
+            and action_claim["schema"] == "loom-action-capsule-claim/v0"
+            and action_claim["approval_sha256"] == verified_action_approval["approval_sha256"]
+            and action_claim["request_sha256"] == action_request["request_sha256"]
+            and action_claim["challenge_sha256"] == action_request["challenge"]["challenge_sha256"]
+            and action_claim["binding_sha256"] == invocation_binding["binding_sha256"]
+            and action_claim["capsule_sha256"] == invocation_binding["capsule_sha256"]
+            and action_claim["invocation_sha256"] == invocation_binding["invocation_sha256"]
+            and action_claim["claim_scope"] == "exact-invocation"
+            and action_claim["claimed_at_unix_ms"] == action_issued + 1
+            and action_claim["approval_expires_at_unix_ms"] == action_approval_body["expires_at_unix_ms"]
+            and action_claim["status"] == "claimed"
+            and action_claim_hash == hashlib.sha256(canonical(action_claim_body).encode()).hexdigest()
+            and action_claim_row == (
+                action_claim["approval_sha256"], action_claim["request_sha256"],
+                action_claim["challenge_sha256"], action_claim["binding_sha256"],
+                action_claim["capsule_sha256"], action_claim["invocation_sha256"],
+                action_claim["claimed_at_unix_ms"], action_claim["approval_expires_at_unix_ms"],
+                action_claim["claim_sha256"], "claimed",
+            )
+            and action_claim_schema == (_loom._ACTION_CLAIM_LEDGER_SCHEMA,)
+            and action_claim_foreign_objects == []
+            and action_claim_ledger_mode == 0o600 and action_claim_parent_mode == 0o700
+            and action_claim_replayed["valid"] is False
+            and any(item["code"] == "action-claim-failed" for item in action_claim_replayed["findings"])
+            and invalid_action_claim["valid"] is False and invalid_action_claim_ledger_absent
+            and any(item["code"] == "invalid-signature" for item in invalid_action_claim["findings"])
+            and expired_action_claim["valid"] is False and expired_action_claim_ledger_absent
+            and any(item["code"] == "approval-expired" for item in expired_action_claim["findings"])
+            and rebound_action_claim["valid"] is False and rebound_action_claim_ledger_absent
+            and any(item["code"] == "action-invocation-binding-mismatch" for item in rebound_action_claim["findings"])
+            and sum(result["valid"] for result in concurrent_action_claims) == 1
+            and concurrent_action_claim_rows == 1
+            and all(
+                result["valid"] or any(item["code"] == "action-claim-failed" for item in result["findings"])
+                for result in concurrent_action_claims
+            )
+            and writable_action_claim["valid"] is False
+            and any(item["code"] == "action-claim-failed" for item in writable_action_claim["findings"])
+            and symlink_action_claim["valid"] is False and symlink_action_claim_target_unchanged
+            and any(item["code"] == "action-claim-failed" for item in symlink_action_claim["findings"])
+            and foreign_schema_claim["valid"] is False
+            and any(item["code"] == "action-claim-failed" for item in foreign_schema_claim["findings"])
+            and public_action_claim["valid"] is True
+        )
+        ok += action_claim_v0_ok
+        print(f"  {'ok  ' if action_claim_v0_ok else 'FAIL'} gate: atomic one-use Capsule Claim v0")
         integrated_observation = {
             "schema": "loom-gate-observation/v1", "result": "completed",
             "repositories": [{"root": "/Users/macbook/Projects/loom", "before_head": "4281c7b", "after_head": "f" * 40}],
@@ -4010,7 +4550,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 489
+            and about_json["citadel_checks"] == 492
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
@@ -4239,7 +4779,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 489/489 citadel checks" in quick
+            and "PASS -- 492/492 citadel checks" in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
             and "loom examples" in quick
@@ -4349,7 +4889,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "489-gate-compiler-workflow-v3")' in play
+            and 'bundleUrl.searchParams.set("v", "492-action-claim-v0")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -4966,7 +5506,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 489/489 citadel checks" in rdoc
+            and "PASS -- 492/492 citadel checks" in rdoc
             and "loom examples --format json" in rdoc
             and "loom doctor --dry-run --format json" in rdoc
             and "python3 verify_docs_parity.py" in rdoc
@@ -5027,7 +5567,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 136   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 139   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

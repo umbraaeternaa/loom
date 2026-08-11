@@ -787,7 +787,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
     emit_wat,
     LoomError,
     metadata={
-        "citadel_checks": 489,
+        "citadel_checks": 492,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "i31_bits": INT_BITS,
         "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],
@@ -1227,6 +1227,47 @@ _ACTION_CAPSULE_REQUIRED_BEFORE = (
 _ACTION_CAPSULE_REQUIRED_AFTER = (
     "loom-action-capsule-result/v0",
     "loom-gate-receipt/v4",
+)
+_ACTION_INVOCATION_BINDING_SCHEMA = "loom-action-invocation-binding/v0"
+_ACTION_INVOCATION_BINDING_VALIDATION_SCHEMA = "loom-action-invocation-binding-validation/v0"
+_ACTION_INVOCATION_SCHEMA = "loom-local-process-invocation/v0"
+_ACTION_INVOCATION_ADAPTER_SCHEMA = "loom-host-adapter-identity/v0"
+_ACTION_INVOCATION_STDIN_SCHEMA = "loom-action-invocation-stdin/v0"
+_ACTION_INVOCATION_LINKS_SCHEMA = "loom-action-invocation-cross-links/v0"
+_ACTION_INVOCATION_LIFECYCLE_SCHEMA = "loom-action-invocation-lifecycle/v0"
+_ACTION_INVOCATION_REQUIRED_NEXT = (
+    "loom-action-capsule-approval/v2",
+    "loom-action-capsule-claim/v0",
+    "loom-action-host-mediation/v0",
+)
+_ACTION_APPROVAL_CHALLENGE_SCHEMA = "loom-action-approval-challenge/v2"
+_ACTION_APPROVAL_REQUEST_SCHEMA = "loom-action-approval-request/v2"
+_ACTION_APPROVAL_REQUEST_VALIDATION_SCHEMA = "loom-action-approval-request-validation/v2"
+_ACTION_APPROVAL_REVIEW_SCHEMA = "loom-action-approval-review/v2"
+_ACTION_APPROVAL_REQUEST_LIFECYCLE_SCHEMA = "loom-action-approval-request-lifecycle/v2"
+_ACTION_APPROVAL_SCHEMA = "loom-action-capsule-approval/v2"
+_ACTION_APPROVAL_VALIDATION_SCHEMA = "loom-action-capsule-approval-validation/v2"
+_ACTION_APPROVAL_SCOPE = "exact-invocation"
+_ACTION_APPROVAL_MAX_TTL_MS = 900000
+_ACTION_CLAIM_SCHEMA = "loom-action-capsule-claim/v0"
+_ACTION_CLAIM_VALIDATION_SCHEMA = "loom-action-capsule-claim-validation/v0"
+_ACTION_CLAIM_SCOPE = "exact-invocation"
+_ACTION_CLAIM_LEDGER_TABLE = "action_claims_v0"
+_ACTION_CLAIM_LEDGER_SCHEMA = (
+    "CREATE TABLE action_claims_v0 ("
+    "approval_sha256 TEXT PRIMARY KEY CHECK(length(approval_sha256)=64), "
+    "request_sha256 TEXT NOT NULL CHECK(length(request_sha256)=64), "
+    "challenge_sha256 TEXT NOT NULL CHECK(length(challenge_sha256)=64), "
+    "binding_sha256 TEXT NOT NULL CHECK(length(binding_sha256)=64), "
+    "capsule_sha256 TEXT NOT NULL CHECK(length(capsule_sha256)=64), "
+    "invocation_sha256 TEXT NOT NULL CHECK(length(invocation_sha256)=64), "
+    "claimed_at_unix_ms INTEGER NOT NULL CHECK(claimed_at_unix_ms>=0), "
+    "approval_expires_at_unix_ms INTEGER NOT NULL CHECK(approval_expires_at_unix_ms>claimed_at_unix_ms), "
+    "claim_sha256 TEXT UNIQUE NOT NULL CHECK(length(claim_sha256)=64), "
+    "status TEXT NOT NULL CHECK(status IN ('claimed','completed','failed')))"
+)
+_ACTION_CLAIM_LEDGER_CREATE = _ACTION_CLAIM_LEDGER_SCHEMA.replace(
+    "CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", 1,
 )
 
 
@@ -1858,6 +1899,763 @@ def verify_action_capsule_v0(
             "message": "Action Capsule does not match the exact manifest, decision, actor, semantics, or lifecycle inputs",
         }])
     return _action_capsule_validation(capsule, attribution, [])
+
+
+def _action_invocation_binding_validation(binding, compiler_attribution, findings):
+    return {
+        "schema": _ACTION_INVOCATION_BINDING_VALIDATION_SCHEMA,
+        "valid": not findings,
+        "advisory": True,
+        "binding": binding if not findings else None,
+        "compiler_attribution": compiler_attribution,
+        "findings": findings,
+    }
+
+
+def _action_invocation_closed_findings(value, path, expected_keys):
+    findings = []
+    if not isinstance(value, dict):
+        return [{"path": path, "code": "expected-object", "message": path + " must be an object"}]
+    for key in sorted(set(value) - expected_keys, key=str):
+        findings.append({"path": path + "." + str(key), "code": "unknown-field", "message": "unknown Invocation Binding field"})
+    for key in sorted(expected_keys - set(value)):
+        findings.append({"path": path + "." + key, "code": "missing-field", "message": "missing Invocation Binding field"})
+    return findings
+
+
+def _action_invocation_string(value, path):
+    if not isinstance(value, str):
+        return None, [{"path": path, "code": "expected-string", "message": path + " must be a string"}]
+    normalized = unicodedata.normalize("NFC", value)
+    findings = []
+    if not normalized:
+        findings.append({"path": path, "code": "empty-string", "message": path + " must not be empty"})
+    if "\x00" in normalized:
+        findings.append({"path": path, "code": "nul-byte", "message": path + " must not contain NUL"})
+    if len(normalized.encode("utf-8")) > _BINDING_MAX_STRING_BYTES:
+        findings.append({"path": path, "code": "string-too-large", "message": path + " exceeds 65536 UTF-8 bytes"})
+    return normalized, findings
+
+
+def _action_invocation_file_uri(value, path):
+    normalized, findings = _action_invocation_string(value, path)
+    if normalized is not None and not normalized.startswith("file:///"):
+        findings.append({"path": path, "code": "expected-file-uri", "message": path + " must be an absolute file URI"})
+    if normalized is not None and normalized.startswith("file:///"):
+        uri_path = normalized[len("file://"):]
+        segments = uri_path.split("/")
+        if "?" in normalized or "#" in normalized or "\\" in normalized:
+            findings.append({"path": path, "code": "non-canonical-file-uri", "message": path + " must not contain query, fragment, or backslash syntax"})
+        if any(segment in {".", ".."} for segment in segments) or "" in segments[1:]:
+            findings.append({"path": path, "code": "non-canonical-file-uri", "message": path + " must not contain dot or empty path segments"})
+    return normalized, findings
+
+
+def _normalize_action_invocation(invocation, capsule, path="invocation"):
+    keys = {
+        "schema", "protocol", "authority", "operation", "foreign_component",
+        "adapter", "argv", "working_directory_uri", "environment", "stdin",
+        "timeout_ms", "shell", "network",
+    }
+    findings = _action_invocation_closed_findings(invocation, path, keys)
+    if not isinstance(invocation, dict):
+        return None, findings
+
+    fixed = {
+        "schema": _ACTION_INVOCATION_SCHEMA,
+        "protocol": _LOCAL_PROCESS_PROTOCOL,
+        "authority": _LOCAL_PROCESS_AUTHORITY,
+        "operation": "process",
+        "foreign_component": _ACTION_COMPONENT,
+        "shell": "denied",
+        "network": "denied",
+    }
+    for key, value in fixed.items():
+        if invocation.get(key) != value:
+            findings.append({"path": path + "." + key, "code": "invocation-class-mismatch", "message": key + " violates the fixed local process invocation class"})
+
+    adapter = invocation.get("adapter")
+    adapter_keys = {"schema", "executable_uri", "artifact_sha256", "entrypoint"}
+    findings.extend(_action_invocation_closed_findings(adapter, path + ".adapter", adapter_keys))
+    normalized_adapter = None
+    if isinstance(adapter, dict):
+        executable_uri, uri_findings = _action_invocation_file_uri(
+            adapter.get("executable_uri"), path + ".adapter.executable_uri"
+        )
+        findings.extend(uri_findings)
+        if adapter.get("schema") != _ACTION_INVOCATION_ADAPTER_SCHEMA:
+            findings.append({"path": path + ".adapter.schema", "code": "unsupported-schema", "message": "expected loom-host-adapter-identity/v0"})
+        if not _binding_is_sha256(adapter.get("artifact_sha256")):
+            findings.append({"path": path + ".adapter.artifact_sha256", "code": "expected-sha256", "message": "artifact_sha256 must be lowercase SHA-256 hex"})
+        if adapter.get("entrypoint") != "process":
+            findings.append({"path": path + ".adapter.entrypoint", "code": "entrypoint-mismatch", "message": "host adapter entrypoint must be process"})
+        normalized_adapter = {
+            "schema": adapter.get("schema"),
+            "executable_uri": executable_uri,
+            "artifact_sha256": adapter.get("artifact_sha256"),
+            "entrypoint": adapter.get("entrypoint"),
+        }
+
+    argv = invocation.get("argv")
+    normalized_argv = []
+    if not isinstance(argv, list):
+        findings.append({"path": path + ".argv", "code": "expected-array", "message": "argv must be an array"})
+    else:
+        if len(argv) > _BINDING_MAX_ITEMS:
+            findings.append({"path": path + ".argv", "code": "too-many-items", "message": "argv exceeds 256 items"})
+        for index, item in enumerate(argv):
+            normalized, item_findings = _action_invocation_string(item, f"{path}.argv[{index}]")
+            normalized_argv.append(normalized)
+            findings.extend(item_findings)
+
+    working_directory_uri, cwd_findings = _action_invocation_file_uri(
+        invocation.get("working_directory_uri"), path + ".working_directory_uri"
+    )
+    findings.extend(cwd_findings)
+
+    environment = invocation.get("environment")
+    normalized_environment = []
+    environment_names = []
+    if not isinstance(environment, list):
+        findings.append({"path": path + ".environment", "code": "expected-array", "message": "environment must be an array"})
+    else:
+        if len(environment) > _BINDING_MAX_ITEMS:
+            findings.append({"path": path + ".environment", "code": "too-many-items", "message": "environment exceeds 256 entries"})
+        for index, item in enumerate(environment):
+            item_path = f"{path}.environment[{index}]"
+            item_keys = {"name", "value_sha256"}
+            findings.extend(_action_invocation_closed_findings(item, item_path, item_keys))
+            if not isinstance(item, dict):
+                continue
+            name, name_findings = _action_invocation_string(item.get("name"), item_path + ".name")
+            findings.extend(name_findings)
+            if isinstance(name, str) and ("=" in name or "\x00" in name):
+                findings.append({"path": item_path + ".name", "code": "invalid-environment-name", "message": "environment name must not contain '=' or NUL"})
+            if not _binding_is_sha256(item.get("value_sha256")):
+                findings.append({"path": item_path + ".value_sha256", "code": "expected-sha256", "message": "environment value_sha256 must be lowercase SHA-256 hex"})
+            normalized_environment.append({"name": name, "value_sha256": item.get("value_sha256")})
+            if isinstance(name, str):
+                environment_names.append(name)
+        for name in sorted({name for name in environment_names if environment_names.count(name) > 1}):
+            findings.append({"path": path + ".environment", "code": "duplicate-environment-name", "message": "duplicate environment name '" + name + "'"})
+        normalized_environment.sort(key=lambda item: item.get("name") or "")
+
+    stdin = invocation.get("stdin")
+    stdin_keys = {"schema", "encoding", "payload_sha256"}
+    findings.extend(_action_invocation_closed_findings(stdin, path + ".stdin", stdin_keys))
+    normalized_stdin = None
+    expected_input_sha256 = None
+    try:
+        expected_input_sha256 = capsule["action_semantics"]["tool_binding"]["input_sha256"]
+    except (KeyError, TypeError):
+        pass
+    if isinstance(stdin, dict):
+        if stdin.get("schema") != _ACTION_INVOCATION_STDIN_SCHEMA:
+            findings.append({"path": path + ".stdin.schema", "code": "unsupported-schema", "message": "expected loom-action-invocation-stdin/v0"})
+        if stdin.get("encoding") != "canonical-json/utf-8":
+            findings.append({"path": path + ".stdin.encoding", "code": "encoding-mismatch", "message": "stdin must carry canonical JSON UTF-8"})
+        if not _binding_is_sha256(stdin.get("payload_sha256")):
+            findings.append({"path": path + ".stdin.payload_sha256", "code": "expected-sha256", "message": "payload_sha256 must be lowercase SHA-256 hex"})
+        elif stdin.get("payload_sha256") != expected_input_sha256:
+            findings.append({"path": path + ".stdin.payload_sha256", "code": "tool-input-mismatch", "message": "stdin payload must be the exact Tool Binding input"})
+        normalized_stdin = {
+            "schema": stdin.get("schema"),
+            "encoding": stdin.get("encoding"),
+            "payload_sha256": stdin.get("payload_sha256"),
+        }
+
+    timeout_ms = invocation.get("timeout_ms")
+    if type(timeout_ms) is not int:
+        findings.append({"path": path + ".timeout_ms", "code": "expected-integer", "message": "timeout_ms must be an integer"})
+    elif not 1 <= timeout_ms <= 3600000:
+        findings.append({"path": path + ".timeout_ms", "code": "timeout-out-of-range", "message": "timeout_ms must be between 1 and 3600000"})
+
+    if findings:
+        return None, findings
+    normalized = {
+        **fixed,
+        "adapter": normalized_adapter,
+        "argv": normalized_argv,
+        "working_directory_uri": working_directory_uri,
+        "environment": normalized_environment,
+        "stdin": normalized_stdin,
+        "timeout_ms": timeout_ms,
+    }
+    return normalized, []
+
+
+def _action_invocation_binding_structure_findings(binding):
+    outer_keys = {
+        "schema", "advisory", "capsule", "capsule_sha256", "invocation",
+        "invocation_sha256", "cross_links", "lifecycle", "binding_sha256",
+    }
+    findings = _action_invocation_closed_findings(binding, "binding", outer_keys)
+    if not isinstance(binding, dict):
+        return findings
+    if binding.get("schema") != _ACTION_INVOCATION_BINDING_SCHEMA:
+        findings.append({"path": "binding.schema", "code": "unsupported-schema", "message": "expected loom-action-invocation-binding/v0"})
+    if binding.get("advisory") is not True:
+        findings.append({"path": "binding.advisory", "code": "invalid-advisory", "message": "Invocation Binding must remain advisory"})
+    for key in ("capsule_sha256", "invocation_sha256", "binding_sha256"):
+        if not _binding_is_sha256(binding.get(key)):
+            findings.append({"path": "binding." + key, "code": "expected-sha256", "message": key + " must be lowercase SHA-256 hex"})
+
+    capsule = binding.get("capsule")
+    capsule_findings = _action_capsule_structure_findings(capsule)
+    findings.extend(_action_capsule_prefixed("binding.capsule", [
+        {**item, "path": item["path"][len("capsule."):] if item.get("path", "").startswith("capsule.") else ""}
+        for item in capsule_findings
+    ]))
+    if isinstance(capsule, dict) and binding.get("capsule_sha256") != capsule.get("capsule_sha256"):
+        findings.append({"path": "binding.capsule_sha256", "code": "capsule-hash-mismatch", "message": "Invocation Binding does not reference its embedded Capsule"})
+
+    invocation = binding.get("invocation")
+    invocation_keys = {
+        "schema", "protocol", "authority", "operation", "foreign_component",
+        "adapter", "argv", "working_directory_uri", "environment", "stdin",
+        "timeout_ms", "shell", "network", "invocation_sha256",
+    }
+    findings.extend(_action_invocation_closed_findings(invocation, "binding.invocation", invocation_keys))
+    normalized_invocation = None
+    if isinstance(invocation, dict):
+        unsigned_invocation = {key: value for key, value in invocation.items() if key != "invocation_sha256"}
+        normalized_invocation, invocation_findings = _normalize_action_invocation(
+            unsigned_invocation, capsule, "binding.invocation"
+        )
+        findings.extend(invocation_findings)
+        if normalized_invocation is not None and unsigned_invocation != normalized_invocation:
+            findings.append({"path": "binding.invocation", "code": "non-canonical-invocation", "message": "embedded invocation must already be normalized"})
+        if normalized_invocation is not None:
+            expected_invocation_sha256 = _binding_sha256(normalized_invocation)
+            if invocation.get("invocation_sha256") != expected_invocation_sha256:
+                findings.append({"path": "binding.invocation.invocation_sha256", "code": "invocation-hash-mismatch", "message": "invocation_sha256 does not match the exact invocation"})
+            if binding.get("invocation_sha256") != invocation.get("invocation_sha256"):
+                findings.append({"path": "binding.invocation_sha256", "code": "invocation-hash-mismatch", "message": "Invocation Binding does not reference its embedded invocation"})
+
+    links = binding.get("cross_links")
+    link_keys = {"schema", "capsule_sha256", "tool_binding_sha256", "input_sha256", "adapter_artifact_sha256"}
+    findings.extend(_action_invocation_closed_findings(links, "binding.cross_links", link_keys))
+    if isinstance(links, dict):
+        capsule_bindings = capsule.get("bindings") if isinstance(capsule, dict) else None
+        capsule_semantics = capsule.get("action_semantics") if isinstance(capsule, dict) else None
+        capsule_tool = capsule_semantics.get("tool_binding") if isinstance(capsule_semantics, dict) else None
+        invocation_adapter = invocation.get("adapter") if isinstance(invocation, dict) else None
+        expected_links = {
+            "schema": _ACTION_INVOCATION_LINKS_SCHEMA,
+            "capsule_sha256": binding.get("capsule_sha256"),
+            "tool_binding_sha256": capsule_bindings.get("tool_binding_sha256") if isinstance(capsule_bindings, dict) else None,
+            "input_sha256": capsule_tool.get("input_sha256") if isinstance(capsule_tool, dict) else None,
+            "adapter_artifact_sha256": invocation_adapter.get("artifact_sha256") if isinstance(invocation_adapter, dict) else None,
+        }
+        for key in link_keys - {"schema"}:
+            if not _binding_is_sha256(links.get(key)):
+                findings.append({"path": "binding.cross_links." + key, "code": "expected-sha256", "message": key + " must be lowercase SHA-256 hex"})
+        if links != expected_links:
+            findings.append({"path": "binding.cross_links", "code": "cross-link-mismatch", "message": "Invocation Binding cross-links do not match Capsule, Tool Input, or adapter"})
+
+    lifecycle = binding.get("lifecycle")
+    lifecycle_keys = {"schema", "authorization", "approval_eligible", "approval_subject", "required_next"}
+    findings.extend(_action_invocation_closed_findings(lifecycle, "binding.lifecycle", lifecycle_keys))
+    expected_lifecycle = {
+        "schema": _ACTION_INVOCATION_LIFECYCLE_SCHEMA,
+        "authorization": "none",
+        "approval_eligible": True,
+        "approval_subject": "binding_sha256",
+        "required_next": list(_ACTION_INVOCATION_REQUIRED_NEXT),
+    }
+    if isinstance(lifecycle, dict) and lifecycle != expected_lifecycle:
+        findings.append({"path": "binding.lifecycle", "code": "lifecycle-mismatch", "message": "Invocation Binding lifecycle must remain non-authorizing and approval-bound"})
+
+    if set(binding) >= outer_keys:
+        body = {key: binding[key] for key in outer_keys if key != "binding_sha256"}
+        try:
+            digest = _binding_sha256(body)
+        except (TypeError, ValueError):
+            findings.append({"path": "binding", "code": "non-canonical-binding", "message": "Invocation Binding fields must be canonical JSON values"})
+        else:
+            if binding.get("binding_sha256") != digest:
+                findings.append({"path": "binding.binding_sha256", "code": "binding-hash-mismatch", "message": "binding_sha256 does not match the canonical Invocation Binding"})
+    return findings
+
+
+def build_action_invocation_binding_v0(
+    manifest, tool_binding, tool_input, program_src, wasm_bytes,
+    builder_components, entrypoint, invocation,
+):
+    """Bind one exact host invocation to a rebuilt Action Capsule without authorizing it."""
+    capsule_result = build_action_capsule_v0(
+        manifest, tool_binding, tool_input, program_src, wasm_bytes,
+        builder_components, entrypoint,
+    )
+    attribution = capsule_result["compiler_attribution"]
+    if not capsule_result["valid"]:
+        return _action_invocation_binding_validation(
+            None, attribution,
+            _action_capsule_prefixed("capsule", capsule_result["findings"]),
+        )
+    capsule = capsule_result["capsule"]
+    normalized_invocation, findings = _normalize_action_invocation(invocation, capsule)
+    if findings:
+        return _action_invocation_binding_validation(None, attribution, findings)
+    normalized_invocation["invocation_sha256"] = _binding_sha256(normalized_invocation)
+    body = {
+        "schema": _ACTION_INVOCATION_BINDING_SCHEMA,
+        "advisory": True,
+        "capsule": capsule,
+        "capsule_sha256": capsule["capsule_sha256"],
+        "invocation": normalized_invocation,
+        "invocation_sha256": normalized_invocation["invocation_sha256"],
+        "cross_links": {
+            "schema": _ACTION_INVOCATION_LINKS_SCHEMA,
+            "capsule_sha256": capsule["capsule_sha256"],
+            "tool_binding_sha256": capsule["bindings"]["tool_binding_sha256"],
+            "input_sha256": capsule["action_semantics"]["tool_binding"]["input_sha256"],
+            "adapter_artifact_sha256": normalized_invocation["adapter"]["artifact_sha256"],
+        },
+        "lifecycle": {
+            "schema": _ACTION_INVOCATION_LIFECYCLE_SCHEMA,
+            "authorization": "none",
+            "approval_eligible": True,
+            "approval_subject": "binding_sha256",
+            "required_next": list(_ACTION_INVOCATION_REQUIRED_NEXT),
+        },
+    }
+    body["binding_sha256"] = _binding_sha256(body)
+    return _action_invocation_binding_validation(body, attribution, [])
+
+
+def verify_action_invocation_binding_v0(
+    binding, manifest, tool_binding, tool_input, program_src, wasm_bytes,
+    builder_surface, builder_components, verifier_components, entrypoint,
+    invocation,
+):
+    """Verify exact Capsule and host invocation identity without performing host IO."""
+    attribution = _action_semantics_attribution()
+    findings = _action_invocation_binding_structure_findings(binding)
+    if findings:
+        return _action_invocation_binding_validation(None, attribution, findings)
+    capsule_check = verify_action_capsule_v0(
+        binding["capsule"], manifest, tool_binding, tool_input, program_src,
+        wasm_bytes, builder_surface, builder_components, verifier_components,
+        entrypoint,
+    )
+    attribution = capsule_check["compiler_attribution"]
+    if not capsule_check["valid"]:
+        return _action_invocation_binding_validation(
+            None, attribution,
+            _action_capsule_prefixed("capsule", capsule_check["findings"]),
+        )
+    expected = build_action_invocation_binding_v0(
+        manifest, tool_binding, tool_input, program_src, wasm_bytes,
+        builder_components, entrypoint, invocation,
+    )
+    if not expected["valid"]:
+        return _action_invocation_binding_validation(None, attribution, expected["findings"])
+    if binding != expected["binding"]:
+        return _action_invocation_binding_validation(None, attribution, [{
+            "path": "binding",
+            "code": "action-invocation-binding-mismatch",
+            "message": "Invocation Binding does not match the exact Capsule, adapter, argv, cwd, environment, stdin, or timeout inputs",
+        }])
+    return _action_invocation_binding_validation(binding, attribution, [])
+
+
+def _action_approval_request_validation(request, findings):
+    return {
+        "schema": _ACTION_APPROVAL_REQUEST_VALIDATION_SCHEMA,
+        "valid": not findings,
+        "advisory": True,
+        "authorization": "none",
+        "request": request if not findings else None,
+        "findings": findings,
+    }
+
+
+def _action_approval_validation(approval, approval_sha256, findings):
+    return {
+        "schema": _ACTION_APPROVAL_VALIDATION_SCHEMA,
+        "valid": not findings,
+        "advisory": True,
+        "authorization": "claim-required" if not findings else "none",
+        "approval": approval if not findings else None,
+        "approval_sha256": approval_sha256 if not findings else None,
+        "findings": findings,
+    }
+
+
+def _action_claim_validation(claim, findings):
+    return {
+        "schema": _ACTION_CLAIM_VALIDATION_SCHEMA,
+        "valid": not findings,
+        "advisory": False,
+        "authorization": "host-mediation-required" if not findings else "none",
+        "claim": claim if not findings else None,
+        "findings": findings,
+    }
+
+
+def _action_approval_prefixed(path, findings):
+    return [{
+        "path": path + ("." + item["path"] if item.get("path") else ""),
+        "code": item["code"],
+        "message": item["message"],
+    } for item in findings]
+
+
+def _action_approval_review(binding):
+    capsule = binding["capsule"]
+    invocation = binding["invocation"]
+    return {
+        "schema": _ACTION_APPROVAL_REVIEW_SCHEMA,
+        "agent": capsule["manifest"]["agent"],
+        "task": capsule["manifest"]["task"],
+        "adapter": invocation["adapter"],
+        "argv": invocation["argv"],
+        "working_directory_uri": invocation["working_directory_uri"],
+        "environment": invocation["environment"],
+        "stdin": invocation["stdin"],
+        "timeout_ms": invocation["timeout_ms"],
+        "shell": invocation["shell"],
+        "network": invocation["network"],
+    }
+
+
+def _action_approval_challenge(binding, nonce):
+    findings = _action_invocation_binding_structure_findings(binding)
+    if not _binding_is_sha256(nonce):
+        findings.append({
+            "path": "nonce", "code": "invalid-nonce",
+            "message": "nonce must be 64 lowercase hexadecimal characters",
+        })
+    if findings:
+        return None, findings
+    body = {
+        "schema": _ACTION_APPROVAL_CHALLENGE_SCHEMA,
+        "binding_sha256": binding["binding_sha256"],
+        "capsule_sha256": binding["capsule_sha256"],
+        "invocation_sha256": binding["invocation_sha256"],
+        "nonce": nonce,
+    }
+    body["challenge_sha256"] = _binding_sha256(body)
+    return body, []
+
+
+def build_action_approval_request_v2(binding, nonce):
+    """Build the closed human-review envelope for one exact Invocation Binding."""
+    challenge, findings = _action_approval_challenge(binding, nonce)
+    if findings:
+        return _action_approval_request_validation(None, findings)
+    body = {
+        "schema": _ACTION_APPROVAL_REQUEST_SCHEMA,
+        "binding": binding,
+        "challenge": challenge,
+        "review": _action_approval_review(binding),
+        "lifecycle": {
+            "schema": _ACTION_APPROVAL_REQUEST_LIFECYCLE_SCHEMA,
+            "authorization": "none",
+            "approval_subject": "binding_sha256",
+            "approval_schema": _ACTION_APPROVAL_SCHEMA,
+            "claim_required": True,
+            "maximum_ttl_ms": _ACTION_APPROVAL_MAX_TTL_MS,
+        },
+    }
+    body["request_sha256"] = _binding_sha256(body)
+    return _action_approval_request_validation(body, [])
+
+
+def validate_action_approval_request_v2(request):
+    """Rebuild an Action Approval request before an issuer displays or signs it."""
+    if not isinstance(request, dict):
+        return _action_approval_request_validation(None, [{
+            "path": "request", "code": "expected-object",
+            "message": "Action Approval request must be an object",
+        }])
+    required = {"schema", "binding", "challenge", "review", "lifecycle", "request_sha256"}
+    findings = []
+    for key in sorted(set(request) - required, key=str):
+        findings.append({"path": "request." + str(key), "code": "unknown-field", "message": "unknown Action Approval request field"})
+    for key in sorted(required - set(request)):
+        findings.append({"path": "request." + key, "code": "missing-field", "message": "missing Action Approval request field"})
+    if findings:
+        return _action_approval_request_validation(None, findings)
+    challenge = request.get("challenge")
+    nonce = challenge.get("nonce") if isinstance(challenge, dict) else None
+    rebuilt = build_action_approval_request_v2(request.get("binding"), nonce)
+    if not rebuilt["valid"]:
+        return rebuilt
+    if request != rebuilt["request"]:
+        return _action_approval_request_validation(None, [{
+            "path": "request", "code": "request-mismatch",
+            "message": "Action Approval request does not match its exact binding, challenge, review, lifecycle, and hash",
+        }])
+    return rebuilt
+
+
+def _action_approval_validate_public_key(value):
+    if "_loom_approval" in globals():
+        return _loom_approval._validate_public_key(value)
+    return _gate_validate_public_key(value)
+
+
+def _action_approval_rsa_verify(message, signature, public_key):
+    if "_loom_approval" in globals():
+        return _loom_approval._rsa_verify(message, signature, public_key)
+    return _gate_rsa_verify(message, signature, public_key)
+
+
+def _action_approval_canonical(value):
+    if "_loom_approval" in globals():
+        return _loom_approval._canonical(value)
+    return _gate_canonical(value)
+
+
+def _action_approval_load_public_key():
+    if "_loom_approval" in globals():
+        return _loom_approval._load_public_key()
+    return _gate_load_operator_key()
+
+
+def _verify_action_capsule_approval_v2(
+    approval, request, manifest, tool_binding, tool_input, program_src,
+    wasm_bytes, builder_surface, builder_components, verifier_components,
+    entrypoint, invocation, now_unix_ms, public_key_value,
+):
+    request_check = validate_action_approval_request_v2(request)
+    findings = list(request_check["findings"])
+    if request_check["valid"]:
+        binding_check = verify_action_invocation_binding_v0(
+            request["binding"], manifest, tool_binding, tool_input, program_src,
+            wasm_bytes, builder_surface, builder_components,
+            verifier_components, entrypoint, invocation,
+        )
+        findings.extend(_action_approval_prefixed("request.binding", binding_check["findings"]))
+    public_key, key_findings = _action_approval_validate_public_key(public_key_value)
+    findings.extend(key_findings)
+    if type(now_unix_ms) is not int or now_unix_ms < 0:
+        findings.append({
+            "path": "now_unix_ms", "code": "invalid-verification-time",
+            "message": "verification time must be a non-negative integer Unix millisecond value",
+        })
+    if not isinstance(approval, dict):
+        findings.append({"path": "approval", "code": "expected-object", "message": "Action Approval must be an object"})
+        return _action_approval_validation(None, None, findings)
+    required = {
+        "schema", "request_sha256", "challenge_sha256", "binding_sha256",
+        "capsule_sha256", "invocation_sha256", "approval_scope", "approver",
+        "decision", "issued_at_unix_ms", "expires_at_unix_ms", "claim_required",
+        "key_sha256", "signature",
+    }
+    for key in sorted(set(approval) - required, key=str):
+        findings.append({"path": "approval." + str(key), "code": "unknown-field", "message": "unknown Action Approval field"})
+    for key in sorted(required - set(approval)):
+        findings.append({"path": "approval." + key, "code": "missing-field", "message": "missing Action Approval field"})
+    if findings:
+        return _action_approval_validation(None, None, findings)
+    binding = request["binding"]
+    challenge = request["challenge"]
+    fixed = {
+        "schema": _ACTION_APPROVAL_SCHEMA,
+        "request_sha256": request["request_sha256"],
+        "challenge_sha256": challenge["challenge_sha256"],
+        "binding_sha256": binding["binding_sha256"],
+        "capsule_sha256": binding["capsule_sha256"],
+        "invocation_sha256": binding["invocation_sha256"],
+        "approval_scope": _ACTION_APPROVAL_SCOPE,
+        "approver": "operator",
+        "decision": "approve",
+        "claim_required": True,
+    }
+    for key, value in fixed.items():
+        if approval.get(key) != value:
+            findings.append({
+                "path": "approval." + key, "code": "approval-binding-mismatch",
+                "message": key + " does not match the exact Action Approval request",
+            })
+    issued = approval.get("issued_at_unix_ms")
+    expires = approval.get("expires_at_unix_ms")
+    if type(issued) is not int or issued < 0:
+        findings.append({"path": "approval.issued_at_unix_ms", "code": "invalid-issued-time", "message": "issued_at_unix_ms must be a non-negative integer"})
+    if type(expires) is not int or expires < 0:
+        findings.append({"path": "approval.expires_at_unix_ms", "code": "invalid-expiry-time", "message": "expires_at_unix_ms must be a non-negative integer"})
+    if type(issued) is int and type(expires) is int:
+        if expires <= issued or expires - issued > _ACTION_APPROVAL_MAX_TTL_MS:
+            findings.append({"path": "approval.expires_at_unix_ms", "code": "invalid-validity-window", "message": "Action Approval validity must be positive and at most 900000 milliseconds"})
+        if type(now_unix_ms) is int and now_unix_ms < issued:
+            findings.append({"path": "approval.issued_at_unix_ms", "code": "approval-not-yet-valid", "message": "Action Approval was issued after the trusted host verification time"})
+        if type(now_unix_ms) is int and now_unix_ms >= expires:
+            findings.append({"path": "approval.expires_at_unix_ms", "code": "approval-expired", "message": "Action Approval has expired"})
+    if public_key is not None:
+        key_sha256 = _binding_sha256(public_key)
+        if approval.get("key_sha256") != key_sha256:
+            findings.append({"path": "approval.key_sha256", "code": "key-mismatch", "message": "Action Approval is signed by a different key"})
+        signed = {key: approval[key] for key in sorted(required - {"signature"})}
+        if not _action_approval_rsa_verify(_action_approval_canonical(signed).encode("utf-8"), approval.get("signature"), public_key):
+            findings.append({"path": "approval.signature", "code": "invalid-signature", "message": "Action Approval signature is invalid"})
+    if findings:
+        return _action_approval_validation(None, None, findings)
+    approval_sha256 = _binding_sha256(approval)
+    return _action_approval_validation(approval, approval_sha256, [])
+
+
+def verify_action_capsule_approval_v2(
+    approval, request, manifest, tool_binding, tool_input, program_src,
+    wasm_bytes, builder_surface, builder_components, verifier_components,
+    entrypoint, invocation, now_unix_ms,
+):
+    """Verify one short-lived Approval v2 against the pinned operator key."""
+    try:
+        public_key = _action_approval_load_public_key()
+    except ValueError as error:
+        return _action_approval_validation(None, None, [{
+            "path": "public_key", "code": "public-key-unavailable", "message": str(error),
+        }])
+    return _verify_action_capsule_approval_v2(
+        approval, request, manifest, tool_binding, tool_input, program_src,
+        wasm_bytes, builder_surface, builder_components, verifier_components,
+        entrypoint, invocation, now_unix_ms, public_key,
+    )
+
+
+def _action_claim_ledger_path():
+    if "_loom_approval" in globals():
+        return _loom_approval._LEDGER_PATH
+    return _GATE_LEDGER_PATH
+
+
+def _action_claim_once(approval_check, request, now_unix_ms, ledger_path):
+    try:
+        import os
+        import sqlite3
+        import stat
+    except ImportError as error:
+        raise ValueError("Action Claim ledger is unavailable in this Python runtime: " + str(error)) from error
+    approval = approval_check["approval"]
+    binding = request["binding"]
+    body = {
+        "schema": _ACTION_CLAIM_SCHEMA,
+        "approval_sha256": approval_check["approval_sha256"],
+        "request_sha256": request["request_sha256"],
+        "challenge_sha256": request["challenge"]["challenge_sha256"],
+        "binding_sha256": binding["binding_sha256"],
+        "capsule_sha256": binding["capsule_sha256"],
+        "invocation_sha256": binding["invocation_sha256"],
+        "claim_scope": _ACTION_CLAIM_SCOPE,
+        "claimed_at_unix_ms": now_unix_ms,
+        "approval_expires_at_unix_ms": approval["expires_at_unix_ms"],
+        "status": "claimed",
+    }
+    body["claim_sha256"] = _binding_sha256(body)
+    parent = ledger_path.parent
+    if parent.exists():
+        if parent.is_symlink() or not parent.is_dir():
+            raise ValueError("Action Claim ledger parent must be a regular non-symlink directory")
+    else:
+        parent.mkdir(mode=0o700, parents=True)
+    if parent.is_symlink() or not parent.is_dir() or parent.stat().st_uid != os.getuid():
+        raise ValueError("Action Claim ledger parent must be owned by the current user")
+    parent.chmod(0o700)
+    if ledger_path.exists() or ledger_path.is_symlink():
+        if ledger_path.is_symlink() or not ledger_path.is_file():
+            raise ValueError("Action Claim ledger must be a regular non-symlink file")
+        ledger_stat = ledger_path.stat()
+        if ledger_stat.st_uid != os.getuid():
+            raise ValueError("Action Claim ledger must be owned by the current user")
+        if ledger_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise ValueError("Action Claim ledger must not be group/world-writable")
+    connection = None
+    try:
+        connection = sqlite3.connect(str(ledger_path), timeout=5, isolation_level=None)
+        if ledger_path.is_symlink() or not ledger_path.is_file() or ledger_path.stat().st_uid != os.getuid():
+            raise ValueError("Action Claim ledger identity changed during open")
+        ledger_path.chmod(0o600)
+        connection.execute("PRAGMA trusted_schema=OFF")
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(_ACTION_CLAIM_LEDGER_CREATE)
+        stored_schema = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+            (_ACTION_CLAIM_LEDGER_TABLE,),
+        ).fetchone()
+        if stored_schema != (_ACTION_CLAIM_LEDGER_SCHEMA,):
+            connection.execute("ROLLBACK")
+            raise ValueError("Action Claim ledger table schema is not canonical")
+        foreign_objects = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type IN ('trigger','view') AND tbl_name=?",
+            (_ACTION_CLAIM_LEDGER_TABLE,),
+        ).fetchall()
+        if foreign_objects:
+            connection.execute("ROLLBACK")
+            raise ValueError("Action Claim ledger table has unrecognized triggers or views")
+        if connection.execute(
+            "SELECT 1 FROM action_claims_v0 WHERE approval_sha256=?",
+            (body["approval_sha256"],),
+        ).fetchone():
+            connection.execute("ROLLBACK")
+            raise ValueError("Action Approval v2 was already claimed")
+        connection.execute(
+            "INSERT INTO action_claims_v0 (approval_sha256,request_sha256,challenge_sha256,binding_sha256,"
+            "capsule_sha256,invocation_sha256,claimed_at_unix_ms,approval_expires_at_unix_ms,claim_sha256,status) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                body["approval_sha256"], body["request_sha256"], body["challenge_sha256"],
+                body["binding_sha256"], body["capsule_sha256"], body["invocation_sha256"],
+                body["claimed_at_unix_ms"], body["approval_expires_at_unix_ms"],
+                body["claim_sha256"], body["status"],
+            ),
+        )
+        connection.execute("COMMIT")
+    except sqlite3.IntegrityError as error:
+        if connection is not None and connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise ValueError("Action Approval v2 was already claimed or the claim ledger rejected it") from error
+    except sqlite3.Error as error:
+        if connection is not None and connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise ValueError("Action Claim ledger failed: " + str(error)) from error
+    finally:
+        if connection is not None:
+            connection.close()
+    return body
+
+
+def _claim_action_capsule_approval_v0(
+    approval, request, manifest, tool_binding, tool_input, program_src,
+    wasm_bytes, builder_surface, builder_components, verifier_components,
+    entrypoint, invocation, now_unix_ms, public_key_value, ledger_path,
+):
+    approval_check = _verify_action_capsule_approval_v2(
+        approval, request, manifest, tool_binding, tool_input, program_src,
+        wasm_bytes, builder_surface, builder_components, verifier_components,
+        entrypoint, invocation, now_unix_ms, public_key_value,
+    )
+    if not approval_check["valid"]:
+        return _action_claim_validation(None, approval_check["findings"])
+    try:
+        claim = _action_claim_once(approval_check, request, now_unix_ms, ledger_path)
+    except (OSError, ValueError) as error:
+        return _action_claim_validation(None, [{
+            "path": "ledger", "code": "action-claim-failed", "message": str(error),
+        }])
+    return _action_claim_validation(claim, [])
+
+
+def claim_action_capsule_approval_v0(
+    approval, request, manifest, tool_binding, tool_input, program_src,
+    wasm_bytes, builder_surface, builder_components, verifier_components,
+    entrypoint, invocation, now_unix_ms,
+):
+    """Atomically reserve one valid Action Approval v2 for host mediation."""
+    try:
+        public_key = _action_approval_load_public_key()
+    except ValueError as error:
+        return _action_claim_validation(None, [{
+            "path": "public_key", "code": "public-key-unavailable", "message": str(error),
+        }])
+    return _claim_action_capsule_approval_v0(
+        approval, request, manifest, tool_binding, tool_input, program_src,
+        wasm_bytes, builder_surface, builder_components, verifier_components,
+        entrypoint, invocation, now_unix_ms, public_key,
+        _action_claim_ledger_path(),
+    )
 
 
 def collect_observation(manifest, result, actions_observed, evidence):

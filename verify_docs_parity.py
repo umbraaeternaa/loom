@@ -32,6 +32,9 @@ COMPILER_RECEIPT_V4_DOC = ROOT / "docs" / "gate_compiler_receipt_v4.md"
 ACTION_BINDING_DOC = ROOT / "docs" / "action_binding_v0.md"
 ACTION_SEMANTICS_DOC = ROOT / "docs" / "action_semantics_v0.md"
 ACTION_CAPSULE_DOC = ROOT / "docs" / "action_capsule_v0.md"
+ACTION_INVOCATION_BINDING_DOC = ROOT / "docs" / "action_invocation_binding_v0.md"
+ACTION_APPROVAL_V2_DOC = ROOT / "docs" / "action_approval_v2.md"
+ACTION_CLAIM_V0_DOC = ROOT / "docs" / "action_claim_v0.md"
 WASM_ARTIFACT_DOC = ROOT / "docs" / "gate_wasm_artifact_v1.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
 
@@ -40,7 +43,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "489-gate-compiler-workflow-v3")',
+        'bundleUrl.searchParams.set("v", "492-action-claim-v0")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -141,8 +144,8 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "489 self-verifying checks",
-        ">489</div>",
+        "492 self-verifying checks",
+        ">492</div>",
     )
     forbidden = (
         "456 self-verifying checks",
@@ -978,7 +981,8 @@ def _check_action_capsule_doc() -> None:
         "does not add source, manifest, tool-input",
         "execute no command",
         "cannot be approved for execution",
-        "terminal Action Capsule Result v0 remain separate future contracts",
+        "Capsule Claim v0 are also implemented as separate contracts",
+        "implemented as a separate additive contract",
         "Compiler Receipt v4 already exists as stable evidence",
         "Existing Gate, Interface/Tool Binding, Action Semantics, Compiler Evidence",
         "No CLI, Playground, MCP, A2A, WASI, identity, or host-executor adapter",
@@ -1093,6 +1097,305 @@ def _check_action_capsule_parity() -> None:
         raise SystemExit("docs parity: modular and standalone Action Capsule diverged")
 
 
+def _check_action_invocation_binding_doc() -> None:
+    words = " ".join(ACTION_INVOCATION_BINDING_DOC.read_text().split())
+    required = (
+        "LOOM Exact Invocation Binding v0",
+        "implemented, normative, deterministic, pure, advisory, and non-authorizing",
+        "build_action_invocation_binding_v0(",
+        "verify_action_invocation_binding_v0(",
+        "loom-action-invocation-binding-validation/v0",
+        "loom-action-invocation-binding/v0",
+        "loom-local-process-invocation/v0",
+        "loom-host-adapter-identity/v0",
+        "loom-action-invocation-stdin/v0",
+        "loom-action-invocation-cross-links/v0",
+        "loom-action-invocation-lifecycle/v0",
+        '"authorization": "none"',
+        '"approval_eligible": true',
+        '"approval_subject": "binding_sha256"',
+        '"shell": "denied"',
+        '"network": "denied"',
+        "value commitments, never raw values",
+        "wasm-compiler-drift",
+        "perform no filesystem lookup",
+        "does not approve or execute",
+        "remain separate contracts",
+        "Existing Gate, Interface/Tool Binding, Action Semantics, Action Capsule",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: action invocation binding v0 contract drift: missing " + ", ".join(missing))
+
+
+def _check_action_invocation_binding_parity() -> None:
+    import loom as modular
+    spec = importlib.util.spec_from_file_location("loom_docs_action_invocation", DOCS_LOOM)
+    if spec is None or spec.loader is None:
+        raise SystemExit("docs parity: could not load standalone Invocation Binding surface")
+    standalone = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(standalone)
+    manifest = {
+        "schema": "loom-gate-manifest/v1",
+        "agent": {"id": "codex", "role": "code"},
+        "task": {
+            "summary": "Bind one exact local process invocation",
+            "intent": "Create an immutable Approval v2 subject without authority",
+        },
+        "repositories": [],
+        "read_paths": [],
+        "write_paths": [],
+        "actions": ["process"],
+        "evidence_required": [],
+    }
+    validation = modular.validate_manifest(manifest)
+    input_value = {"action": "process", "manifest_sha256": validation["manifest_sha256"]}
+    protocol = "local-process/v1"
+    authority = "urn:loom:host:operator-gate"
+    modular_tool_result = modular.build_tool_binding(protocol, authority, "process", input_value)
+    standalone_tool_result = standalone.build_tool_binding(protocol, authority, "process", input_value)
+    if modular_tool_result != standalone_tool_result or not modular_tool_result["valid"]:
+        raise SystemExit("docs parity: Invocation Binding tool fixture diverged")
+    tool = modular_tool_result["binding"]
+    source = (
+        '(defx main (FFI!) (fn () (seamN 1 (FFI) '
+        f'(ffi "operator-gate" "{tool["binding_sha256"]}"))))'
+    )
+    wasm = modular.compile_wasm(source)
+    if standalone.compile_wasm(source) != wasm:
+        raise SystemExit("docs parity: Invocation Binding WASM fixture diverged")
+    invocation = {
+        "schema": "loom-local-process-invocation/v0",
+        "protocol": protocol,
+        "authority": authority,
+        "operation": "process",
+        "foreign_component": "operator-gate",
+        "adapter": {
+            "schema": "loom-host-adapter-identity/v0",
+            "executable_uri": "file:///opt/loom/operator-gate",
+            "artifact_sha256": "a" * 64,
+            "entrypoint": "process",
+        },
+        "argv": ["process"],
+        "working_directory_uri": "file:///workspace/loom",
+        "environment": [{"name": "LOOM_MODE", "value_sha256": "b" * 64}],
+        "stdin": {
+            "schema": "loom-action-invocation-stdin/v0",
+            "encoding": "canonical-json/utf-8",
+            "payload_sha256": tool["input_sha256"],
+        },
+        "timeout_ms": 30000,
+        "shell": "denied",
+        "network": "denied",
+    }
+    modular_paths = (
+        "loom.py", "loom_parse.py", "loom_checker.py", "loom_bounds.py",
+        "loom_recursion.py", "loom_frontend.py", "loom_wasm.py",
+    )
+    modular_components = {path: ROOT.joinpath(path).read_bytes() for path in modular_paths}
+    standalone_components = {"docs/loom.py": DOCS_LOOM.read_bytes()}
+    modular_result = modular.build_action_invocation_binding_v0(
+        manifest, tool, input_value, source, wasm, modular_components, "main", invocation
+    )
+    standalone_result = standalone.build_action_invocation_binding_v0(
+        manifest, tool, input_value, source, wasm, standalone_components, "main", invocation
+    )
+    if not modular_result["valid"] or not standalone_result["valid"]:
+        raise SystemExit("docs parity: Invocation Binding surface failed to build")
+    modular_binding = modular_result["binding"]
+    standalone_binding = standalone_result["binding"]
+    modular_self = modular.verify_action_invocation_binding_v0(
+        modular_binding, manifest, tool, input_value, source, wasm,
+        "modular-python", modular_components, modular_components, "main", invocation,
+    )
+    standalone_self = standalone.verify_action_invocation_binding_v0(
+        standalone_binding, manifest, tool, input_value, source, wasm,
+        "standalone-python", standalone_components, standalone_components, "main", invocation,
+    )
+    modular_checks_standalone = modular.verify_action_invocation_binding_v0(
+        standalone_binding, manifest, tool, input_value, source, wasm,
+        "standalone-python", standalone_components, modular_components, "main", invocation,
+    )
+    standalone_checks_modular = standalone.verify_action_invocation_binding_v0(
+        modular_binding, manifest, tool, input_value, source, wasm,
+        "modular-python", modular_components, standalone_components, "main", invocation,
+    )
+    contract = (
+        modular_binding["invocation"] == standalone_binding["invocation"]
+        and modular_binding["lifecycle"] == standalone_binding["lifecycle"]
+        and modular_binding["capsule_sha256"] != standalone_binding["capsule_sha256"]
+        and modular_binding["binding_sha256"] != standalone_binding["binding_sha256"]
+        and modular_binding["lifecycle"]["authorization"] == "none"
+        and modular_binding["lifecycle"]["approval_eligible"] is True
+        and modular_self["valid"]
+        and standalone_self["valid"]
+        and modular_self["compiler_attribution"]["relation"] == "same"
+        and standalone_self["compiler_attribution"]["relation"] == "same"
+        and not modular_checks_standalone["valid"]
+        and not standalone_checks_modular["valid"]
+        and modular_checks_standalone["compiler_attribution"]["relation"] == "different"
+        and standalone_checks_modular["compiler_attribution"]["relation"] == "different"
+        and [item["code"] for item in modular_checks_standalone["findings"]] == ["wasm-compiler-drift"]
+        and [item["code"] for item in standalone_checks_modular["findings"]] == ["wasm-compiler-drift"]
+    )
+    if not contract:
+        raise SystemExit("docs parity: modular and standalone Invocation Binding diverged")
+
+
+def _check_action_approval_v2_doc() -> None:
+    words = " ".join(ACTION_APPROVAL_V2_DOC.read_text().split())
+    required = (
+        "LOOM Exact Action Approval v2",
+        "implemented, normative, signed, short-lived, exact-invocation-bound, and claim-required",
+        "build_action_approval_request_v2(binding, nonce)",
+        "validate_action_approval_request_v2(request)",
+        "verify_action_capsule_approval_v2(",
+        "loom-action-approval-challenge/v2",
+        "loom-action-approval-request/v2",
+        "loom-action-approval-review/v2",
+        "loom-action-approval-request-lifecycle/v2",
+        "loom-action-capsule-approval/v2",
+        "loom-action-capsule-approval-validation/v2",
+        'authorization: "claim-required"',
+        'approval_subject: "binding_sha256"',
+        'approval_scope: "exact-invocation"',
+        "maximum_ttl_ms",
+        "900000 milliseconds",
+        "Boolean timestamps",
+        "explicit trusted-host input",
+        "writes only `approval.json`",
+        "cannot be substituted",
+        "Capsule Claim v0 is implemented as a separate additive stateful contract",
+        "terminal Action Capsule Result v0 remain separate future contracts",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: Action Approval v2 contract drift: missing " + ", ".join(missing))
+
+
+def _check_action_approval_v2_parity() -> None:
+    import loom as modular
+    spec = importlib.util.spec_from_file_location("loom_docs_action_approval", DOCS_LOOM)
+    if spec is None or spec.loader is None:
+        raise SystemExit("docs parity: could not load standalone Action Approval surface")
+    standalone = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(standalone)
+    manifest = {
+        "schema": "loom-gate-manifest/v1",
+        "agent": {"id": "codex", "role": "code"},
+        "task": {
+            "summary": "Approve one exact local process invocation",
+            "intent": "Bind operator authority to exact executable and inputs",
+        },
+        "repositories": [],
+        "read_paths": [],
+        "write_paths": [],
+        "actions": ["process"],
+        "evidence_required": [],
+    }
+    validation = modular.validate_manifest(manifest)
+    input_value = {"action": "process", "manifest_sha256": validation["manifest_sha256"]}
+    protocol = "local-process/v1"
+    authority = "urn:loom:host:operator-gate"
+    modular_tool_result = modular.build_tool_binding(protocol, authority, "process", input_value)
+    standalone_tool_result = standalone.build_tool_binding(protocol, authority, "process", input_value)
+    if modular_tool_result != standalone_tool_result or not modular_tool_result["valid"]:
+        raise SystemExit("docs parity: Action Approval tool fixture diverged")
+    tool = modular_tool_result["binding"]
+    source = (
+        '(defx main (FFI!) (fn () (seamN 1 (FFI) '
+        f'(ffi "operator-gate" "{tool["binding_sha256"]}"))))'
+    )
+    wasm = modular.compile_wasm(source)
+    if standalone.compile_wasm(source) != wasm:
+        raise SystemExit("docs parity: Action Approval WASM fixture diverged")
+    invocation = {
+        "schema": "loom-local-process-invocation/v0",
+        "protocol": protocol,
+        "authority": authority,
+        "operation": "process",
+        "foreign_component": "operator-gate",
+        "adapter": {
+            "schema": "loom-host-adapter-identity/v0",
+            "executable_uri": "file:///opt/loom/operator-gate",
+            "artifact_sha256": "a" * 64,
+            "entrypoint": "process",
+        },
+        "argv": ["process", "--canonical-json"],
+        "working_directory_uri": "file:///workspace/loom",
+        "environment": [{"name": "LOOM_MODE", "value_sha256": "b" * 64}],
+        "stdin": {
+            "schema": "loom-action-invocation-stdin/v0",
+            "encoding": "canonical-json/utf-8",
+            "payload_sha256": tool["input_sha256"],
+        },
+        "timeout_ms": 30000,
+        "shell": "denied",
+        "network": "denied",
+    }
+    modular_paths = (
+        "loom.py", "loom_parse.py", "loom_checker.py", "loom_bounds.py",
+        "loom_recursion.py", "loom_frontend.py", "loom_wasm.py",
+    )
+    modular_components = {path: ROOT.joinpath(path).read_bytes() for path in modular_paths}
+    standalone_components = {"docs/loom.py": DOCS_LOOM.read_bytes()}
+    modular_binding = modular.build_action_invocation_binding_v0(
+        manifest, tool, input_value, source, wasm, modular_components, "main", invocation,
+    )["binding"]
+    standalone_binding = standalone.build_action_invocation_binding_v0(
+        manifest, tool, input_value, source, wasm, standalone_components, "main", invocation,
+    )["binding"]
+    nonce = "7" * 64
+    modular_result = modular.build_action_approval_request_v2(modular_binding, nonce)
+    standalone_result = standalone.build_action_approval_request_v2(standalone_binding, nonce)
+    if not modular_result["valid"] or not standalone_result["valid"]:
+        raise SystemExit("docs parity: Action Approval request failed to build")
+    modular_request = modular_result["request"]
+    standalone_request = standalone_result["request"]
+    contract = (
+        modular.validate_action_approval_request_v2(modular_request) == modular_result
+        and standalone.validate_action_approval_request_v2(standalone_request) == standalone_result
+        and modular_request["schema"] == standalone_request["schema"] == "loom-action-approval-request/v2"
+        and modular_request["challenge"]["schema"] == standalone_request["challenge"]["schema"] == "loom-action-approval-challenge/v2"
+        and modular_request["review"] == standalone_request["review"]
+        and modular_request["lifecycle"] == standalone_request["lifecycle"]
+        and modular_request["binding"]["invocation"] == standalone_request["binding"]["invocation"]
+        and modular_request["binding"]["binding_sha256"] != standalone_request["binding"]["binding_sha256"]
+        and modular_request["request_sha256"] != standalone_request["request_sha256"]
+        and modular_request["lifecycle"]["authorization"] == "none"
+        and modular_request["lifecycle"]["claim_required"] is True
+    )
+    if not contract:
+        raise SystemExit("docs parity: modular and standalone Action Approval diverged")
+
+
+def _check_action_claim_v0_doc() -> None:
+    words = " ".join(ACTION_CLAIM_V0_DOC.read_text().split())
+    required = (
+        "LOOM Capsule Claim v0",
+        "implemented, normative, atomic, one-use, exact-invocation-bound, and non-executing",
+        "claim_action_capsule_approval_v0(",
+        "loom-action-capsule-claim-validation/v0",
+        "loom-action-capsule-claim/v0",
+        'authorization: "host-mediation-required"',
+        "`advisory: false`",
+        '"claim_scope": "exact-invocation"',
+        "explicit trusted-host input",
+        "SQLite `BEGIN IMMEDIATE`",
+        "primary key on `approval_sha256`",
+        "parent mode to `0700` and ledger mode to `0600`",
+        "rejects attached triggers or views",
+        "exactly one may insert",
+        "Invalid approvals do not create a ledger",
+        "Approval v2 cannot be consumed through the v1 API",
+        "does not remeasure executable bytes or environment values",
+        "imports SQLite only when claim is invoked",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: Capsule Claim v0 contract drift: missing " + ", ".join(missing))
+
+
 def _check_wasm_artifact_doc() -> None:
     text = WASM_ARTIFACT_DOC.read_text()
     words = " ".join(text.split())
@@ -1182,6 +1485,11 @@ def main() -> int:
     _check_action_semantics_parity()
     _check_action_capsule_doc()
     _check_action_capsule_parity()
+    _check_action_invocation_binding_doc()
+    _check_action_invocation_binding_parity()
+    _check_action_approval_v2_doc()
+    _check_action_approval_v2_parity()
+    _check_action_claim_v0_doc()
     _check_wasm_artifact_doc()
     _check_secret_credential_policy_doc()
     _check_pyodide_import_boundary()

@@ -12,12 +12,14 @@ import hashlib
 import json
 from pathlib import Path
 import sys
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import loom_approval
+import loom
 
 
 PRIVATE_KEY_FIELDS = {"algorithm", "n", "e", "d"}
@@ -68,8 +70,12 @@ def sign_pkcs1v15_sha256(message, private_exponent, modulus):
     return signature.to_bytes(size, "big").hex()
 
 
-def build_approval(request, private_key):
-    validated = loom_approval.validate_approval_request(request)
+def build_approval(request, private_key, issued_at_unix_ms=None, ttl_ms=300000):
+    schema = request.get("schema") if isinstance(request, dict) else None
+    if schema == "loom-action-approval-request/v2":
+        validated = loom.validate_action_approval_request_v2(request)
+    else:
+        validated = loom_approval.validate_approval_request(request)
     if not validated["valid"]:
         detail = "; ".join(f"{item['path']}: {item['message']}" for item in validated["findings"])
         raise SystemExit("approval request refused: " + detail)
@@ -77,14 +83,36 @@ def build_approval(request, private_key):
     public_key, private_exponent = public_key_from_private(private_key)
     key_sha256 = loom_approval._key_sha256(public_key)
     challenge = body["challenge"]
-    approval = {
-        "schema": loom_approval.APPROVAL_SCHEMA,
-        "challenge_sha256": challenge["challenge_sha256"],
-        "manifest_sha256": challenge["manifest_sha256"],
-        "approver": "operator",
-        "decision": "approve",
-        "key_sha256": key_sha256,
-    }
+    if schema == "loom-action-approval-request/v2":
+        if type(issued_at_unix_ms) is not int or issued_at_unix_ms < 0:
+            raise SystemExit("issued_at_unix_ms must be a non-negative integer")
+        if type(ttl_ms) is not int or not 1 <= ttl_ms <= 900000:
+            raise SystemExit("ttl_ms must be an integer from 1 to 900000")
+        binding = body["binding"]
+        approval = {
+            "schema": "loom-action-capsule-approval/v2",
+            "request_sha256": body["request_sha256"],
+            "challenge_sha256": challenge["challenge_sha256"],
+            "binding_sha256": binding["binding_sha256"],
+            "capsule_sha256": binding["capsule_sha256"],
+            "invocation_sha256": binding["invocation_sha256"],
+            "approval_scope": "exact-invocation",
+            "approver": "operator",
+            "decision": "approve",
+            "issued_at_unix_ms": issued_at_unix_ms,
+            "expires_at_unix_ms": issued_at_unix_ms + ttl_ms,
+            "claim_required": True,
+            "key_sha256": key_sha256,
+        }
+    else:
+        approval = {
+            "schema": loom_approval.APPROVAL_SCHEMA,
+            "challenge_sha256": challenge["challenge_sha256"],
+            "manifest_sha256": challenge["manifest_sha256"],
+            "approver": "operator",
+            "decision": "approve",
+            "key_sha256": key_sha256,
+        }
     approval["signature"] = sign_pkcs1v15_sha256(
         canonical(approval).encode("utf-8"),
         private_exponent,
@@ -94,6 +122,25 @@ def build_approval(request, private_key):
 
 
 def print_review(request):
+    if request["schema"] == "loom-action-approval-request/v2":
+        review = request["review"]
+        print("LOOM Action Approval v2 issuer review")
+        print("request_sha256: " + request["request_sha256"])
+        print("binding_sha256: " + request["binding"]["binding_sha256"])
+        print("challenge_sha256: " + request["challenge"]["challenge_sha256"])
+        print("agent: " + review["agent"]["id"] + " (" + review["agent"]["role"] + ")")
+        print("task: " + review["task"]["summary"])
+        print("executable_uri: " + review["adapter"]["executable_uri"])
+        print("executable_sha256: " + review["adapter"]["artifact_sha256"])
+        print("argv: " + json.dumps(review["argv"], ensure_ascii=False))
+        print("working_directory_uri: " + review["working_directory_uri"])
+        print("environment commitments:")
+        for item in review["environment"]:
+            print("  " + item["name"] + " sha256=" + item["value_sha256"])
+        print("stdin_sha256: " + review["stdin"]["payload_sha256"])
+        print("timeout_ms: " + str(review["timeout_ms"]))
+        print("shell: " + review["shell"] + " / network: " + review["network"])
+        return
     manifest = request["manifest"]
     challenge = request["challenge"]
     print("LOOM native issuer review")
@@ -110,16 +157,20 @@ def print_review(request):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Validate and sign a LOOM Gate approval request.")
-    parser.add_argument("request_json", help="copied loom-gate-approval-request/v1 JSON")
+    parser = argparse.ArgumentParser(description="Validate and sign a LOOM Gate or Action approval request.")
+    parser.add_argument("request_json", help="copied LOOM approval request JSON")
     parser.add_argument("private_key_json", help="operator-controlled RSA private key JSON")
     parser.add_argument("approval_json", help="output approval JSON path")
     parser.add_argument("--yes", action="store_true", help="confirm operator approval non-interactively")
+    parser.add_argument("--ttl-seconds", type=int, default=300, help="Action Approval v2 validity, 1-900 seconds")
     args = parser.parse_args(argv)
 
     request = load_json(args.request_json, "approval request")
     private_key = load_json(args.private_key_json, "operator private key")
-    reviewed, approval, public_key = build_approval(request, private_key)
+    issued_at_unix_ms = int(time.time() * 1000)
+    reviewed, approval, public_key = build_approval(
+        request, private_key, issued_at_unix_ms, args.ttl_seconds * 1000,
+    )
     print_review(reviewed)
     print("key_sha256: " + loom_approval._key_sha256(public_key))
     if not args.yes:

@@ -6,7 +6,7 @@ experimental, and what LOOM does not claim yet.
 
 ## Current public baseline
 
-- Canonical self-verification: `PASS -- 489/489 citadel checks`.
+- Canonical self-verification: `PASS -- 492/492 citadel checks`.
 - Published browser bundle parity is required before release:
   `python3 verify_docs_parity.py`.
 - The public compatibility surface is `loom.py`; module boundaries are pinned in
@@ -76,15 +76,24 @@ experimental, and what LOOM does not claim yet.
   hashes, fixed execution class, and fixed lifecycle. It remains pure,
   `concrete_invocation: unbound`, `authorization: none`, and
   `approval_eligible: false`.
+- Exact Invocation Binding v0 rebuilds that Capsule and binds one concrete host
+  adapter digest, executable file URI, argv, working directory, committed
+  environment, canonical Tool Input stdin, timeout, and denied shell/network
+  modes. It is pure and non-authorizing; `approval_eligible: true` means only
+  that Approval v2 has an exact `binding_sha256` subject.
+- Exact Action Approval v2 builds a closed human-review request and binds a
+  short-lived operator RSA signature to the exact Invocation Binding, Capsule,
+  executable, argv, cwd, committed environment, stdin, and timeout hashes. It
+  explicitly returns `claim-required` and performs no execution or ledger write.
+- Capsule Claim v0 re-verifies the complete Approval v2 and exact invocation,
+  then atomically reserves `approval_sha256` once in a private, schema-checked
+  SQLite ledger. Success returns `host-mediation-required`; it does not execute.
 - Deterministic property fuzz smoke is part of the citadel.
 
 ## Experimental or bounded
 
 - LOOM is still a research kernel, not a package-manager ecosystem.
-- Exact Invocation Binding v0 and an additive Approval v2 that binds the exact
-  Capsule hash remain future contracts; Action Capsule v0 does not imply either
-  concrete host intent or an authorizing lifecycle.
-- Multi-action semantics, Approval v2, Capsule claims, real host mediation,
+- Multi-action semantics, real host mediation,
   and terminal Action Capsule Result v0 remain future contracts. Compiler
   Receipt v4 is already stable evidence and is not embedded in the
   pre-execution Capsule because no execution observation exists yet.
@@ -144,10 +153,10 @@ python3 loom.py about --format json
 
 Expected public markers:
 
-- `run_tests.py` prints `PASS -- 489/489 citadel checks`.
+- `run_tests.py` prints `PASS -- 492/492 citadel checks`.
 - `verify_docs_parity.py` prints that the published bundle is standalone and
   citadel-green.
-- `loom.py about --format json` reports `citadel_checks: 489`, the current
+- `loom.py about --format json` reports `citadel_checks: 492`, the current
   WASM ABI version, and the supported backend list.
 - An installed checkout exposes `loom` as the same CLI surface as
   `python3 loom.py`.
