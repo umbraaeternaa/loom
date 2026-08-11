@@ -168,9 +168,10 @@ normative:
 
 Exact Action Approval v2 is implemented as a separate short-lived RSA signature
 over this binding. Approval validation still returns `claim-required`; Capsule
-Claim v0 then atomically reserves that exact approval. Executable measurement,
-environment commitment checking, trusted host mediation, process execution,
-and terminal Action Capsule Result v0 remain separate contracts. The old Gate
+Claim v0 then atomically reserves that exact approval. Trusted Host Mediation v0
+remeasures executable bytes, cwd identity, environment commitments, and
+canonical stdin without executing. Bounded process execution and terminal
+Action Capsule Result v0 remain separate future contracts. The old Gate
 approval/executor lifecycle remains unchanged and does not implicitly consume
 this binding.
 

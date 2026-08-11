@@ -168,10 +168,10 @@ actually invoke and cannot be approved for execution.
 
 Exact `loom-action-invocation-binding/v0` is implemented as a separate additive
 contract. It rebuilds and embeds this still-unbound Capsule before binding one
-concrete host invocation; it does not mutate Capsule v0. Approval v2 and
-Capsule Claim v0 are also implemented as separate contracts. Trusted host
-remeasurement, mediation, execution, and terminal Action Capsule Result v0
-remain future contracts.
+concrete host invocation; it does not mutate Capsule v0. Approval v2, Capsule
+Claim v0, and Trusted Host Mediation v0 are also implemented as separate
+contracts. Bounded execution and terminal Action Capsule Result v0 remain
+future contracts.
 Compiler Receipt v4 already exists as stable evidence, but
 the pre-execution Capsule does not embed it because no execution observation
 exists yet. Capsule v0 contains no nonce,

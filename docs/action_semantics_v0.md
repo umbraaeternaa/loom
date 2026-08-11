@@ -149,16 +149,17 @@ profile hash or Tool Binding hash is never sufficient evidence.
   execution claim, terminal result, or attached Compiler Receipt v4. Compiler
   Receipt v4 already exists as a separate stable evidence contract.
 - `seamN 1` meters LOOM runtime FFI requests. It does not itself meter host
-  process side effects; a future trusted-host mediation contract must charge
-  before real invocation.
+  process side effects. Trusted Host Mediation v0 now measures the exact bound
+  host resources, while the future bounded executor must charge and enforce
+  limits at the real invocation boundary.
 - The current process executor validates plans and attempts but executes no
   command.
 - Exact historical builder bytes remain required out of band.
 - Tool input is hashed rather than embedded; the exact v0 descriptor contains
   no credential.
-- Action Capsule v0, Approval v2, host mediation/execution, terminal Result v0,
-  CLI/Playground exposure, MCP/A2A/WASI adapters, and signed in-toto/SLSA
-  envelopes require separate explicit contracts.
+- Bounded host execution, terminal Result v0, CLI/Playground execution,
+  MCP/A2A/WASI adapters, and signed in-toto/SLSA envelopes require separate
+  explicit contracts.
 - Existing Gate, Tool/Interface Binding, Compiler Evidence v1/v2, Receipt and
   Workflow v1-v4, Approval v1, executor, trust receipt, and WASM ABI contracts
   remain unchanged.

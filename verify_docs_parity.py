@@ -35,6 +35,7 @@ ACTION_CAPSULE_DOC = ROOT / "docs" / "action_capsule_v0.md"
 ACTION_INVOCATION_BINDING_DOC = ROOT / "docs" / "action_invocation_binding_v0.md"
 ACTION_APPROVAL_V2_DOC = ROOT / "docs" / "action_approval_v2.md"
 ACTION_CLAIM_V0_DOC = ROOT / "docs" / "action_claim_v0.md"
+ACTION_HOST_MEDIATION_V0_DOC = ROOT / "docs" / "action_host_mediation_v0.md"
 WASM_ARTIFACT_DOC = ROOT / "docs" / "gate_wasm_artifact_v1.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
 
@@ -43,7 +44,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "492-action-claim-v0")',
+        'bundleUrl.searchParams.set("v", "493-action-host-mediation-v0")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -144,8 +145,8 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "492 self-verifying checks",
-        ">492</div>",
+        "493 self-verifying checks",
+        ">493</div>",
     )
     forbidden = (
         "456 self-verifying checks",
@@ -981,7 +982,7 @@ def _check_action_capsule_doc() -> None:
         "does not add source, manifest, tool-input",
         "execute no command",
         "cannot be approved for execution",
-        "Capsule Claim v0 are also implemented as separate contracts",
+        "Claim v0, and Trusted Host Mediation v0 are also implemented as separate contracts",
         "implemented as a separate additive contract",
         "Compiler Receipt v4 already exists as stable evidence",
         "Existing Gate, Interface/Tool Binding, Action Semantics, Compiler Evidence",
@@ -1120,7 +1121,7 @@ def _check_action_invocation_binding_doc() -> None:
         "wasm-compiler-drift",
         "perform no filesystem lookup",
         "does not approve or execute",
-        "remain separate contracts",
+        "remain separate future contracts",
         "Existing Gate, Interface/Tool Binding, Action Semantics, Action Capsule",
     )
     missing = [needle for needle in required if needle not in words]
@@ -1265,7 +1266,7 @@ def _check_action_approval_v2_doc() -> None:
         "explicit trusted-host input",
         "writes only `approval.json`",
         "cannot be substituted",
-        "Capsule Claim v0 is implemented as a separate additive stateful contract",
+        "Capsule Claim v0 and Trusted Host Mediation v0 are implemented as separate additive stateful contracts",
         "terminal Action Capsule Result v0 remain separate future contracts",
     )
     missing = [needle for needle in required if needle not in words]
@@ -1396,6 +1397,35 @@ def _check_action_claim_v0_doc() -> None:
         raise SystemExit("docs parity: Capsule Claim v0 contract drift: missing " + ", ".join(missing))
 
 
+def _check_action_host_mediation_v0_doc() -> None:
+    words = " ".join(ACTION_HOST_MEDIATION_V0_DOC.read_text().split())
+    required = (
+        "LOOM Trusted Host Mediation v0",
+        "implemented, normative, stateful, one-use, host-measuring, and non-executing",
+        "mediate_action_capsule_claim_v0(",
+        "validate_action_host_mediation_v0(mediation)",
+        "pure structural verifier",
+        "loom-action-host-mediation-validation/v0",
+        "loom-action-host-mediation/v0",
+        "loom-action-host-measurement/v0",
+        'authorization: "bounded-execution-required"',
+        "explicit trusted-host input",
+        "descriptor-relatively with `O_NOFOLLOW`, `O_DIRECTORY`, and `O_CLOEXEC`",
+        "at most 64 MiB",
+        "stores no raw value",
+        "SQLite `BEGIN IMMEDIATE`",
+        "exact canonical `action_mediations_v0` schema",
+        "exactly one can become `ready`",
+        "performs no shell expansion, network access, credential lookup, subprocess creation",
+        "does not claim to eliminate the post-measurement TOCTOU window",
+        "remeasure its bytes immediately before spawn",
+        "imports OS and SQLite facilities only when mediation is invoked",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: Trusted Host Mediation v0 contract drift: missing " + ", ".join(missing))
+
+
 def _check_wasm_artifact_doc() -> None:
     text = WASM_ARTIFACT_DOC.read_text()
     words = " ".join(text.split())
@@ -1490,6 +1520,7 @@ def main() -> int:
     _check_action_approval_v2_doc()
     _check_action_approval_v2_parity()
     _check_action_claim_v0_doc()
+    _check_action_host_mediation_v0_doc()
     _check_wasm_artifact_doc()
     _check_secret_credential_policy_doc()
     _check_pyodide_import_boundary()

@@ -5501,6 +5501,39 @@ _ACTION_CLAIM_LEDGER_SCHEMA = (
 _ACTION_CLAIM_LEDGER_CREATE = _ACTION_CLAIM_LEDGER_SCHEMA.replace(
     "CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", 1,
 )
+_ACTION_MEDIATION_SCHEMA = "loom-action-host-mediation/v0"
+_ACTION_MEDIATION_VALIDATION_SCHEMA = "loom-action-host-mediation-validation/v0"
+_ACTION_HOST_MEASUREMENT_SCHEMA = "loom-action-host-measurement/v0"
+_ACTION_MEDIATION_LEDGER_TABLE = "action_mediations_v0"
+_ACTION_MEDIATION_LEDGER_SCHEMA = (
+    "CREATE TABLE action_mediations_v0 ("
+    "claim_sha256 TEXT PRIMARY KEY CHECK(length(claim_sha256)=64), "
+    "approval_sha256 TEXT NOT NULL CHECK(length(approval_sha256)=64), "
+    "binding_sha256 TEXT NOT NULL CHECK(length(binding_sha256)=64), "
+    "invocation_sha256 TEXT NOT NULL CHECK(length(invocation_sha256)=64), "
+    "host_measurement_sha256 TEXT NOT NULL CHECK(length(host_measurement_sha256)=64), "
+    "executable_sha256 TEXT NOT NULL CHECK(length(executable_sha256)=64), "
+    "environment_sha256 TEXT NOT NULL CHECK(length(environment_sha256)=64), "
+    "stdin_sha256 TEXT NOT NULL CHECK(length(stdin_sha256)=64), "
+    "mediated_at_unix_ms INTEGER NOT NULL CHECK(mediated_at_unix_ms>=0), "
+    "approval_expires_at_unix_ms INTEGER NOT NULL CHECK(approval_expires_at_unix_ms>mediated_at_unix_ms), "
+    "mediation_sha256 TEXT UNIQUE NOT NULL CHECK(length(mediation_sha256)=64), "
+    "status TEXT NOT NULL CHECK(status='ready'))"
+)
+_ACTION_MEDIATION_LEDGER_CREATE = _ACTION_MEDIATION_LEDGER_SCHEMA.replace(
+    "CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", 1,
+)
+_ACTION_MEDIATION_OBLIGATIONS = (
+    "reopen-executable-no-follow",
+    "remeasure-executable-before-spawn",
+    "reverify-working-directory-identity",
+    "supply-exact-environment",
+    "supply-exact-stdin",
+    "enforce-timeout",
+    "deny-shell",
+    "deny-network",
+)
+_ACTION_MEDIATION_MAX_EXECUTABLE_BYTES = 64 * 1024 * 1024
 
 
 def _action_semantics_validation(semantics, compiler_attribution, findings):
@@ -6512,6 +6545,17 @@ def _action_claim_validation(claim, findings):
     }
 
 
+def _action_mediation_validation(mediation, findings):
+    return {
+        "schema": _ACTION_MEDIATION_VALIDATION_SCHEMA,
+        "valid": not findings,
+        "advisory": False,
+        "authorization": "bounded-execution-required" if not findings else "none",
+        "mediation": mediation if not findings else None,
+        "findings": findings,
+    }
+
+
 def _action_approval_prefixed(path, findings):
     return [{
         "path": path + ("." + item["path"] if item.get("path") else ""),
@@ -6876,6 +6920,505 @@ def claim_action_capsule_approval_v0(
     )
 
 
+def _action_claim_findings(claim, approval_check, request, now_unix_ms):
+    keys = {
+        "schema", "approval_sha256", "request_sha256", "challenge_sha256",
+        "binding_sha256", "capsule_sha256", "invocation_sha256", "claim_scope",
+        "claimed_at_unix_ms", "approval_expires_at_unix_ms", "status", "claim_sha256",
+    }
+    findings = _action_invocation_closed_findings(claim, "claim", keys)
+    if not isinstance(claim, dict):
+        return findings
+    binding = request["binding"]
+    approval = approval_check["approval"]
+    fixed = {
+        "schema": _ACTION_CLAIM_SCHEMA,
+        "approval_sha256": approval_check["approval_sha256"],
+        "request_sha256": request["request_sha256"],
+        "challenge_sha256": request["challenge"]["challenge_sha256"],
+        "binding_sha256": binding["binding_sha256"],
+        "capsule_sha256": binding["capsule_sha256"],
+        "invocation_sha256": binding["invocation_sha256"],
+        "claim_scope": _ACTION_CLAIM_SCOPE,
+        "approval_expires_at_unix_ms": approval["expires_at_unix_ms"],
+        "status": "claimed",
+    }
+    for key, value in fixed.items():
+        if claim.get(key) != value:
+            findings.append({
+                "path": "claim." + key, "code": "claim-binding-mismatch",
+                "message": key + " does not match the verified Approval v2 and request",
+            })
+    claimed_at = claim.get("claimed_at_unix_ms")
+    if type(claimed_at) is not int or claimed_at < 0:
+        findings.append({
+            "path": "claim.claimed_at_unix_ms", "code": "invalid-claim-time",
+            "message": "claimed_at_unix_ms must be a non-negative integer",
+        })
+    elif claimed_at > now_unix_ms:
+        findings.append({
+            "path": "claim.claimed_at_unix_ms", "code": "claim-from-future",
+            "message": "claim time must not be after the trusted host mediation time",
+        })
+    if not _binding_is_sha256(claim.get("claim_sha256")):
+        findings.append({
+            "path": "claim.claim_sha256", "code": "expected-sha256",
+            "message": "claim_sha256 must be lowercase SHA-256 hex",
+        })
+    if set(claim) == keys:
+        body = {key: claim[key] for key in sorted(keys - {"claim_sha256"})}
+        if claim.get("claim_sha256") != _binding_sha256(body):
+            findings.append({
+                "path": "claim.claim_sha256", "code": "claim-hash-mismatch",
+                "message": "claim_sha256 does not match the canonical Claim v0 body",
+            })
+    return findings
+
+
+def _action_mediation_file_path(uri, path):
+    if not isinstance(uri, str) or not uri.startswith("file:///"):
+        raise ValueError(path + " must be an absolute file URI")
+    if "%" in uri:
+        raise ValueError(path + " must not use percent-encoded path bytes in mediation v0")
+    value = uri[len("file://"):]
+    if not value.startswith("/") or value == "/":
+        raise ValueError(path + " must identify a non-root absolute path")
+    segments = value.split("/")[1:]
+    if not segments or any(segment in {"", ".", ".."} for segment in segments):
+        raise ValueError(path + " contains a non-canonical path segment")
+    return value
+
+
+def _action_mediation_open_path(path, directory):
+    import os
+    required = ("O_CLOEXEC", "O_NOFOLLOW", "O_DIRECTORY")
+    if any(not hasattr(os, name) for name in required) or os.open not in os.supports_dir_fd:
+        raise ValueError("host runtime cannot provide no-follow descriptor-relative path traversal")
+    base_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+    parent_fd = os.open("/", os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY)
+    try:
+        segments = path.split("/")[1:]
+        for segment in segments[:-1]:
+            child_fd = os.open(segment, base_flags | os.O_DIRECTORY, dir_fd=parent_fd)
+            os.close(parent_fd)
+            parent_fd = child_fd
+        flags = base_flags | (os.O_DIRECTORY if directory else 0)
+        return os.open(segments[-1], flags, dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
+
+
+def _action_mediation_stat_identity(value, kind):
+    import stat
+    return {
+        "kind": kind,
+        "device_id": str(value.st_dev),
+        "inode_id": str(value.st_ino),
+        "owner_uid": str(value.st_uid),
+        "owner_gid": str(value.st_gid),
+        "mode": format(stat.S_IMODE(value.st_mode), "04o"),
+        "size_bytes": value.st_size,
+        "mtime_ns": str(value.st_mtime_ns),
+    }
+
+
+def _action_mediation_measure_host(binding, tool_input, environment_values):
+    import os
+    import stat
+    invocation = binding["invocation"]
+    if not isinstance(environment_values, dict):
+        raise ValueError("environment_values must be an exact name-to-string object")
+    normalized_environment = {}
+    for name, value in environment_values.items():
+        if not isinstance(name, str) or not isinstance(value, str):
+            raise ValueError("environment_values names and values must be strings")
+        normalized_name = unicodedata.normalize("NFC", name)
+        normalized_value = unicodedata.normalize("NFC", value)
+        if not normalized_name or "=" in normalized_name or "\x00" in normalized_name:
+            raise ValueError("environment_values contains an invalid name")
+        if "\x00" in normalized_value:
+            raise ValueError("environment_values must not contain NUL")
+        if len(normalized_name.encode("utf-8")) > _BINDING_MAX_STRING_BYTES:
+            raise ValueError("environment_values contains an oversized name")
+        if len(normalized_value.encode("utf-8")) > _BINDING_MAX_STRING_BYTES:
+            raise ValueError("environment_values contains an oversized value")
+        if normalized_name in normalized_environment:
+            raise ValueError("environment_values names collide after NFC normalization")
+        normalized_environment[normalized_name] = normalized_value
+    expected_environment = invocation["environment"]
+    expected_names = [item["name"] for item in expected_environment]
+    if sorted(normalized_environment) != expected_names:
+        raise ValueError("environment_values must contain exactly the committed environment names")
+    measured_environment = []
+    for expected in expected_environment:
+        value_sha256 = hashlib.sha256(normalized_environment[expected["name"]].encode("utf-8")).hexdigest()
+        if value_sha256 != expected["value_sha256"]:
+            raise ValueError("environment value commitment mismatch for " + expected["name"])
+        measured_environment.append({"name": expected["name"], "value_sha256": value_sha256})
+
+    executable_uri = invocation["adapter"]["executable_uri"]
+    executable_path = _action_mediation_file_path(executable_uri, "invocation.adapter.executable_uri")
+    executable_fd = _action_mediation_open_path(executable_path, False)
+    try:
+        before = os.fstat(executable_fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError("host adapter executable must be a regular file")
+        if before.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise ValueError("host adapter executable must not be group/world-writable")
+        if before.st_size > _ACTION_MEDIATION_MAX_EXECUTABLE_BYTES:
+            raise ValueError("host adapter executable exceeds the 64 MiB mediation limit")
+        digest = hashlib.sha256()
+        total = 0
+        while True:
+            chunk = os.read(executable_fd, 1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > _ACTION_MEDIATION_MAX_EXECUTABLE_BYTES:
+                raise ValueError("host adapter executable changed beyond the mediation size limit")
+            digest.update(chunk)
+        after = os.fstat(executable_fd)
+        stable_fields = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns")
+        if any(getattr(before, key) != getattr(after, key) for key in stable_fields) or total != after.st_size:
+            raise ValueError("host adapter executable changed while it was measured")
+        executable_sha256 = digest.hexdigest()
+        if executable_sha256 != invocation["adapter"]["artifact_sha256"]:
+            raise ValueError("host adapter executable bytes do not match artifact_sha256")
+        executable_identity = _action_mediation_stat_identity(after, "regular-file")
+    finally:
+        os.close(executable_fd)
+
+    cwd_uri = invocation["working_directory_uri"]
+    cwd_path = _action_mediation_file_path(cwd_uri, "invocation.working_directory_uri")
+    cwd_fd = _action_mediation_open_path(cwd_path, True)
+    try:
+        cwd_stat = os.fstat(cwd_fd)
+        if not stat.S_ISDIR(cwd_stat.st_mode):
+            raise ValueError("working directory must be a directory")
+        if cwd_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise ValueError("working directory must not be group/world-writable")
+        cwd_identity = _action_mediation_stat_identity(cwd_stat, "directory")
+    finally:
+        os.close(cwd_fd)
+
+    normalized_input, input_findings = _normalize_binding_json(tool_input)
+    if input_findings:
+        raise ValueError("tool input is not canonical at the host boundary")
+    stdin_bytes = _artifact_json(normalized_input).encode("utf-8")
+    stdin_sha256 = hashlib.sha256(stdin_bytes).hexdigest()
+    if stdin_sha256 != invocation["stdin"]["payload_sha256"]:
+        raise ValueError("canonical stdin bytes do not match the invocation payload commitment")
+
+    measurement = {
+        "schema": _ACTION_HOST_MEASUREMENT_SCHEMA,
+        "executable": {"uri": executable_uri, "artifact_sha256": executable_sha256, "identity": executable_identity},
+        "working_directory": {"uri": cwd_uri, "identity": cwd_identity},
+        "environment": measured_environment,
+        "environment_sha256": _binding_sha256(measured_environment),
+        "stdin": {"encoding": "canonical-json/utf-8", "payload_sha256": stdin_sha256, "size_bytes": len(stdin_bytes)},
+        "controls": {"timeout_ms": invocation["timeout_ms"], "shell": "denied", "network": "denied", "credentials": "none"},
+        "execution_obligations": list(_ACTION_MEDIATION_OBLIGATIONS),
+    }
+    measurement["host_measurement_sha256"] = _binding_sha256(measurement)
+    return measurement
+
+
+def _action_mediation_identity_findings(identity, path, expected_kind):
+    keys = {
+        "kind", "device_id", "inode_id", "owner_uid", "owner_gid", "mode",
+        "size_bytes", "mtime_ns",
+    }
+    findings = _action_invocation_closed_findings(identity, path, keys)
+    if not isinstance(identity, dict):
+        return findings
+    if identity.get("kind") != expected_kind:
+        findings.append({"path": path + ".kind", "code": "identity-kind-mismatch", "message": "unexpected host identity kind"})
+    for key in ("device_id", "inode_id", "owner_uid", "owner_gid", "mtime_ns"):
+        value = identity.get(key)
+        if not isinstance(value, str) or not value.isdigit():
+            findings.append({"path": path + "." + key, "code": "expected-decimal-string", "message": key + " must be a decimal string"})
+    mode = identity.get("mode")
+    if not isinstance(mode, str) or len(mode) != 4 or any(char not in "01234567" for char in mode):
+        findings.append({"path": path + ".mode", "code": "expected-octal-mode", "message": "mode must be four octal digits"})
+    if type(identity.get("size_bytes")) is not int or identity.get("size_bytes", -1) < 0:
+        findings.append({"path": path + ".size_bytes", "code": "expected-size", "message": "size_bytes must be a non-negative integer"})
+    return findings
+
+
+def _action_mediation_structure_findings(mediation):
+    outer_keys = {
+        "schema", "claim_sha256", "approval_sha256", "request_sha256",
+        "binding_sha256", "capsule_sha256", "invocation_sha256",
+        "host_measurement", "host_measurement_sha256", "mediated_at_unix_ms",
+        "approval_expires_at_unix_ms", "status", "mediation_sha256",
+    }
+    findings = _action_invocation_closed_findings(mediation, "mediation", outer_keys)
+    if not isinstance(mediation, dict):
+        return findings
+    if mediation.get("schema") != _ACTION_MEDIATION_SCHEMA:
+        findings.append({"path": "mediation.schema", "code": "unsupported-schema", "message": "expected loom-action-host-mediation/v0"})
+    if mediation.get("status") != "ready":
+        findings.append({"path": "mediation.status", "code": "mediation-not-ready", "message": "mediation status must be ready"})
+    for key in (
+        "claim_sha256", "approval_sha256", "request_sha256", "binding_sha256",
+        "capsule_sha256", "invocation_sha256", "host_measurement_sha256", "mediation_sha256",
+    ):
+        if not _binding_is_sha256(mediation.get(key)):
+            findings.append({"path": "mediation." + key, "code": "expected-sha256", "message": key + " must be lowercase SHA-256 hex"})
+    mediated_at = mediation.get("mediated_at_unix_ms")
+    expires_at = mediation.get("approval_expires_at_unix_ms")
+    if type(mediated_at) is not int or mediated_at < 0:
+        findings.append({"path": "mediation.mediated_at_unix_ms", "code": "invalid-mediation-time", "message": "mediation time must be a non-negative integer"})
+    if type(expires_at) is not int or expires_at < 0:
+        findings.append({"path": "mediation.approval_expires_at_unix_ms", "code": "invalid-expiry-time", "message": "approval expiry must be a non-negative integer"})
+    if type(mediated_at) is int and type(expires_at) is int and expires_at <= mediated_at:
+        findings.append({"path": "mediation.approval_expires_at_unix_ms", "code": "expired-mediation", "message": "mediation must precede approval expiry"})
+
+    measurement = mediation.get("host_measurement")
+    measurement_keys = {
+        "schema", "executable", "working_directory", "environment",
+        "environment_sha256", "stdin", "controls", "execution_obligations",
+        "host_measurement_sha256",
+    }
+    findings.extend(_action_invocation_closed_findings(measurement, "mediation.host_measurement", measurement_keys))
+    if isinstance(measurement, dict):
+        if measurement.get("schema") != _ACTION_HOST_MEASUREMENT_SCHEMA:
+            findings.append({"path": "mediation.host_measurement.schema", "code": "unsupported-schema", "message": "expected loom-action-host-measurement/v0"})
+        for key in ("environment_sha256", "host_measurement_sha256"):
+            if not _binding_is_sha256(measurement.get(key)):
+                findings.append({"path": "mediation.host_measurement." + key, "code": "expected-sha256", "message": key + " must be lowercase SHA-256 hex"})
+        executable = measurement.get("executable")
+        findings.extend(_action_invocation_closed_findings(
+            executable, "mediation.host_measurement.executable", {"uri", "artifact_sha256", "identity"},
+        ))
+        if isinstance(executable, dict):
+            try:
+                _action_mediation_file_path(executable.get("uri"), "mediation.host_measurement.executable.uri")
+            except ValueError as error:
+                findings.append({"path": "mediation.host_measurement.executable.uri", "code": "invalid-host-uri", "message": str(error)})
+            if not _binding_is_sha256(executable.get("artifact_sha256")):
+                findings.append({"path": "mediation.host_measurement.executable.artifact_sha256", "code": "expected-sha256", "message": "artifact_sha256 must be lowercase SHA-256 hex"})
+            findings.extend(_action_mediation_identity_findings(
+                executable.get("identity"), "mediation.host_measurement.executable.identity", "regular-file",
+            ))
+        cwd = measurement.get("working_directory")
+        findings.extend(_action_invocation_closed_findings(
+            cwd, "mediation.host_measurement.working_directory", {"uri", "identity"},
+        ))
+        if isinstance(cwd, dict):
+            try:
+                _action_mediation_file_path(cwd.get("uri"), "mediation.host_measurement.working_directory.uri")
+            except ValueError as error:
+                findings.append({"path": "mediation.host_measurement.working_directory.uri", "code": "invalid-host-uri", "message": str(error)})
+            findings.extend(_action_mediation_identity_findings(
+                cwd.get("identity"), "mediation.host_measurement.working_directory.identity", "directory",
+            ))
+        environment = measurement.get("environment")
+        if not isinstance(environment, list):
+            findings.append({"path": "mediation.host_measurement.environment", "code": "expected-array", "message": "environment must be an array"})
+        else:
+            names = []
+            for index, item in enumerate(environment):
+                item_path = f"mediation.host_measurement.environment[{index}]"
+                findings.extend(_action_invocation_closed_findings(item, item_path, {"name", "value_sha256"}))
+                if isinstance(item, dict):
+                    name = item.get("name")
+                    if not isinstance(name, str) or not name:
+                        findings.append({"path": item_path + ".name", "code": "expected-string", "message": "environment name must be non-empty"})
+                    else:
+                        if (
+                            name != unicodedata.normalize("NFC", name) or "=" in name or "\x00" in name
+                            or len(name.encode("utf-8")) > _BINDING_MAX_STRING_BYTES
+                        ):
+                            findings.append({"path": item_path + ".name", "code": "non-canonical-environment-name", "message": "environment name violates the closed NFC profile"})
+                        names.append(name)
+                    if not _binding_is_sha256(item.get("value_sha256")):
+                        findings.append({"path": item_path + ".value_sha256", "code": "expected-sha256", "message": "environment commitment must be lowercase SHA-256 hex"})
+            if names != sorted(names) or len(names) != len(set(names)):
+                findings.append({"path": "mediation.host_measurement.environment", "code": "non-canonical-environment", "message": "environment names must be sorted and unique"})
+            try:
+                environment_sha256 = _binding_sha256(environment)
+            except (TypeError, ValueError):
+                environment_sha256 = None
+                findings.append({"path": "mediation.host_measurement.environment", "code": "non-canonical-environment", "message": "environment commitments must be canonical JSON values"})
+            if environment_sha256 is not None and measurement.get("environment_sha256") != environment_sha256:
+                findings.append({"path": "mediation.host_measurement.environment_sha256", "code": "environment-hash-mismatch", "message": "environment hash does not match commitments"})
+        stdin = measurement.get("stdin")
+        findings.extend(_action_invocation_closed_findings(
+            stdin, "mediation.host_measurement.stdin", {"encoding", "payload_sha256", "size_bytes"},
+        ))
+        if isinstance(stdin, dict):
+            if stdin.get("encoding") != "canonical-json/utf-8":
+                findings.append({"path": "mediation.host_measurement.stdin.encoding", "code": "encoding-mismatch", "message": "stdin must be canonical JSON UTF-8"})
+            if not _binding_is_sha256(stdin.get("payload_sha256")):
+                findings.append({"path": "mediation.host_measurement.stdin.payload_sha256", "code": "expected-sha256", "message": "stdin payload hash must be lowercase SHA-256 hex"})
+            if type(stdin.get("size_bytes")) is not int or stdin.get("size_bytes", -1) < 0:
+                findings.append({"path": "mediation.host_measurement.stdin.size_bytes", "code": "expected-size", "message": "stdin size must be a non-negative integer"})
+        controls = measurement.get("controls")
+        expected_controls = {"timeout_ms", "shell", "network", "credentials"}
+        findings.extend(_action_invocation_closed_findings(controls, "mediation.host_measurement.controls", expected_controls))
+        if isinstance(controls, dict):
+            if type(controls.get("timeout_ms")) is not int or not 1 <= controls.get("timeout_ms", 0) <= 3600000:
+                findings.append({"path": "mediation.host_measurement.controls.timeout_ms", "code": "timeout-out-of-range", "message": "timeout must be between 1 and 3600000 milliseconds"})
+            for key, value in {"shell": "denied", "network": "denied", "credentials": "none"}.items():
+                if controls.get(key) != value:
+                    findings.append({"path": "mediation.host_measurement.controls." + key, "code": "control-mismatch", "message": key + " violates mediation v0 controls"})
+        if measurement.get("execution_obligations") != list(_ACTION_MEDIATION_OBLIGATIONS):
+            findings.append({"path": "mediation.host_measurement.execution_obligations", "code": "obligation-mismatch", "message": "bounded executor obligations are not canonical"})
+        if set(measurement) == measurement_keys:
+            body = {key: measurement[key] for key in measurement_keys if key != "host_measurement_sha256"}
+            try:
+                body_sha256 = _binding_sha256(body)
+            except (TypeError, ValueError):
+                body_sha256 = None
+                findings.append({"path": "mediation.host_measurement", "code": "non-canonical-measurement", "message": "host measurement must contain canonical JSON values"})
+            if body_sha256 is not None and measurement.get("host_measurement_sha256") != body_sha256:
+                findings.append({"path": "mediation.host_measurement.host_measurement_sha256", "code": "measurement-hash-mismatch", "message": "host measurement hash does not match its canonical body"})
+        if mediation.get("host_measurement_sha256") != measurement.get("host_measurement_sha256"):
+            findings.append({"path": "mediation.host_measurement_sha256", "code": "measurement-link-mismatch", "message": "mediation does not reference its embedded host measurement"})
+    if set(mediation) == outer_keys:
+        body = {key: mediation[key] for key in outer_keys if key != "mediation_sha256"}
+        try:
+            body_sha256 = _binding_sha256(body)
+        except (TypeError, ValueError):
+            body_sha256 = None
+            findings.append({"path": "mediation", "code": "non-canonical-mediation", "message": "mediation must contain canonical JSON values"})
+        if body_sha256 is not None and mediation.get("mediation_sha256") != body_sha256:
+            findings.append({"path": "mediation.mediation_sha256", "code": "mediation-hash-mismatch", "message": "mediation hash does not match its canonical body"})
+    return findings
+
+
+def validate_action_host_mediation_v0(mediation):
+    """Validate one closed mediation artifact without re-reading its host resources."""
+    findings = _action_mediation_structure_findings(mediation)
+    return _action_mediation_validation(mediation, findings)
+
+
+def _action_mediation_once(claim, approval_check, request, measurement, now_unix_ms, ledger_path):
+    import os
+    import sqlite3
+    import stat
+    if not ledger_path.exists() or ledger_path.is_symlink() or not ledger_path.is_file():
+        raise ValueError("Action Claim ledger must already exist as a regular non-symlink file")
+    parent = ledger_path.parent
+    if parent.is_symlink() or not parent.is_dir() or parent.stat().st_uid != os.getuid():
+        raise ValueError("Action Claim ledger parent must be a current-user-owned non-symlink directory")
+    ledger_stat = ledger_path.stat()
+    if ledger_stat.st_uid != os.getuid() or ledger_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise ValueError("Action Claim ledger must be current-user-owned and not group/world-writable")
+    body = {
+        "schema": _ACTION_MEDIATION_SCHEMA,
+        "claim_sha256": claim["claim_sha256"],
+        "approval_sha256": approval_check["approval_sha256"],
+        "request_sha256": request["request_sha256"],
+        "binding_sha256": request["binding"]["binding_sha256"],
+        "capsule_sha256": request["binding"]["capsule_sha256"],
+        "invocation_sha256": request["binding"]["invocation_sha256"],
+        "host_measurement": measurement,
+        "host_measurement_sha256": measurement["host_measurement_sha256"],
+        "mediated_at_unix_ms": now_unix_ms,
+        "approval_expires_at_unix_ms": approval_check["approval"]["expires_at_unix_ms"],
+        "status": "ready",
+    }
+    body["mediation_sha256"] = _binding_sha256(body)
+    claim_row = (
+        claim["approval_sha256"], claim["request_sha256"], claim["challenge_sha256"],
+        claim["binding_sha256"], claim["capsule_sha256"], claim["invocation_sha256"],
+        claim["claimed_at_unix_ms"], claim["approval_expires_at_unix_ms"],
+        claim["claim_sha256"], claim["status"],
+    )
+    connection = None
+    try:
+        connection = sqlite3.connect(str(ledger_path), timeout=5, isolation_level=None)
+        opened_stat = ledger_path.stat()
+        if ledger_path.is_symlink() or opened_stat.st_dev != ledger_stat.st_dev or opened_stat.st_ino != ledger_stat.st_ino:
+            raise ValueError("Action Claim ledger identity changed during mediation open")
+        connection.execute("PRAGMA trusted_schema=OFF")
+        connection.execute("BEGIN IMMEDIATE")
+        claim_schema = connection.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (_ACTION_CLAIM_LEDGER_TABLE,)).fetchone()
+        if claim_schema != (_ACTION_CLAIM_LEDGER_SCHEMA,):
+            raise ValueError("Action Claim ledger table schema is not canonical")
+        connection.execute(_ACTION_MEDIATION_LEDGER_CREATE)
+        mediation_schema = connection.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (_ACTION_MEDIATION_LEDGER_TABLE,)).fetchone()
+        if mediation_schema != (_ACTION_MEDIATION_LEDGER_SCHEMA,):
+            raise ValueError("Action Mediation ledger table schema is not canonical")
+        if connection.execute("SELECT name FROM sqlite_master WHERE type IN ('trigger','view') LIMIT 1").fetchone():
+            raise ValueError("Action ledger must not contain triggers or views")
+        stored_claim = connection.execute(
+            "SELECT approval_sha256,request_sha256,challenge_sha256,binding_sha256,"
+            "capsule_sha256,invocation_sha256,claimed_at_unix_ms,approval_expires_at_unix_ms,claim_sha256,status "
+            "FROM action_claims_v0 WHERE claim_sha256=?", (claim["claim_sha256"],),
+        ).fetchone()
+        if stored_claim != claim_row:
+            raise ValueError("Action Claim is absent, terminal, or does not match the private ledger row")
+        connection.execute(
+            "INSERT INTO action_mediations_v0 (claim_sha256,approval_sha256,binding_sha256,invocation_sha256,"
+            "host_measurement_sha256,executable_sha256,environment_sha256,stdin_sha256,mediated_at_unix_ms,"
+            "approval_expires_at_unix_ms,mediation_sha256,status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                body["claim_sha256"], body["approval_sha256"], body["binding_sha256"], body["invocation_sha256"],
+                body["host_measurement_sha256"], measurement["executable"]["artifact_sha256"],
+                measurement["environment_sha256"], measurement["stdin"]["payload_sha256"],
+                body["mediated_at_unix_ms"], body["approval_expires_at_unix_ms"], body["mediation_sha256"], body["status"],
+            ),
+        )
+        connection.execute("COMMIT")
+    except sqlite3.IntegrityError as error:
+        if connection is not None and connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise ValueError("Action Claim was already mediated or the mediation ledger rejected it") from error
+    except (sqlite3.Error, ValueError) as error:
+        if connection is not None and connection.in_transaction:
+            connection.execute("ROLLBACK")
+        if isinstance(error, ValueError):
+            raise
+        raise ValueError("Action Mediation ledger failed: " + str(error)) from error
+    finally:
+        if connection is not None:
+            connection.close()
+    return body
+
+
+def _mediate_action_capsule_claim_v0(
+    approval, request, claim, manifest, tool_binding, tool_input, program_src,
+    wasm_bytes, builder_surface, builder_components, verifier_components,
+    entrypoint, invocation, environment_values, now_unix_ms, public_key_value, ledger_path,
+):
+    approval_check = _verify_action_capsule_approval_v2(
+        approval, request, manifest, tool_binding, tool_input, program_src,
+        wasm_bytes, builder_surface, builder_components, verifier_components,
+        entrypoint, invocation, now_unix_ms, public_key_value,
+    )
+    if not approval_check["valid"]:
+        return _action_mediation_validation(None, approval_check["findings"])
+    claim_findings = _action_claim_findings(claim, approval_check, request, now_unix_ms)
+    if claim_findings:
+        return _action_mediation_validation(None, claim_findings)
+    try:
+        measurement = _action_mediation_measure_host(request["binding"], tool_input, environment_values)
+        mediation = _action_mediation_once(claim, approval_check, request, measurement, now_unix_ms, ledger_path)
+    except (OSError, ValueError) as error:
+        return _action_mediation_validation(None, [{"path": "host", "code": "action-host-mediation-failed", "message": str(error)}])
+    return _action_mediation_validation(mediation, [])
+
+
+def mediate_action_capsule_claim_v0(
+    approval, request, claim, manifest, tool_binding, tool_input, program_src,
+    wasm_bytes, builder_surface, builder_components, verifier_components,
+    entrypoint, invocation, environment_values, now_unix_ms,
+):
+    """Remeasure one claimed exact invocation without executing its process."""
+    try:
+        public_key = _action_approval_load_public_key()
+    except ValueError as error:
+        return _action_mediation_validation(None, [{"path": "public_key", "code": "public-key-unavailable", "message": str(error)}])
+    return _mediate_action_capsule_claim_v0(
+        approval, request, claim, manifest, tool_binding, tool_input, program_src,
+        wasm_bytes, builder_surface, builder_components, verifier_components,
+        entrypoint, invocation, environment_values, now_unix_ms, public_key, _action_claim_ledger_path(),
+    )
+
+
 def _emit_verdict_json(verdict):
     print(json.dumps(verdict, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
 
@@ -6884,7 +7427,7 @@ def build_about():
     return {
         "schema": "loom-about/v1",
         "language": "LOOM",
-        "citadel_checks": 492,
+        "citadel_checks": 493,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "i31_bits": INT_BITS,
         "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],

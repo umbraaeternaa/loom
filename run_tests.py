@@ -2080,7 +2080,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             "actions_observed": ["read", "write", "test", "git-commit"],
             "evidence": [
                 {"kind": "syntax", "status": "pass", "detail": "PASS syntax"},
-                {"kind": "citadel", "status": "pass", "detail": "492/492"},
+                {"kind": "citadel", "status": "pass", "detail": "493/493"},
                 {"kind": "docs-parity", "status": "pass", "detail": "PASS docs parity"},
                 {"kind": "git-clean", "status": "pass", "detail": "clean"},
                 {"kind": "git-sync", "status": "pass", "detail": "HEAD == origin/main"},
@@ -4198,6 +4198,247 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         )
         ok += action_claim_v0_ok
         print(f"  {'ok  ' if action_claim_v0_ok else 'FAIL'} gate: atomic one-use Capsule Claim v0")
+
+        def build_host_action(host_root, executable_path=None, cwd_path=None):
+            adapter_bytes = b"operator-gate-adapter-v0\n"
+            executable_path = executable_path or (host_root / "operator-gate")
+            cwd_path = cwd_path or (host_root / "workspace")
+            if not executable_path.exists() and not executable_path.is_symlink():
+                executable_path.write_bytes(adapter_bytes)
+                executable_path.chmod(0o700)
+            if not cwd_path.exists() and not cwd_path.is_symlink():
+                cwd_path.mkdir(mode=0o700)
+            descriptor = json.loads(json.dumps(invocation_descriptor))
+            descriptor["adapter"]["executable_uri"] = executable_path.as_uri()
+            descriptor["adapter"]["artifact_sha256"] = hashlib.sha256(adapter_bytes).hexdigest()
+            descriptor["working_directory_uri"] = cwd_path.as_uri()
+            binding_result = _loom.build_action_invocation_binding_v0(
+                semantics_manifest, semantics_tool, semantics_input, semantics_src,
+                semantics_wasm, compiler_components, "main", descriptor,
+            )
+            request = _loom.build_action_approval_request_v2(binding_result["binding"], "4" * 64)["request"]
+            body = dict(
+                action_approval_body,
+                request_sha256=request["request_sha256"],
+                challenge_sha256=request["challenge"]["challenge_sha256"],
+                binding_sha256=binding_result["binding"]["binding_sha256"],
+                capsule_sha256=binding_result["binding"]["capsule_sha256"],
+                invocation_sha256=binding_result["binding"]["invocation_sha256"],
+            )
+            return adapter_bytes, descriptor, binding_result["binding"], request, sign_approval(body)
+
+        def mediate_action_v0(ledger_path, candidate_approval, candidate_request, candidate_claim,
+                              candidate_invocation, environment_values=None, now=action_issued + 2):
+            return _loom._mediate_action_capsule_claim_v0(
+                candidate_approval, candidate_request, candidate_claim,
+                semantics_manifest, semantics_tool, semantics_input, semantics_src,
+                semantics_wasm, running_surface, compiler_components, compiler_components,
+                "main", candidate_invocation,
+                {"LOOM_MODE": "bounded", "API_TOKEN": "not-embedded-secret"}
+                if environment_values is None else environment_values,
+                now, test_key, ledger_path,
+            )
+
+        with tempfile.TemporaryDirectory() as td:
+            mediation_root = Path(td).resolve()
+            host_bytes, host_invocation, host_binding, host_request, host_approval = build_host_action(mediation_root)
+            mediation_ledger = mediation_root / "ledger" / "operator_approvals.sqlite3"
+            host_claimed = claim_action_v0(
+                mediation_ledger, candidate_approval=host_approval,
+                candidate_request=host_request, candidate_invocation=host_invocation,
+            )
+            host_claim = host_claimed["claim"]
+            mediated = mediate_action_v0(
+                mediation_ledger, host_approval, host_request, host_claim, host_invocation,
+            )
+            mediation = mediated["mediation"]
+            validated_mediation = _loom.validate_action_host_mediation_v0(mediation)
+            tampered_mediation = json.loads(json.dumps(mediation))
+            tampered_mediation["host_measurement"]["executable"]["artifact_sha256"] = "0" * 64
+            rejected_tampered_mediation = _loom.validate_action_host_mediation_v0(tampered_mediation)
+            noncanonical_mediation = json.loads(json.dumps(mediation))
+            noncanonical_mediation["host_measurement"]["environment"] = [set()]
+            rejected_noncanonical_mediation = _loom.validate_action_host_mediation_v0(noncanonical_mediation)
+            mediated_replay = mediate_action_v0(
+                mediation_ledger, host_approval, host_request, host_claim, host_invocation,
+            )
+            measurement = mediation["host_measurement"]
+            measurement_body = dict(measurement)
+            measurement_hash = measurement_body.pop("host_measurement_sha256")
+            mediation_body = dict(mediation)
+            mediation_hash = mediation_body.pop("mediation_sha256")
+            with sqlite3.connect(mediation_ledger) as connection:
+                mediation_row = connection.execute(
+                    "SELECT claim_sha256,approval_sha256,binding_sha256,invocation_sha256,"
+                    "host_measurement_sha256,executable_sha256,environment_sha256,stdin_sha256,"
+                    "mediated_at_unix_ms,approval_expires_at_unix_ms,mediation_sha256,status "
+                    "FROM action_mediations_v0",
+                ).fetchone()
+                mediation_schema = connection.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='action_mediations_v0'",
+                ).fetchone()
+
+            wrong_env_ledger = mediation_root / "wrong-env" / "operator_approvals.sqlite3"
+            wrong_env_claim = claim_action_v0(
+                wrong_env_ledger, candidate_approval=host_approval,
+                candidate_request=host_request, candidate_invocation=host_invocation,
+            )["claim"]
+            rejected_wrong_env = mediate_action_v0(
+                wrong_env_ledger, host_approval, host_request, wrong_env_claim, host_invocation,
+                {"LOOM_MODE": "bounded", "API_TOKEN": "changed"},
+            )
+
+            changed_executable_ledger = mediation_root / "changed-executable" / "operator_approvals.sqlite3"
+            changed_executable_claim = claim_action_v0(
+                changed_executable_ledger, candidate_approval=host_approval,
+                candidate_request=host_request, candidate_invocation=host_invocation,
+            )["claim"]
+            (mediation_root / "operator-gate").write_bytes(b"changed-after-approval\n")
+            rejected_changed_executable = mediate_action_v0(
+                changed_executable_ledger, host_approval, host_request,
+                changed_executable_claim, host_invocation,
+            )
+            (mediation_root / "operator-gate").write_bytes(host_bytes)
+            (mediation_root / "operator-gate").chmod(0o700)
+
+            forged_claim = json.loads(json.dumps(host_claim))
+            forged_claim["claim_sha256"] = "0" * 64
+            rejected_forged_claim = mediate_action_v0(
+                mediation_ledger, host_approval, host_request, forged_claim, host_invocation,
+            )
+            missing_ledger = mediation_root / "missing" / "operator_approvals.sqlite3"
+            rejected_missing_ledger = mediate_action_v0(
+                missing_ledger, host_approval, host_request, host_claim, host_invocation,
+            )
+            missing_ledger_absent = not missing_ledger.exists()
+            rejected_expired_mediation = mediate_action_v0(
+                mediation_ledger, host_approval, host_request, host_claim, host_invocation,
+                now=action_approval_body["expires_at_unix_ms"],
+            )
+
+            symlink_target = mediation_root / "symlink-target"
+            symlink_target.write_bytes(host_bytes)
+            symlink_target.chmod(0o700)
+            symlink_executable = mediation_root / "symlink-adapter"
+            symlink_executable.symlink_to(symlink_target)
+            _, symlink_invocation, _, symlink_request, symlink_approval = build_host_action(
+                mediation_root, executable_path=symlink_executable,
+            )
+            symlink_ledger = mediation_root / "symlink-ledger" / "operator_approvals.sqlite3"
+            symlink_claim = claim_action_v0(
+                symlink_ledger, candidate_approval=symlink_approval,
+                candidate_request=symlink_request, candidate_invocation=symlink_invocation,
+            )["claim"]
+            rejected_symlink_host = mediate_action_v0(
+                symlink_ledger, symlink_approval, symlink_request, symlink_claim, symlink_invocation,
+            )
+
+            trigger_ledger = mediation_root / "trigger" / "operator_approvals.sqlite3"
+            trigger_claim = claim_action_v0(
+                trigger_ledger, candidate_approval=host_approval,
+                candidate_request=host_request, candidate_invocation=host_invocation,
+            )["claim"]
+            with sqlite3.connect(trigger_ledger) as connection:
+                connection.execute(
+                    "CREATE TRIGGER reject_claim_update BEFORE UPDATE ON action_claims_v0 BEGIN SELECT RAISE(ABORT,'blocked'); END"
+                )
+            rejected_trigger_ledger = mediate_action_v0(
+                trigger_ledger, host_approval, host_request, trigger_claim, host_invocation,
+            )
+
+            concurrent_mediation_ledger = mediation_root / "concurrent" / "operator_approvals.sqlite3"
+            concurrent_mediation_claim = claim_action_v0(
+                concurrent_mediation_ledger, candidate_approval=host_approval,
+                candidate_request=host_request, candidate_invocation=host_invocation,
+            )["claim"]
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                concurrent_mediations = list(pool.map(
+                    lambda _: mediate_action_v0(
+                        concurrent_mediation_ledger, host_approval, host_request,
+                        concurrent_mediation_claim, host_invocation,
+                    ),
+                    range(8),
+                ))
+            with sqlite3.connect(concurrent_mediation_ledger) as connection:
+                concurrent_mediation_rows = connection.execute(
+                    "SELECT COUNT(*) FROM action_mediations_v0",
+                ).fetchone()[0]
+
+            public_mediation_ledger = mediation_root / "public" / "operator_approvals.sqlite3"
+            public_mediation_claim = claim_action_v0(
+                public_mediation_ledger, candidate_approval=host_approval,
+                candidate_request=host_request, candidate_invocation=host_invocation,
+            )["claim"]
+            public_mediation_key = mediation_root / "public-operator-key.json"
+            public_mediation_key.write_text(json.dumps(test_key), encoding="utf-8")
+            public_mediation_key.chmod(0o600)
+            original_mediation_key = getattr(public_claim_owner, public_claim_key_name)
+            original_mediation_ledger = getattr(public_claim_owner, public_claim_ledger_name)
+            setattr(public_claim_owner, public_claim_key_name, public_mediation_key)
+            setattr(public_claim_owner, public_claim_ledger_name, public_mediation_ledger)
+            try:
+                public_mediation = _loom.mediate_action_capsule_claim_v0(
+                    host_approval, host_request, public_mediation_claim,
+                    semantics_manifest, semantics_tool, semantics_input, semantics_src,
+                    semantics_wasm, running_surface, compiler_components, compiler_components,
+                    "main", host_invocation,
+                    {"LOOM_MODE": "bounded", "API_TOKEN": "not-embedded-secret"},
+                    action_issued + 2,
+                )
+            finally:
+                setattr(public_claim_owner, public_claim_key_name, original_mediation_key)
+                setattr(public_claim_owner, public_claim_ledger_name, original_mediation_ledger)
+
+        action_mediation_v0_ok = (
+            mediated["schema"] == "loom-action-host-mediation-validation/v0"
+            and mediated["valid"] is True and mediated["advisory"] is False
+            and mediated["authorization"] == "bounded-execution-required"
+            and mediation["schema"] == "loom-action-host-mediation/v0"
+            and mediation["claim_sha256"] == host_claim["claim_sha256"]
+            and mediation["binding_sha256"] == host_binding["binding_sha256"]
+            and mediation["status"] == "ready"
+            and validated_mediation["valid"] is True
+            and validated_mediation["mediation"] == mediation
+            and rejected_tampered_mediation["valid"] is False
+            and any(item["code"] == "measurement-hash-mismatch" for item in rejected_tampered_mediation["findings"])
+            and rejected_noncanonical_mediation["valid"] is False
+            and any(item["code"] == "non-canonical-environment" for item in rejected_noncanonical_mediation["findings"])
+            and measurement["schema"] == "loom-action-host-measurement/v0"
+            and measurement["executable"]["artifact_sha256"] == hashlib.sha256(host_bytes).hexdigest()
+            and measurement["executable"]["identity"]["kind"] == "regular-file"
+            and measurement["working_directory"]["identity"]["kind"] == "directory"
+            and measurement["controls"] == {
+                "timeout_ms": 30000, "shell": "denied", "network": "denied", "credentials": "none",
+            }
+            and measurement["execution_obligations"] == list(_loom._ACTION_MEDIATION_OBLIGATIONS)
+            and measurement_hash == hashlib.sha256(canonical(measurement_body).encode()).hexdigest()
+            and mediation_hash == hashlib.sha256(canonical(mediation_body).encode()).hexdigest()
+            and "not-embedded-secret" not in json.dumps(mediation)
+            and mediation_row == (
+                mediation["claim_sha256"], mediation["approval_sha256"],
+                mediation["binding_sha256"], mediation["invocation_sha256"],
+                mediation["host_measurement_sha256"],
+                measurement["executable"]["artifact_sha256"], measurement["environment_sha256"],
+                measurement["stdin"]["payload_sha256"], mediation["mediated_at_unix_ms"],
+                mediation["approval_expires_at_unix_ms"], mediation["mediation_sha256"], "ready",
+            )
+            and mediation_schema == (_loom._ACTION_MEDIATION_LEDGER_SCHEMA,)
+            and mediated_replay["valid"] is False
+            and rejected_wrong_env["valid"] is False
+            and rejected_changed_executable["valid"] is False
+            and rejected_forged_claim["valid"] is False
+            and any(item["code"] == "claim-hash-mismatch" for item in rejected_forged_claim["findings"])
+            and rejected_missing_ledger["valid"] is False and missing_ledger_absent
+            and rejected_expired_mediation["valid"] is False
+            and any(item["code"] == "approval-expired" for item in rejected_expired_mediation["findings"])
+            and rejected_symlink_host["valid"] is False
+            and rejected_trigger_ledger["valid"] is False
+            and sum(result["valid"] for result in concurrent_mediations) == 1
+            and concurrent_mediation_rows == 1
+            and public_mediation["valid"] is True
+        )
+        ok += action_mediation_v0_ok
+        print(f"  {'ok  ' if action_mediation_v0_ok else 'FAIL'} gate: Trusted Host Mediation v0")
         integrated_observation = {
             "schema": "loom-gate-observation/v1", "result": "completed",
             "repositories": [{"root": "/Users/macbook/Projects/loom", "before_head": "4281c7b", "after_head": "f" * 40}],
@@ -4550,7 +4791,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 492
+            and about_json["citadel_checks"] == 493
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
@@ -4779,7 +5020,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 492/492 citadel checks" in quick
+            and "PASS -- 493/493 citadel checks" in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
             and "loom examples" in quick
@@ -4889,7 +5130,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "492-action-claim-v0")' in play
+            and 'bundleUrl.searchParams.set("v", "493-action-host-mediation-v0")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -5506,7 +5747,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 492/492 citadel checks" in rdoc
+            and "PASS -- 493/493 citadel checks" in rdoc
             and "loom examples --format json" in rdoc
             and "loom doctor --dry-run --format json" in rdoc
             and "python3 verify_docs_parity.py" in rdoc
@@ -5567,7 +5808,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 139   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 140   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

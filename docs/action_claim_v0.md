@@ -4,7 +4,7 @@ Status: implemented, normative, atomic, one-use, exact-invocation-bound, and
 non-executing.
 
 Capsule Claim v0 is the state transition between a valid short-lived Action
-Approval v2 and future trusted-host mediation. It reserves one exact approval
+Approval v2 and Trusted Host Mediation v0. It reserves one exact approval
 in a private local ledger before any process may start. A successful claim
 reports `authorization: "host-mediation-required"`; it is not permission for an
 agent process to invoke the target directly.
@@ -90,11 +90,12 @@ schemas are unchanged; an Approval v2 cannot be consumed through the v1 API.
 
 ## Honest boundary
 
-Claim v0 does not remeasure executable bytes or environment values at the last
-possible host boundary, install resource limits, obtain credentials, execute a
-process, update a claim to a terminal state, collect observation, or issue an
-Action Capsule Result. Those belong to host mediation, bounded execution, and
-Result v0.
+Claim v0 does not remeasure executable bytes or environment values, install
+resource limits, obtain credentials, execute a process, update a claim to a
+terminal state, collect observation, or issue an Action Capsule Result. Trusted
+Host Mediation v0 now owns the first host measurement and one-use redacted
+handoff. Bounded execution, terminal state transition, and Result v0 remain
+separate.
 
 The standalone browser bundle carries the same API and semantics for parity,
 but imports SQLite only when claim is invoked. Browser/Pyodide loading and the

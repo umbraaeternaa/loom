@@ -12,8 +12,8 @@ and denied shell/network modes.
 
 Approval alone does not start the process. A valid result reports
 `authorization: "claim-required"`. Capsule Claim v0 is implemented separately
-and must atomically reserve the one-use approval; trusted host mediation must
-still remeasure host inputs before any invocation.
+and must atomically reserve the one-use approval; Trusted Host Mediation v0 then
+remeasures host inputs before any bounded invocation.
 
 ## Public API
 
@@ -125,6 +125,6 @@ and signature before returning the approval hash.
 Approval v2 is additive. Existing Gate Approval v1, Gate claim/executor,
 Action Capsule v0, Invocation Binding v0, Compiler Evidence, Receipt, Workflow,
 CLI, Playground, MCP, A2A, WASI, and host-executor schemas are unchanged.
-Capsule Claim v0 is implemented as a separate additive stateful contract.
-Executable/environment remeasurement, host mediation, execution, and terminal
-Action Capsule Result v0 remain separate future contracts.
+Capsule Claim v0 and Trusted Host Mediation v0 are implemented as separate
+additive stateful contracts. Bounded execution and terminal Action Capsule
+Result v0 remain separate future contracts.

@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 492 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 493 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 492/492 citadel checks
+PASS — 493/493 citadel checks
 ```
 
 ## The idea in one screen
@@ -160,7 +160,13 @@ rebuilds the Invocation Binding from all source/compiler inputs and reports
 [`Capsule Claim v0`](docs/action_claim_v0.md) then re-verifies that complete
 approval and atomically reserves its hash in a private SQLite ledger. Concurrent
 or replayed claims fail; success reports `host-mediation-required` and still
-does not remeasure the host, obtain credentials, or execute the process.
+does not itself execute the process.
+[`Trusted Host Mediation v0`](docs/action_host_mediation_v0.md) now performs the
+first real host-boundary measurement: no-follow executable and cwd traversal,
+streamed executable hashing, exact committed environment verification,
+canonical stdin reconstruction, Claim-ledger proof, and one-use atomic
+mediation. It stores no raw secrets and returns only
+`bounded-execution-required`; the future executor must remeasure again at spawn.
 
 Certified recursion can also use [`Proven Value Bounds v1`](docs/proven_value_bounds_v1.md):
 the checker derives conservative i31 and list-length upper bounds through
