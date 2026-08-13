@@ -930,7 +930,7 @@ def compile_wasm(program_src, frontend):
         si = len(params) + len(seen)                        # one shared scrutinee temp per function (used by match)
         nloc = len(seen) + (1 if flags["match"] else 0)
         ctx.current_fn = t[1]
-        funcs.append((t[1], len(params), nloc, _emit_wasm(ctx, fn[2:][-1] if fn[2:] else 0, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, set(frontend.pname(p) for p in fn[1] if frontend.platent(p) is not None), None, None) + b"\x0b", params))
+        funcs.append((t[1], len(params), nloc, _emit_wasm_seq(ctx, fn[2:] or [0], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, set(frontend.pname(p) for p in fn[1] if frontend.platent(p) is not None), None, None) + b"\x0b", params))
     lambda_funcs = []
     for spec in order:
         ctx.current_fn = None
@@ -943,7 +943,7 @@ def compile_wasm(program_src, frontend):
         si = len(params) + len(seen)
         nloc = len(seen) + (1 if flags["match"] else 0)
         lambda_callable = set(spec["callable"]) | {frontend.pname(p) for p in fn[1] if frontend.platent(p) is not None}
-        lambda_funcs.append((spec["name"], len(params), nloc, _emit_wasm(ctx, fn[2:][-1] if fn[2:] else 0, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, lambda_callable, None, None) + b"\x0b", params, spec))
+        lambda_funcs.append((spec["name"], len(params), nloc, _emit_wasm_seq(ctx, fn[2:] or [0], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, lambda_callable, None, None) + b"\x0b", params, spec))
     heap_static_g, heap_record_g, heap_list_g = 4, 5, 6
     heap_variant_g, heap_effect_g, heap_resource_g = 7, 8, 9
     def _bump_global(g): return b"\x23" + _leb_u(g) + _wasm_const(1) + b"\x6a\x24" + _leb_u(g)
@@ -1360,6 +1360,15 @@ def emit_wat(program_src, frontend):
                 o += depth_take()
             return o + [ind + "call $" + h]
         raise frontend.error("wat: form not yet in the WASM backend: " + str(h))
+    def w_seq(nodes, ind, handled_effs=None, with_handlers=None, callable_env=None):
+        seq_nodes = nodes or [0]
+        out = []
+        for i, node in enumerate(seq_nodes):
+            out += w(node, ind, handled_effs, with_handlers, callable_env)
+            if i + 1 < len(seq_nodes):
+                out += [ind + "drop"]
+        return out
+
     bodies = []
     for t in ds:
         ctx.current_fn = t[1]
@@ -1370,7 +1379,7 @@ def emit_wat(program_src, frontend):
         if flags["match"]: locs = (locs + " " if locs else "") + "(local $s i32)"
         head = "  (func $" + t[1] + ((" " + sig) if sig else "") + " (result i32)" + ((" " + locs) if locs else "")
         callable_env = set(frontend.pname(p) for p in fn[1] if frontend.platent(p) is not None)
-        bodies.append([head] + w(fn[2:][-1] if fn[2:] else 0, "    ", None, None, callable_env)
+        bodies.append([head] + w_seq(fn[2:], "    ", None, None, callable_env)
                       + ["  )", '  (export "' + t[1] + '" (func $' + t[1] + "))"])
     for spec in order:
         ctx.current_fn = None
@@ -1381,7 +1390,7 @@ def emit_wat(program_src, frontend):
         if flags["match"]: locs = (locs + " " if locs else "") + "(local $s i32)"
         head = "  (func $" + spec["name"] + ((" " + sig) if sig else "") + " (result i32)" + ((" " + locs) if locs else "")
         lambda_callable = set(spec["callable"]) | {frontend.pname(p) for p in fn[1] if frontend.platent(p) is not None}
-        bodies.append([head] + w(fn[2:][-1] if fn[2:] else 0, "    ", None, None, lambda_callable) + ["  )"])
+        bodies.append([head] + w_seq(fn[2:], "    ", None, None, lambda_callable) + ["  )"])
     receipt_json = ctx.trust_receipt.decode("utf-8")
     receipt_v2_json = ctx.trust_receipt_v2.decode("utf-8")
     lines = ["(module", "  ;; custom section loom.trust.v1: checked static trust/provenance receipt",

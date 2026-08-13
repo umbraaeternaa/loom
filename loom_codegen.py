@@ -18,6 +18,26 @@ def _emit_seq(frontend, nodes):
     if len(parts) == 1: return parts[0]
     return "(" + ",".join(parts) + ")[-1]"
 
+def _transparent_body(node):
+    h = node[0]
+    if h in ("resource", "prov", "declassify"):
+        return node[2:]
+    if h == "by":
+        return node[3:]
+    if h in ("recall", "repro"):
+        return node[1:]
+    if h == "trust":
+        spec = node[1] if len(node) > 1 else None
+        if isinstance(spec, int):
+            return node[2:]
+        if isinstance(spec, list) and spec and spec[0] == "roles":
+            body = node[2:]
+            while body and isinstance(body[0], list) and len(body[0]) >= 3 and body[0][0] == "sub":
+                body = body[1:]
+            return body
+        return node[1:]
+    return None
+
 def _emit(frontend, node):
     if isinstance(node, int): return str(node)
     if type(node) is str: return repr(node)                            # string literal
@@ -47,7 +67,7 @@ def _emit(frontend, node):
     if h == "<": return f"(1 if ({_emit(frontend, node[1])}<{_emit(frontend, node[2])}) else 0)"
     if h == ">": return f"(1 if ({_emit(frontend, node[1])}>{_emit(frontend, node[2])}) else 0)"
     if h == "if": return f"({_emit(frontend, node[2])} if ({_emit(frontend, node[1])}!=0) else {_emit(frontend, node[3])})"
-    if h == "let": return f"(lambda {node[1][0]}: {_emit(frontend, node[2:][-1])})({_emit(frontend, node[1][1])})"
+    if h == "let": return f"(lambda {node[1][0]}: {_emit_seq(frontend, node[2:])})({_emit(frontend, node[1][1])})"
     if h == "list": return "[" + ",".join(_emit(frontend, a) for a in node[1:]) + "]"
     if h == "cons": return f"([{_emit(frontend, node[1])}]+{_emit(frontend, node[2])})"
     if h == "head": return f"({_emit(frontend, node[1])}[0])"
@@ -55,15 +75,12 @@ def _emit(frontend, node):
     if h == "empty": return f"(1 if len({_emit(frontend, node[1])})==0 else 0)"
     if h == "record": return "{" + ",".join(f"{fld[0]!r}:{_emit(frontend, fld[1])}" for fld in node[1:] if isinstance(fld, list)) + "}"
     if h == "get": return f"({_emit(frontend, node[1])}[{node[2]!r}])"
-    if h == "fn": return f"(lambda {','.join(frontend.pname(p) for p in node[1])}: {_emit(frontend, node[2:][-1])})"
+    if h == "fn": return f"(lambda {','.join(frontend.pname(p) for p in node[1])}: {_emit_seq(frontend, node[2:])})"
     if h == "depthN": return f"_depth({node[1]}, lambda: {_emit_seq(frontend, node[2:])})"
     if h == 'seamN': return f"_metered_seam({sorted(set(node[2])-{'Pure'})!r}, {node[1]}, lambda: {_emit_seq(frontend, frontend.roleclauses(node[3:])[3])})"
-    if h in ("seam", "seam1"): return f"_seam({sorted(set(node[1])-{'Pure'})!r}, lambda: {_emit(frontend, node[2:][-1])})"   # seam SANDBOXES the body: push its granted row so foreign/ffi code is cap-gated exactly like the interpreter
-    if h in ("resource", "prov", "declassify"): return _emit(frontend, node[2:][-1])   # value-transparent (effects/prov are static layers)
-    if h == "by": return _emit(frontend, node[3:][-1])                           # value-transparent (role tag is a static layer)
-    if h == "recall": return _emit(frontend, node[1:][-1])  # value-transparent (persistence taint is a static layer)
-    if h == "repro": return _emit(frontend, node[1:][-1])  # value-transparent (reproducibility is a static-only assertion)
-    if h == "trust": return _emit(frontend, node[1:][-1])                        # value-transparent (the trust gate is a static check)
+    if h in ("seam", "seam1"): return f"_seam({sorted(set(node[1])-{'Pure'})!r}, lambda: {_emit_seq(frontend, frontend.roleclauses(node[2:])[3])})"   # seam SANDBOXES the full body under one capability frame
+    transparent = _transparent_body(node)
+    if transparent is not None: return _emit_seq(frontend, transparent)
     if h == "use": return "'<used>'"
     if h == "print": return f"_p({_emit(frontend, node[1])})"                     # IO: print AND return the value (as the interpreter)
     if h == "variant": return f"({node[1]!r},{_emit(frontend, node[2])})"           # tagged value (Tag, payload) — mirrors the interpreter tuple
@@ -77,11 +94,12 @@ def _emit(frontend, node):
     if h == "net": return f"_net({_emit(frontend, node[1])})"                       # effect OP -> prelude that mirrors the interpreter
     if h == "alloc": return f"_alloc({_emit(frontend, node[1])})" if len(node) > 1 else "[]"
     if h == "rand": return "_rand()"
-    if h == "handle": return f"_handle(lambda: {_emit(frontend, node[2:][-1])})" if "IO" in node[1] else _emit(frontend, node[2:][-1])
+    if h == "handle": return f"_handle(lambda: {_emit_seq(frontend, node[2:])})" if "IO" in node[1] else _emit_seq(frontend, node[2:])
     if h == "with":
         op = frontend.op.get(node[1])
-        return f"_with({op!r}, {_emit(frontend, node[2])}, lambda: {_emit(frontend, node[3:][-1])})" if op else _emit(frontend, node[3:][-1])
+        return f"_with({op!r}, {_emit(frontend, node[2])}, lambda: {_emit_seq(frontend, node[3:])})" if op else _emit_seq(frontend, node[3:])
     if h == "ffi": return f"_ffi({node[1]!r}, [{','.join(_emit(frontend, a) for a in node[2:])}])"   # foreign call via the emitted registry; cap-gated to mirror the interpreter
+    if isinstance(h, list): return f"({_emit(frontend, h)})(" + ",".join(_emit(frontend, a) for a in node[1:]) + ")"
     return f"{h}(" + ",".join(_emit(frontend, a) for a in node[1:]) + ")"          # call: a user fn, or a closure-valued name
 
 def compile_py(program_src, frontend):
@@ -116,7 +134,7 @@ def compile_py(program_src, frontend):
              "def _ffi(name, args):\n    _meter_take('FFI')\n    return _FOREIGN[name](args)"]   # FFI codegen: cap stack (seam SANDBOX) + foreign registry -> ffi mirrors the interpreter (foreign I/O fires only if its seam granted it)
     for top in program:
         if isinstance(top, list) and top and top[0] == "defx":
-            fn = top[3]; ps = ",".join(frontend.pname(p) for p in fn[1]); body = _emit(frontend, fn[2:][-1]) if fn[2:] else "None"
+            fn = top[3]; ps = ",".join(frontend.pname(p) for p in fn[1]); body = _emit_seq(frontend, fn[2:])
             private = "__loom_body_" + str(top[1])
             lines.append(f"def {private}({ps}): return {body}")
             forwarded = ",".join(frontend.pname(p) for p in fn[1])
@@ -172,7 +190,7 @@ def _emit_js(frontend, node):
     if h == "<": return f"(({_emit_js(frontend, node[1])}<{_emit_js(frontend, node[2])})?1:0)"
     if h == ">": return f"(({_emit_js(frontend, node[1])}>{_emit_js(frontend, node[2])})?1:0)"
     if h == "if": return f"(({_emit_js(frontend, node[1])}!==0)?{_emit_js(frontend, node[2])}:{_emit_js(frontend, node[3])})"
-    if h == "let": return f"(({node[1][0]})=>{_emit_js(frontend, node[2:][-1])})({_emit_js(frontend, node[1][1])})"
+    if h == "let": return f"(({node[1][0]})=>{_emit_js_seq(frontend, node[2:])})({_emit_js(frontend, node[1][1])})"
     if h == "list": return "[" + ",".join(_emit_js(frontend, a) for a in node[1:]) + "]"
     if h == "cons": return f"([{_emit_js(frontend, node[1])}].concat({_emit_js(frontend, node[2])}))"
     if h == "head": return f"({_emit_js(frontend, node[1])}[0])"
@@ -180,15 +198,12 @@ def _emit_js(frontend, node):
     if h == "empty": return f"(({_emit_js(frontend, node[1])}.length===0)?1:0)"
     if h == "record": return "({" + ",".join(f"{fld[0]!r}:{_emit_js(frontend, fld[1])}" for fld in node[1:] if isinstance(fld, list)) + "})"
     if h == "get": return f"({_emit_js(frontend, node[1])}[{node[2]!r}])"
-    if h == "fn": return f"(({','.join(frontend.pname(p) for p in node[1])})=>{_emit_js(frontend, node[2:][-1])})"
+    if h == "fn": return f"(({','.join(frontend.pname(p) for p in node[1])})=>{_emit_js_seq(frontend, node[2:])})"
     if h == "depthN": return f"_depth({node[1]}, ()=>({_emit_js_seq(frontend, node[2:])}))"
     if h == 'seamN': return f"_metered_seam({sorted(set(node[2])-{'Pure'})!r}, {node[1]}, ()=>({_emit_js_seq(frontend, frontend.roleclauses(node[3:])[3])}))"
-    if h in ("seam", "seam1"): return f"_seam({sorted(set(node[1])-{'Pure'})!r}, ()=>({_emit_js(frontend, node[2:][-1])}))"   # seam SANDBOXES the body (JS): cap-gate foreign code like the interpreter
-    if h in ("resource", "prov", "declassify"): return _emit_js(frontend, node[2:][-1])
-    if h == "by": return _emit_js(frontend, node[3:][-1])
-    if h == "recall": return _emit_js(frontend, node[1:][-1])  # value-transparent (persistence taint is a static layer)
-    if h == "repro": return _emit_js(frontend, node[1:][-1])  # value-transparent (reproducibility is a static-only assertion)
-    if h == "trust": return _emit_js(frontend, node[1:][-1])
+    if h in ("seam", "seam1"): return f"_seam({sorted(set(node[1])-{'Pure'})!r}, ()=>({_emit_js_seq(frontend, frontend.roleclauses(node[2:])[3])}))"   # seam SANDBOXES the full body under one capability frame
+    transparent = _transparent_body(node)
+    if transparent is not None: return _emit_js_seq(frontend, transparent)
     if h == "use": return "'<used>'"
     if h == "print": return f"_p({_emit_js(frontend, node[1])})"                  # IO: print AND return the value
     if h == "variant": return f"([{node[1]!r},{_emit_js(frontend, node[2])}])"      # tagged value [Tag, payload]
@@ -202,11 +217,12 @@ def _emit_js(frontend, node):
     if h == "net": return f"_net({_emit_js(frontend, node[1])})"
     if h == "alloc": return f"_alloc({_emit_js(frontend, node[1])})" if len(node) > 1 else "[]"
     if h == "rand": return "_rand()"
-    if h == "handle": return f"_handle(()=>({_emit_js(frontend, node[2:][-1])}))" if "IO" in node[1] else _emit_js(frontend, node[2:][-1])
+    if h == "handle": return f"_handle(()=>({_emit_js_seq(frontend, node[2:])}))" if "IO" in node[1] else _emit_js_seq(frontend, node[2:])
     if h == "with":
         op = frontend.op.get(node[1])
-        return f"_with({op!r}, {_emit_js(frontend, node[2])}, ()=>({_emit_js(frontend, node[3:][-1])}))" if op else _emit_js(frontend, node[3:][-1])
+        return f"_with({op!r}, {_emit_js(frontend, node[2])}, ()=>({_emit_js_seq(frontend, node[3:])}))" if op else _emit_js_seq(frontend, node[3:])
     if h == "ffi": return f"_ffi({node[1]!r}, [{','.join(_emit_js(frontend, a) for a in node[2:])}])"   # foreign call via the emitted registry (JS); cap-gated to mirror the interpreter
+    if isinstance(h, list): return f"({_emit_js(frontend, h)})(" + ",".join(_emit_js(frontend, a) for a in node[1:]) + ")"
     return f"{h}(" + ",".join(_emit_js(frontend, a) for a in node[1:]) + ")"
 
 def compile_js(program_src, frontend):
@@ -240,7 +256,7 @@ def compile_js(program_src, frontend):
              "function _ffi(name,args){ _meter_take('FFI'); return _FOREIGN[name](args); }"]  # FFI codegen (JS): cap stack + foreign registry -> ffi mirrors the interpreter
     for top in program:
         if isinstance(top, list) and top and top[0] == "defx":
-            fn = top[3]; ps = ",".join(frontend.pname(p) for p in fn[1]); body = _emit_js(frontend, fn[2:][-1]) if fn[2:] else "null"
+            fn = top[3]; ps = ",".join(frontend.pname(p) for p in fn[1]); body = _emit_js_seq(frontend, fn[2:])
             private = "__loom_body_" + str(top[1])
             lines.append(f"function {private}({ps}){{ return {body}; }}")
             forwarded = ",".join(frontend.pname(p) for p in fn[1])

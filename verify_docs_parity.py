@@ -45,7 +45,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "494-bounded-execution-v0")',
+        'bundleUrl.searchParams.set("v", "495-sequence-semantics-v0")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -146,10 +146,12 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "494 self-verifying checks",
-        ">494</div>",
+        "495 self-verifying checks",
+        ">495</div>",
     )
     forbidden = (
+        "494 self-verifying checks",
+        ">494</div>",
         "456 self-verifying checks",
         ">456</div>",
         "415 self-verifying checks",

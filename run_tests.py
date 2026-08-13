@@ -1435,6 +1435,45 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             ok += 1; print("  ok   backend(JS): compile_js emits source (node absent -> exec check skipped)")
     except Exception as e:
         print(f"  FAIL backend(JS): {e}")
+    try:                                               # sequence bodies execute left-to-right on every backend; no lane may silently keep only the last expression
+        sequence_cases = [
+            ('top-level fn', '(defx t (IO) (fn () (print 1) (print 2) 5))', (5, ["1", "2"])),
+            ('let body', '(defx t (IO) (fn () (let (x 0) (print 1) 5)))', (5, ["1"])),
+            ('seam body', '(defx t (IO) (fn () (seam (IO) (print 1) 5)))', (5, ["1"])),
+            ('prov body', '(defx t (IO) (fn () (prov human (print 1) 5)))', (5, ["1"])),
+            ('declassify body', '(defx t (IO) (fn () (declassify human (print 1) 5)))', (5, ["1"])),
+            ('by body', '(defx t (IO) (fn () (by reviewer ada (print 1) 5)))', (5, ["1"])),
+            ('recall body', '(defx t (IO) (fn () (recall (print 1) 5)))', (5, ["1"])),
+            ('repro body', '(defx t (IO) (fn () (repro (print 1) 5)))', (5, ["1"])),
+            ('count trust body', '(defx t (IO) (fn () (trust 1 (by reviewer ada (print 1)) 5)))', (5, ["1"])),
+            ('role trust body', '(defx t (IO) (fn () (trust (roles code review) (sub review auditor) (by code human (by auditor alice (print 1))) 5)))', (5, ["1"])),
+            ('non-IO handle body', '(defx t (IO) (fn () (handle (Net) (print 1) (net 9))))', (("Net", 9), ["1"])),
+            ('IO handle mask', '(defx t () (fn () (handle (IO) (print 1) (print 2) 5)))', (5, [])),
+            ('with body', '(defx realwork (Net) (fn (x) (net x))) (defx mock () (fn (x) (* x 2))) (defx t (IO) (fn () (with Net mock (print 1) (realwork 3))))', (6, ["1"])),
+            ('anonymous fn body', '(defx t (IO) (fn () ((fn () (print 1) 5))))', (5, ["1"])),
+        ]
+        sequence_ok = True
+        sequence_runners = [('interp', run_call), ('python', run_compiled), ('wasm', run_wasm)]
+        if __import__('shutil').which('node'):
+            sequence_runners.append(('javascript', run_js))
+        for label, prog, expected in sequence_cases:
+            for backend, runner in sequence_runners:
+                got = runner(prog, '(t)')
+                if got != expected:
+                    sequence_ok = False
+                    print(f"  FAIL sequence: {label} {backend}={got!r} expected={expected!r}")
+        resource_prog = '(defx t (IO) (fn () (resource r (print 1) (use r))))'
+        for backend, runner in sequence_runners:
+            _, output = runner(resource_prog, '(t)')
+            if output != ['1']:
+                sequence_ok = False
+                print(f"  FAIL sequence: resource body {backend} output={output!r} expected=['1']")
+        sequence_lie = '(defx t () (fn () (prov human (print 1) 5)))'
+        sequence_ok = sequence_ok and bool(check(parse(sequence_lie))[1])
+        ok += sequence_ok
+        print(f"  {'ok  ' if sequence_ok else 'FAIL'} backend sequence closure: full bodies preserve order, value, scope and rejection ({len(sequence_cases)} parity programs + resource)")
+    except Exception as e:
+        print(f"  FAIL backend sequence closure: {e}")
     try:                                               # Python/JS generators live behind a stable facade in development builds
         codegen_program = '(defx t () (fn () (record (n (+ 2 3)) (v (variant Ok 7)))))'
         is_browser_bundle = Path(_loom.__file__).parent.name == "docs"
@@ -2080,7 +2119,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             "actions_observed": ["read", "write", "test", "git-commit"],
             "evidence": [
                 {"kind": "syntax", "status": "pass", "detail": "PASS syntax"},
-                {"kind": "citadel", "status": "pass", "detail": "494/494"},
+                {"kind": "citadel", "status": "pass", "detail": "495/495"},
                 {"kind": "docs-parity", "status": "pass", "detail": "PASS docs parity"},
                 {"kind": "git-clean", "status": "pass", "detail": "clean"},
                 {"kind": "git-sync", "status": "pass", "detail": "HEAD == origin/main"},
@@ -5005,7 +5044,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 494
+            and about_json["citadel_checks"] == 495
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
@@ -5234,7 +5273,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 494/494 citadel checks" in quick
+            and "PASS -- 495/495 citadel checks" in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
             and "loom examples" in quick
@@ -5344,7 +5383,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "494-bounded-execution-v0")' in play
+            and 'bundleUrl.searchParams.set("v", "495-sequence-semantics-v0")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -5961,7 +6000,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 494/494 citadel checks" in rdoc
+            and "PASS -- 495/495 citadel checks" in rdoc
             and "loom examples --format json" in rdoc
             and "loom doctor --dry-run --format json" in rdoc
             and "python3 verify_docs_parity.py" in rdoc
@@ -6022,7 +6061,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 141   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 142   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

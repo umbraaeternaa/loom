@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 494 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 495 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 494/494 citadel checks
+PASS — 495/495 citadel checks
 ```
 
 ## The idea in one screen
