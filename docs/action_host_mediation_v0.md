@@ -121,9 +121,11 @@ executor to:
 
 The mediation function closes its file descriptors before returning. Therefore
 its measurement alone is not an atomic `exec` handoff and does not claim to
-eliminate the post-measurement TOCTOU window. Bounded Execution v0 must repeat
-the identity/content checks at the actual spawn boundary and atomically consume
-the `ready` mediation before it may produce a process attempt.
+eliminate the post-measurement TOCTOU window. Bounded Execution v0 now repeats
+the identity/content checks, executes a private exact-byte snapshot under a
+verified OS network sandbox, or on macOS executes a root-owned immutable path
+whose complete no-follow custody is recorded. It atomically consumes the
+`ready` mediation before the process attempt.
 
 The standalone browser bundle exposes the same API for parity but imports OS
 and SQLite facilities only when mediation is invoked. Browser/Pyodide loading

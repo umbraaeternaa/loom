@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 493 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 494 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 493/493 citadel checks
+PASS — 494/494 citadel checks
 ```
 
 ## The idea in one screen
@@ -166,7 +166,15 @@ first real host-boundary measurement: no-follow executable and cwd traversal,
 streamed executable hashing, exact committed environment verification,
 canonical stdin reconstruction, Claim-ledger proof, and one-use atomic
 mediation. It stores no raw secrets and returns only
-`bounded-execution-required`; the future executor must remeasure again at spawn.
+`bounded-execution-required`; Bounded Execution v0 must remeasure again at spawn.
+[`Bounded Execution v0`](docs/action_bounded_execution_v0.md) now consumes that
+handoff exactly once: it requires a real OS network sandbox, remeasures and
+launches through either an exact private snapshot or a fully checked root-owned
+immutable macOS path, replaces the complete environment, supplies canonical
+stdin, enforces timeout/output bounds, and records only redacted terminal
+attempt hashes. Its pure validator closes every evidence shape, nested hash,
+and cross-link. It returns `terminal-result-required`; Result v0 is still a
+separate future contract.
 
 Certified recursion can also use [`Proven Value Bounds v1`](docs/proven_value_bounds_v1.md):
 the checker derives conservative i31 and list-length upper bounds through

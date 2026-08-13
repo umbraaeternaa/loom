@@ -6,7 +6,7 @@ experimental, and what LOOM does not claim yet.
 
 ## Current public baseline
 
-- Canonical self-verification: `PASS -- 493/493 citadel checks`.
+- Canonical self-verification: `PASS -- 494/494 citadel checks`.
 - Published browser bundle parity is required before release:
   `python3 verify_docs_parity.py`.
 - The public compatibility surface is `loom.py`; module boundaries are pinned in
@@ -93,13 +93,21 @@ experimental, and what LOOM does not claim yet.
   bytes, checks the exact committed environment and canonical stdin, then
   atomically records one redacted `ready` handoff. Success returns
   `bounded-execution-required`; it still performs no subprocess execution.
+- Bounded Execution v0 requires a verified macOS Seatbelt or Linux user/network
+  namespace provider, remeasures exact executable bytes, and launches either a
+  private snapshot or a fully checked root-owned immutable macOS path. It
+  atomically reserves each mediation before spawn, replaces env/stdin exactly,
+  enforces process-group timeout and a 1 MiB per-stream limit, persists only
+  redacted terminal hashes, and exposes a pure closed-artifact validator.
+  Success returns `terminal-result-required`.
 - Deterministic property fuzz smoke is part of the citadel.
 
 ## Experimental or bounded
 
 - LOOM is still a research kernel, not a package-manager ecosystem.
-- Multi-action semantics, bounded process execution,
-  and terminal Action Capsule Result v0 remain future contracts. Compiler
+- Multi-action semantics and terminal Action Capsule Result v0 remain future
+  contracts. Cross-platform sandbox providers beyond macOS Seatbelt and Linux
+  user/network namespaces also remain future work. Compiler
   Receipt v4 is already stable evidence and is not embedded in the
   pre-execution Capsule because no execution observation exists yet.
 - The Gate is a verification and lifecycle layer; it does not magically confine
@@ -158,10 +166,10 @@ python3 loom.py about --format json
 
 Expected public markers:
 
-- `run_tests.py` prints `PASS -- 493/493 citadel checks`.
+- `run_tests.py` prints `PASS -- 494/494 citadel checks`.
 - `verify_docs_parity.py` prints that the published bundle is standalone and
   citadel-green.
-- `loom.py about --format json` reports `citadel_checks: 493`, the current
+- `loom.py about --format json` reports `citadel_checks: 494`, the current
   WASM ABI version, and the supported backend list.
 - An installed checkout exposes `loom` as the same CLI surface as
   `python3 loom.py`.

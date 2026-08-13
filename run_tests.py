@@ -2080,7 +2080,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             "actions_observed": ["read", "write", "test", "git-commit"],
             "evidence": [
                 {"kind": "syntax", "status": "pass", "detail": "PASS syntax"},
-                {"kind": "citadel", "status": "pass", "detail": "493/493"},
+                {"kind": "citadel", "status": "pass", "detail": "494/494"},
                 {"kind": "docs-parity", "status": "pass", "detail": "PASS docs parity"},
                 {"kind": "git-clean", "status": "pass", "detail": "clean"},
                 {"kind": "git-sync", "status": "pass", "detail": "HEAD == origin/main"},
@@ -4199,8 +4199,9 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         ok += action_claim_v0_ok
         print(f"  {'ok  ' if action_claim_v0_ok else 'FAIL'} gate: atomic one-use Capsule Claim v0")
 
-        def build_host_action(host_root, executable_path=None, cwd_path=None):
-            adapter_bytes = b"operator-gate-adapter-v0\n"
+        def build_host_action(host_root, executable_path=None, cwd_path=None, adapter_bytes=None,
+                              argv=None, timeout_ms=None):
+            adapter_bytes = b"operator-gate-adapter-v0\n" if adapter_bytes is None else adapter_bytes
             executable_path = executable_path or (host_root / "operator-gate")
             cwd_path = cwd_path or (host_root / "workspace")
             if not executable_path.exists() and not executable_path.is_symlink():
@@ -4212,6 +4213,10 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             descriptor["adapter"]["executable_uri"] = executable_path.as_uri()
             descriptor["adapter"]["artifact_sha256"] = hashlib.sha256(adapter_bytes).hexdigest()
             descriptor["working_directory_uri"] = cwd_path.as_uri()
+            if argv is not None:
+                descriptor["argv"] = argv
+            if timeout_ms is not None:
+                descriptor["timeout_ms"] = timeout_ms
             binding_result = _loom.build_action_invocation_binding_v0(
                 semantics_manifest, semantics_tool, semantics_input, semantics_src,
                 semantics_wasm, compiler_components, "main", descriptor,
@@ -4439,6 +4444,215 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         )
         ok += action_mediation_v0_ok
         print(f"  {'ok  ' if action_mediation_v0_ok else 'FAIL'} gate: Trusted Host Mediation v0")
+
+        def execute_action_v0(ledger_path, candidate_approval, candidate_request, candidate_claim,
+                              candidate_mediation, candidate_invocation, now=action_issued + 3):
+            return _loom._execute_action_host_mediation_v0(
+                candidate_approval, candidate_request, candidate_claim, candidate_mediation,
+                semantics_manifest, semantics_tool, semantics_input, semantics_src,
+                semantics_wasm, running_surface, compiler_components, compiler_components,
+                "main", candidate_invocation,
+                {"LOOM_MODE": "bounded", "API_TOKEN": "not-embedded-secret"},
+                now, test_key, ledger_path,
+            )
+
+        try:
+            execution_provider, execution_prefix = _loom._action_execution_sandbox_provider()
+            _loom._action_execution_probe_sandbox(execution_prefix)
+            execution_sandbox_available = True
+        except (OSError, ValueError):
+            execution_provider = None
+            execution_sandbox_available = False
+
+        with tempfile.TemporaryDirectory() as td:
+            execution_root = Path(td).resolve()
+            cat_path = Path("/bin/cat").resolve()
+            cat_bytes = cat_path.read_bytes()
+            _, cat_invocation, _, cat_request, cat_approval = build_host_action(
+                execution_root, executable_path=cat_path,
+                cwd_path=execution_root / "cat-work", adapter_bytes=cat_bytes, argv=[],
+            )
+            execution_ledger = execution_root / "ledger" / "operator_approvals.sqlite3"
+            cat_claim = claim_action_v0(
+                execution_ledger, candidate_approval=cat_approval,
+                candidate_request=cat_request, candidate_invocation=cat_invocation,
+            )["claim"]
+            cat_mediation = mediate_action_v0(
+                execution_ledger, cat_approval, cat_request, cat_claim, cat_invocation,
+            )["mediation"]
+            cat_execution = execute_action_v0(
+                execution_ledger, cat_approval, cat_request, cat_claim, cat_mediation, cat_invocation,
+            )
+            cat_execution_replay = execute_action_v0(
+                execution_ledger, cat_approval, cat_request, cat_claim, cat_mediation, cat_invocation,
+            )
+            with sqlite3.connect(execution_ledger) as connection:
+                execution_schema = connection.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='action_executions_v0'",
+                ).fetchone()
+                execution_rows = connection.execute(
+                    "SELECT COUNT(*) FROM action_executions_v0",
+                ).fetchone()[0] if execution_schema else 0
+                execution_row = connection.execute(
+                    "SELECT mediation_sha256,status,duration_ms,stdout_sha256,stdout_size_bytes,attempt_sha256 "
+                    "FROM action_executions_v0",
+                ).fetchone() if execution_schema else None
+            execution_residue = list(execution_ledger.parent.glob(".loom-exec-*"))
+
+            timeout_ok = output_limit_ok = network_denied_ok = concurrency_ok = True
+            sleep_execution = yes_execution = net_execution = net_mediated = None
+            if execution_sandbox_available:
+                sleep_path = Path("/bin/sleep").resolve()
+                _, sleep_invocation, _, sleep_request, sleep_approval = build_host_action(
+                    execution_root, executable_path=sleep_path,
+                    cwd_path=execution_root / "sleep-work", adapter_bytes=sleep_path.read_bytes(),
+                    argv=["1"], timeout_ms=50,
+                )
+                sleep_ledger = execution_root / "sleep-ledger" / "operator_approvals.sqlite3"
+                sleep_claim = claim_action_v0(
+                    sleep_ledger, candidate_approval=sleep_approval,
+                    candidate_request=sleep_request, candidate_invocation=sleep_invocation,
+                )["claim"]
+                sleep_mediation = mediate_action_v0(
+                    sleep_ledger, sleep_approval, sleep_request, sleep_claim, sleep_invocation,
+                )["mediation"]
+                sleep_execution = execute_action_v0(
+                    sleep_ledger, sleep_approval, sleep_request, sleep_claim,
+                    sleep_mediation, sleep_invocation,
+                )
+                timeout_ok = sleep_execution["valid"] and sleep_execution["execution"]["status"] == "timed-out"
+
+                yes_path = Path("/usr/bin/yes").resolve()
+                if yes_path.exists():
+                    _, yes_invocation, _, yes_request, yes_approval = build_host_action(
+                        execution_root, executable_path=yes_path,
+                        cwd_path=execution_root / "yes-work", adapter_bytes=yes_path.read_bytes(),
+                        argv=[], timeout_ms=2000,
+                    )
+                    yes_ledger = execution_root / "yes-ledger" / "operator_approvals.sqlite3"
+                    yes_claim = claim_action_v0(
+                        yes_ledger, candidate_approval=yes_approval,
+                        candidate_request=yes_request, candidate_invocation=yes_invocation,
+                    )["claim"]
+                    yes_mediation = mediate_action_v0(
+                        yes_ledger, yes_approval, yes_request, yes_claim, yes_invocation,
+                    )["mediation"]
+                    yes_execution = execute_action_v0(
+                        yes_ledger, yes_approval, yes_request, yes_claim, yes_mediation, yes_invocation,
+                    )
+                    output_limit_ok = (
+                        yes_execution["valid"]
+                        and yes_execution["execution"]["status"] == "output-limit-exceeded"
+                        and yes_execution["execution"]["attempt"]["stdout"]["size_bytes"] > _loom._ACTION_EXECUTION_MAX_OUTPUT_BYTES
+                    )
+
+                if execution_provider["profile"] == "darwin-seatbelt-network-deny/v0":
+                    python_path = Path("/usr/bin/python3")
+                    probe_code = (
+                        "import socket,sys\n"
+                        "try: socket.create_connection(('127.0.0.1',9),0.2)\n"
+                        "except PermissionError as e: sys.exit(0 if e.errno == 1 else 8)\n"
+                        "except OSError: sys.exit(9)\n"
+                        "sys.exit(10)\n"
+                    )
+                    _, net_invocation, _, net_request, net_approval = build_host_action(
+                        execution_root, executable_path=python_path,
+                        cwd_path=execution_root / "net-work", adapter_bytes=python_path.read_bytes(),
+                        argv=["-c", probe_code], timeout_ms=1000,
+                    )
+                    net_ledger = execution_root / "net-ledger" / "operator_approvals.sqlite3"
+                    net_claim = claim_action_v0(
+                        net_ledger, candidate_approval=net_approval,
+                        candidate_request=net_request, candidate_invocation=net_invocation,
+                    )["claim"]
+                    net_mediated = mediate_action_v0(
+                        net_ledger, net_approval, net_request, net_claim, net_invocation,
+                    )
+                    net_mediation = net_mediated["mediation"]
+                    net_execution = execute_action_v0(
+                        net_ledger, net_approval, net_request, net_claim, net_mediation, net_invocation,
+                    )
+                    network_denied_ok = net_execution["valid"] and net_execution["execution"]["status"] == "completed"
+
+                concurrent_ledger = execution_root / "concurrent-exec" / "operator_approvals.sqlite3"
+                concurrent_claim = claim_action_v0(
+                    concurrent_ledger, candidate_approval=cat_approval,
+                    candidate_request=cat_request, candidate_invocation=cat_invocation,
+                )["claim"]
+                concurrent_mediation = mediate_action_v0(
+                    concurrent_ledger, cat_approval, cat_request, concurrent_claim, cat_invocation,
+                )["mediation"]
+                with ThreadPoolExecutor(max_workers=4) as pool:
+                    concurrent_executions = list(pool.map(
+                        lambda _: execute_action_v0(
+                            concurrent_ledger, cat_approval, cat_request, concurrent_claim,
+                            concurrent_mediation, cat_invocation,
+                        ),
+                        range(4),
+                    ))
+                with sqlite3.connect(concurrent_ledger) as connection:
+                    concurrent_execution_rows = connection.execute(
+                        "SELECT COUNT(*) FROM action_executions_v0",
+                    ).fetchone()[0]
+                concurrency_ok = sum(item["valid"] for item in concurrent_executions) == 1 and concurrent_execution_rows == 1
+
+            execution_artifact_validation_ok = True
+            if execution_sandbox_available:
+                validated_execution = _loom.validate_action_bounded_execution_v0(cat_execution["execution"])
+                tampered_execution = json.loads(json.dumps(cat_execution["execution"]))
+                tampered_execution["attempt"]["stdout"]["sha256"] = "0" * 64
+                rejected_tampered_execution = _loom.validate_action_bounded_execution_v0(tampered_execution)
+                noncanonical_execution = json.loads(json.dumps(cat_execution["execution"]))
+                noncanonical_execution["attempt"]["stdout"]["sha256"] = {"not-json"}
+                rejected_noncanonical_execution = _loom.validate_action_bounded_execution_v0(noncanonical_execution)
+                execution_artifact_validation_ok = (
+                    validated_execution["valid"]
+                    and validated_execution["execution"] == cat_execution["execution"]
+                    and not rejected_tampered_execution["valid"]
+                    and any(item["code"] == "attempt-hash-mismatch" for item in rejected_tampered_execution["findings"])
+                    and not rejected_noncanonical_execution["valid"]
+                    and any(item["code"] == "non-canonical-attempt" for item in rejected_noncanonical_execution["findings"])
+                )
+
+        if execution_sandbox_available:
+            execution_v0_ok = (
+                cat_execution["valid"] and cat_execution["authorization"] == "terminal-result-required"
+                and cat_execution["execution"]["status"] == "completed"
+                and cat_execution["execution"]["attempt"]["stdout"]["sha256"]
+                == hashlib.sha256(canonical(semantics_input).encode()).hexdigest()
+                and not cat_execution_replay["valid"]
+                and execution_schema == (_loom._ACTION_EXECUTION_LEDGER_SCHEMA,)
+                and execution_rows == 1 and execution_row[1] == "completed"
+                and execution_row[-1] == cat_execution["execution"]["attempt_sha256"]
+                and not execution_residue and timeout_ok and output_limit_ok
+                and network_denied_ok and concurrency_ok and execution_artifact_validation_ok
+            )
+        else:
+            execution_v0_ok = (
+                not cat_execution["valid"] and not cat_execution_replay["valid"]
+                and any(item["code"] == "action-bounded-execution-failed" for item in cat_execution["findings"])
+                and execution_schema is None and execution_rows == 0 and not execution_residue
+            )
+        if not execution_v0_ok:
+            print("       bounded-execution diagnostics:", json.dumps({
+                "sandbox_available": execution_sandbox_available,
+                "provider": execution_provider,
+                "cat": cat_execution,
+                "replay": cat_execution_replay,
+                "schema": execution_schema,
+                "rows": execution_rows,
+                "row": execution_row,
+                "residue_count": len(execution_residue),
+                "timeout_ok": timeout_ok,
+                "output_limit_ok": output_limit_ok,
+                "network_denied_ok": network_denied_ok,
+                "network_execution": net_execution,
+                "network_mediation": net_mediated,
+                "concurrency_ok": concurrency_ok,
+                "artifact_validation_ok": execution_artifact_validation_ok,
+            }, sort_keys=True))
+        ok += execution_v0_ok
+        print(f"  {'ok  ' if execution_v0_ok else 'FAIL'} gate: Bounded Execution v0")
         integrated_observation = {
             "schema": "loom-gate-observation/v1", "result": "completed",
             "repositories": [{"root": "/Users/macbook/Projects/loom", "before_head": "4281c7b", "after_head": "f" * 40}],
@@ -4791,7 +5005,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 493
+            and about_json["citadel_checks"] == 494
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
@@ -5020,7 +5234,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 493/493 citadel checks" in quick
+            and "PASS -- 494/494 citadel checks" in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
             and "loom examples" in quick
@@ -5130,7 +5344,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "493-action-host-mediation-v0")' in play
+            and 'bundleUrl.searchParams.set("v", "494-bounded-execution-v0")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -5747,7 +5961,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 493/493 citadel checks" in rdoc
+            and "PASS -- 494/494 citadel checks" in rdoc
             and "loom examples --format json" in rdoc
             and "loom doctor --dry-run --format json" in rdoc
             and "python3 verify_docs_parity.py" in rdoc
@@ -5808,7 +6022,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 140   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 141   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

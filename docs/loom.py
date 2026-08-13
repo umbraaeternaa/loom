@@ -5023,6 +5023,642 @@ def _gate_decode_paths(data, root, path, findings):
     return values
 
 
+def _action_execution_sandbox_provider():
+    import os
+    import stat
+    import sys
+    if sys.platform == "darwin":
+        path = "/usr/bin/sandbox-exec"
+        profile = "darwin-seatbelt-network-deny/v0"
+        prefix = [path, "-p", _ACTION_EXECUTION_DARWIN_PROFILE]
+    elif sys.platform.startswith("linux"):
+        path = next((item for item in ("/usr/bin/unshare", "/bin/unshare") if os.path.exists(item)), None)
+        if path is None:
+            raise ValueError("Linux network namespace provider is unavailable")
+        profile = "linux-user-network-namespace/v0"
+        prefix = [path, "--user", "--map-root-user", "--net", "--"]
+    else:
+        raise ValueError("Bounded Execution v0 has no verified network sandbox provider for this platform")
+    fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_uid != 0:
+            raise ValueError("network sandbox provider must be a root-owned regular file")
+        if before.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise ValueError("network sandbox provider must not be group/world-writable")
+        digest = hashlib.sha256()
+        total = 0
+        while True:
+            chunk = os.read(fd, 1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > _ACTION_MEDIATION_MAX_EXECUTABLE_BYTES:
+                raise ValueError("network sandbox provider exceeds the 64 MiB trust limit")
+            digest.update(chunk)
+        after = os.fstat(fd)
+        if any(getattr(before, key) != getattr(after, key) for key in ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns")):
+            raise ValueError("network sandbox provider changed while measured")
+    finally:
+        os.close(fd)
+    provider = {
+        "schema": _ACTION_EXECUTION_SANDBOX_SCHEMA,
+        "profile": profile,
+        "policy_sha256": _binding_sha256({"profile": profile, "arguments": prefix[1:]}),
+        "provider_sha256": digest.hexdigest(),
+        "provider_identity": _action_mediation_stat_identity(after, "regular-file"),
+        "network": "denied",
+    }
+    provider["sandbox_sha256"] = _binding_sha256(provider)
+    return provider, prefix
+
+
+def _action_execution_probe_sandbox(prefix):
+    import os
+    import subprocess
+    true_path = next((item for item in ("/usr/bin/true", "/bin/true") if os.path.exists(item)), None)
+    if true_path is None:
+        raise ValueError("network sandbox capability probe is unavailable")
+    try:
+        probe = subprocess.run(
+            prefix + [true_path], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE, env={}, shell=False, close_fds=True,
+            start_new_session=True, timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ValueError("network sandbox capability probe failed: " + str(error)) from error
+    if probe.returncode != 0:
+        detail = probe.stderr[:256].decode("utf-8", "replace").strip()
+        raise ValueError("network sandbox provider cannot enforce its profile" + (": " + detail if detail else ""))
+
+
+def _action_execution_normalized_inputs(binding, tool_input, environment_values):
+    measurement = _action_mediation_measure_host(binding, tool_input, environment_values)
+    normalized_environment = {
+        unicodedata.normalize("NFC", name): unicodedata.normalize("NFC", value)
+        for name, value in environment_values.items()
+    }
+    normalized_input, findings = _normalize_binding_json(tool_input)
+    if findings:
+        raise ValueError("tool input is not canonical at the execution boundary")
+    stdin_bytes = _artifact_json(normalized_input).encode("utf-8")
+    return measurement, normalized_environment, stdin_bytes
+
+
+def _action_execution_snapshot(executable_fd, expected_sha256, parent):
+    import os
+    import tempfile
+    directory = tempfile.mkdtemp(prefix=".loom-exec-", dir=str(parent))
+    os.chmod(directory, 0o700)
+    path = os.path.join(directory, "adapter")
+    target_fd = None
+    try:
+        target_fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o500)
+        os.lseek(executable_fd, 0, os.SEEK_SET)
+        digest = hashlib.sha256()
+        total = 0
+        while True:
+            chunk = os.read(executable_fd, 1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > _ACTION_MEDIATION_MAX_EXECUTABLE_BYTES:
+                raise ValueError("execution snapshot exceeds the 64 MiB limit")
+            digest.update(chunk)
+            view = memoryview(chunk)
+            while view:
+                written = os.write(target_fd, view)
+                view = view[written:]
+        os.fsync(target_fd)
+        if digest.hexdigest() != expected_sha256:
+            raise ValueError("execution snapshot bytes do not match the mediated executable")
+        snapshot_stat = os.fstat(target_fd)
+        os.fchmod(target_fd, 0o500)
+    except Exception:
+        if target_fd is not None:
+            os.close(target_fd)
+            target_fd = None
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        try:
+            os.rmdir(directory)
+        except OSError:
+            pass
+        raise
+    finally:
+        if target_fd is not None:
+            os.close(target_fd)
+    return directory, path, _action_mediation_stat_identity(snapshot_stat, "regular-file")
+
+
+def _action_execution_root_path_custody(path):
+    import os
+    import stat
+    base_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+    parent_fd = os.open("/", base_flags | os.O_DIRECTORY)
+    custody = []
+    try:
+        root_stat = os.fstat(parent_fd)
+        custody.append({
+            "component_index": 0,
+            "identity": _action_mediation_stat_identity(root_stat, "directory"),
+        })
+        segments = path.split("/")[1:]
+        for index, segment in enumerate(segments, 1):
+            final = index == len(segments)
+            flags = base_flags | (0 if final else os.O_DIRECTORY)
+            child_fd = os.open(segment, flags, dir_fd=parent_fd)
+            child_stat = os.fstat(child_fd)
+            expected_kind = "regular-file" if final else "directory"
+            valid_kind = stat.S_ISREG(child_stat.st_mode) if final else stat.S_ISDIR(child_stat.st_mode)
+            if not valid_kind or child_stat.st_uid != 0:
+                os.close(child_fd)
+                raise ValueError("macOS immutable launch path must be root-owned and type-stable")
+            if child_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+                os.close(child_fd)
+                raise ValueError("macOS immutable launch path must not be group/world-writable")
+            custody.append({
+                "component_index": index,
+                "identity": _action_mediation_stat_identity(child_stat, expected_kind),
+            })
+            os.close(parent_fd)
+            parent_fd = child_fd
+        if any(item["identity"]["owner_uid"] != "0" for item in custody):
+            raise ValueError("macOS immutable launch path must be root-owned from filesystem root")
+        if any(int(item["identity"]["mode"], 8) & 0o022 for item in custody):
+            raise ValueError("macOS immutable launch path must not be group/world-writable")
+        return custody
+    finally:
+        os.close(parent_fd)
+
+
+def _action_execution_remeasure(binding, tool_input, environment_values, mediation, ledger_path):
+    import os
+    import sys
+    measurement, normalized_environment, stdin_bytes = _action_execution_normalized_inputs(
+        binding, tool_input, environment_values,
+    )
+    if measurement != mediation["host_measurement"]:
+        raise ValueError("live host measurement no longer matches the mediated host state")
+    executable_path = _action_mediation_file_path(
+        binding["invocation"]["adapter"]["executable_uri"], "binding.invocation.adapter.executable_uri",
+    )
+    cwd_path = _action_mediation_file_path(
+        binding["invocation"]["working_directory_uri"], "binding.invocation.working_directory_uri",
+    )
+    executable_fd = _action_mediation_open_path(executable_path, False)
+    cwd_fd = _action_mediation_open_path(cwd_path, True)
+    snapshot_directory = None
+    try:
+        executable_stat = os.fstat(executable_fd)
+        cwd_stat = os.fstat(cwd_fd)
+        executable_identity = _action_mediation_stat_identity(executable_stat, "regular-file")
+        cwd_identity = _action_mediation_stat_identity(cwd_stat, "directory")
+        if executable_identity != measurement["executable"]["identity"]:
+            raise ValueError("executable identity changed at the spawn boundary")
+        if cwd_identity != measurement["working_directory"]["identity"]:
+            raise ValueError("working-directory identity changed at the spawn boundary")
+        if sys.platform == "darwin":
+            try:
+                path_custody = _action_execution_root_path_custody(executable_path)
+            except (OSError, ValueError):
+                path_custody = []
+        else:
+            path_custody = []
+        if path_custody:
+            if path_custody[-1]["identity"] != executable_identity:
+                raise ValueError("macOS immutable launch path changed between remeasurement and custody proof")
+            launch_path = executable_path
+            launch_identity = executable_identity
+            spawn_boundary = "root-owned-immutable-path"
+        else:
+            snapshot_directory, launch_path, launch_identity = _action_execution_snapshot(
+                executable_fd, measurement["executable"]["artifact_sha256"], ledger_path.parent,
+            )
+            spawn_boundary = "private-executable-snapshot"
+        body = {
+            "schema": _ACTION_EXECUTION_REMEASUREMENT_SCHEMA,
+            "source_host_measurement_sha256": measurement["host_measurement_sha256"],
+            "executable_sha256": measurement["executable"]["artifact_sha256"],
+            "executable_identity": executable_identity,
+            "launch_identity": launch_identity,
+            "path_custody": path_custody,
+            "working_directory_identity": cwd_identity,
+            "environment_sha256": measurement["environment_sha256"],
+            "stdin_sha256": measurement["stdin"]["payload_sha256"],
+            "stdin_size_bytes": len(stdin_bytes),
+            "spawn_boundary": spawn_boundary,
+        }
+        body["host_remeasurement_sha256"] = _binding_sha256(body)
+        return body, normalized_environment, stdin_bytes, cwd_path, snapshot_directory, launch_path
+    except Exception:
+        if snapshot_directory is not None:
+            try:
+                os.unlink(os.path.join(snapshot_directory, "adapter"))
+            except OSError:
+                pass
+            try:
+                os.rmdir(snapshot_directory)
+            except OSError:
+                pass
+        raise
+    finally:
+        os.close(executable_fd)
+        os.close(cwd_fd)
+
+
+def _action_execution_claim_row(claim):
+    return (
+        claim["approval_sha256"], claim["request_sha256"], claim["challenge_sha256"],
+        claim["binding_sha256"], claim["capsule_sha256"], claim["invocation_sha256"],
+        claim["claimed_at_unix_ms"], claim["approval_expires_at_unix_ms"],
+        claim["claim_sha256"], claim["status"],
+    )
+
+
+def _action_execution_mediation_row(mediation):
+    measurement = mediation["host_measurement"]
+    return (
+        mediation["claim_sha256"], mediation["approval_sha256"], mediation["binding_sha256"],
+        mediation["invocation_sha256"], mediation["host_measurement_sha256"],
+        measurement["executable"]["artifact_sha256"], measurement["environment_sha256"],
+        measurement["stdin"]["payload_sha256"], mediation["mediated_at_unix_ms"],
+        mediation["approval_expires_at_unix_ms"], mediation["mediation_sha256"], mediation["status"],
+    )
+
+
+def _action_execution_open_ledger(ledger_path):
+    import os
+    import sqlite3
+    import stat
+    if not ledger_path.exists() or ledger_path.is_symlink() or not ledger_path.is_file():
+        raise ValueError("Action ledger must already exist as a regular non-symlink file")
+    parent = ledger_path.parent
+    if parent.is_symlink() or not parent.is_dir() or parent.stat().st_uid != os.getuid():
+        raise ValueError("Action ledger parent must be a current-user-owned non-symlink directory")
+    before = ledger_path.stat()
+    if before.st_uid != os.getuid() or before.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise ValueError("Action ledger must be current-user-owned and not group/world-writable")
+    connection = sqlite3.connect(str(ledger_path), timeout=5, isolation_level=None)
+    after = ledger_path.stat()
+    if ledger_path.is_symlink() or after.st_dev != before.st_dev or after.st_ino != before.st_ino:
+        connection.close()
+        raise ValueError("Action ledger identity changed during execution open")
+    connection.execute("PRAGMA trusted_schema=OFF")
+    return connection
+
+
+def _action_execution_verify_ledger(connection, claim, mediation):
+    claim_schema = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (_ACTION_CLAIM_LEDGER_TABLE,),
+    ).fetchone()
+    mediation_schema = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (_ACTION_MEDIATION_LEDGER_TABLE,),
+    ).fetchone()
+    if claim_schema != (_ACTION_CLAIM_LEDGER_SCHEMA,) or mediation_schema != (_ACTION_MEDIATION_LEDGER_SCHEMA,):
+        raise ValueError("Action Claim or Mediation ledger schema is not canonical")
+    connection.execute(_ACTION_EXECUTION_LEDGER_CREATE)
+    execution_schema = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (_ACTION_EXECUTION_LEDGER_TABLE,),
+    ).fetchone()
+    if execution_schema != (_ACTION_EXECUTION_LEDGER_SCHEMA,):
+        raise ValueError("Action Execution ledger table schema is not canonical")
+    if connection.execute("SELECT name FROM sqlite_master WHERE type IN ('trigger','view') LIMIT 1").fetchone():
+        raise ValueError("Action ledger must not contain triggers or views")
+    stored_claim = connection.execute(
+        "SELECT approval_sha256,request_sha256,challenge_sha256,binding_sha256,capsule_sha256,"
+        "invocation_sha256,claimed_at_unix_ms,approval_expires_at_unix_ms,claim_sha256,status "
+        "FROM action_claims_v0 WHERE claim_sha256=?", (claim["claim_sha256"],),
+    ).fetchone()
+    stored_mediation = connection.execute(
+        "SELECT claim_sha256,approval_sha256,binding_sha256,invocation_sha256,host_measurement_sha256,"
+        "executable_sha256,environment_sha256,stdin_sha256,mediated_at_unix_ms,"
+        "approval_expires_at_unix_ms,mediation_sha256,status FROM action_mediations_v0 WHERE mediation_sha256=?",
+        (mediation["mediation_sha256"],),
+    ).fetchone()
+    if stored_claim != _action_execution_claim_row(claim):
+        raise ValueError("Action Claim does not match its private ledger row")
+    if stored_mediation != _action_execution_mediation_row(mediation):
+        raise ValueError("Action Mediation is absent or does not match its private ledger row")
+
+
+def _action_execution_reserve(claim, mediation, remeasurement, now_unix_ms, ledger_path):
+    import sqlite3
+    connection = None
+    try:
+        connection = _action_execution_open_ledger(ledger_path)
+        connection.execute("BEGIN IMMEDIATE")
+        _action_execution_verify_ledger(connection, claim, mediation)
+        connection.execute(
+            "INSERT INTO action_executions_v0 (mediation_sha256,claim_sha256,binding_sha256,"
+            "host_remeasurement_sha256,reserved_at_unix_ms,approval_expires_at_unix_ms,status) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (
+                mediation["mediation_sha256"], claim["claim_sha256"], mediation["binding_sha256"],
+                remeasurement["host_remeasurement_sha256"], now_unix_ms,
+                mediation["approval_expires_at_unix_ms"], "reserved",
+            ),
+        )
+        connection.execute("COMMIT")
+    except sqlite3.IntegrityError as error:
+        if connection is not None and connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise ValueError("Action Mediation was already consumed by an execution attempt") from error
+    except (sqlite3.Error, ValueError) as error:
+        if connection is not None and connection.in_transaction:
+            connection.execute("ROLLBACK")
+        if isinstance(error, ValueError):
+            raise
+        raise ValueError("Action Execution reservation failed: " + str(error)) from error
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def _action_execution_kill_group(process):
+    import os
+    import signal
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def _action_execution_run(prefix, snapshot_path, argv, cwd_path, environment, stdin_bytes, timeout_ms,
+                          mediation, remeasurement, sandbox):
+    import subprocess
+    import threading
+    import time
+    command = prefix + [snapshot_path] + list(argv)
+    empty_sha256 = hashlib.sha256(b"").hexdigest()
+    started = time.monotonic()
+    try:
+        process = subprocess.Popen(
+            command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            cwd=cwd_path, env=environment, shell=False, close_fds=True,
+            start_new_session=True, bufsize=0,
+        )
+    except OSError:
+        attempt = {
+            "schema": _ACTION_EXECUTION_ATTEMPT_SCHEMA,
+            "result": "spawn-failed", "mediation_sha256": mediation["mediation_sha256"],
+            "host_remeasurement_sha256": remeasurement["host_remeasurement_sha256"],
+            "sandbox_sha256": sandbox["sandbox_sha256"], "timeout_ms": timeout_ms,
+            "output_limit_bytes": _ACTION_EXECUTION_MAX_OUTPUT_BYTES,
+            "duration_ms": max(0, int((time.monotonic() - started) * 1000)),
+            "exit_code": None, "terminating_signal": None,
+            "stdout": {"sha256": empty_sha256, "size_bytes": 0},
+            "stderr": {"sha256": empty_sha256, "size_bytes": 0},
+            "stdin_sha256": hashlib.sha256(stdin_bytes).hexdigest(),
+            "shell": "denied", "network": "denied",
+        }
+        attempt["attempt_sha256"] = _binding_sha256(attempt)
+        return attempt
+
+    overflow = threading.Event()
+    streams = {}
+
+    def drain(name, stream):
+        digest = hashlib.sha256()
+        total = 0
+        while True:
+            chunk = stream.read(65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            digest.update(chunk)
+            if total > _ACTION_EXECUTION_MAX_OUTPUT_BYTES:
+                overflow.set()
+        streams[name] = {"sha256": digest.hexdigest(), "size_bytes": total}
+
+    def feed():
+        try:
+            process.stdin.write(stdin_bytes)
+            process.stdin.flush()
+        except (BrokenPipeError, OSError):
+            pass
+        finally:
+            try:
+                process.stdin.close()
+            except OSError:
+                pass
+
+    workers = [
+        threading.Thread(target=drain, args=("stdout", process.stdout), daemon=True),
+        threading.Thread(target=drain, args=("stderr", process.stderr), daemon=True),
+        threading.Thread(target=feed, daemon=True),
+    ]
+    for worker in workers:
+        worker.start()
+    deadline = started + timeout_ms / 1000.0
+    forced = None
+    while process.poll() is None:
+        if overflow.is_set():
+            forced = "output-limit-exceeded"
+            _action_execution_kill_group(process)
+            break
+        if time.monotonic() >= deadline:
+            forced = "timed-out"
+            _action_execution_kill_group(process)
+            break
+        time.sleep(0.005)
+    returncode = process.wait()
+    for worker in workers:
+        worker.join(timeout=5)
+    if "stdout" not in streams or "stderr" not in streams:
+        forced = forced or "failed"
+        streams.setdefault("stdout", {"sha256": empty_sha256, "size_bytes": 0})
+        streams.setdefault("stderr", {"sha256": empty_sha256, "size_bytes": 0})
+    result = forced or ("completed" if returncode == 0 else "failed")
+    attempt = {
+        "schema": _ACTION_EXECUTION_ATTEMPT_SCHEMA,
+        "result": result,
+        "mediation_sha256": mediation["mediation_sha256"],
+        "host_remeasurement_sha256": remeasurement["host_remeasurement_sha256"],
+        "sandbox_sha256": sandbox["sandbox_sha256"],
+        "timeout_ms": timeout_ms,
+        "output_limit_bytes": _ACTION_EXECUTION_MAX_OUTPUT_BYTES,
+        "duration_ms": max(0, int((time.monotonic() - started) * 1000)),
+        "exit_code": returncode if returncode >= 0 else None,
+        "terminating_signal": -returncode if returncode < 0 else None,
+        "stdout": streams["stdout"],
+        "stderr": streams["stderr"],
+        "stdin_sha256": hashlib.sha256(stdin_bytes).hexdigest(),
+        "shell": "denied",
+        "network": "denied",
+    }
+    attempt["attempt_sha256"] = _binding_sha256(attempt)
+    return attempt
+
+
+def _action_execution_finish(mediation, remeasurement, attempt, now_unix_ms, ledger_path):
+    import sqlite3
+    connection = None
+    try:
+        connection = _action_execution_open_ledger(ledger_path)
+        connection.execute("BEGIN IMMEDIATE")
+        execution_schema = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (_ACTION_EXECUTION_LEDGER_TABLE,),
+        ).fetchone()
+        if execution_schema != (_ACTION_EXECUTION_LEDGER_SCHEMA,):
+            raise ValueError("Action Execution ledger table schema is not canonical")
+        if connection.execute("SELECT name FROM sqlite_master WHERE type IN ('trigger','view') LIMIT 1").fetchone():
+            raise ValueError("Action ledger must not contain triggers or views")
+        stored = connection.execute(
+            "SELECT claim_sha256,binding_sha256,host_remeasurement_sha256,reserved_at_unix_ms,"
+            "approval_expires_at_unix_ms,status,duration_ms,exit_code,terminating_signal,stdout_sha256,"
+            "stdout_size_bytes,stderr_sha256,stderr_size_bytes,attempt_sha256 FROM action_executions_v0 "
+            "WHERE mediation_sha256=?", (mediation["mediation_sha256"],),
+        ).fetchone()
+        expected = (
+            mediation["claim_sha256"], mediation["binding_sha256"],
+            remeasurement["host_remeasurement_sha256"], now_unix_ms,
+            mediation["approval_expires_at_unix_ms"], "reserved",
+            None, None, None, None, None, None, None, None,
+        )
+        if stored != expected:
+            raise ValueError("Action Execution reservation is absent, terminal, or changed")
+        updated = connection.execute(
+            "UPDATE action_executions_v0 SET status=?,duration_ms=?,exit_code=?,terminating_signal=?,"
+            "stdout_sha256=?,stdout_size_bytes=?,stderr_sha256=?,stderr_size_bytes=?,attempt_sha256=? "
+            "WHERE mediation_sha256=? AND status='reserved'",
+            (
+                attempt["result"], attempt["duration_ms"], attempt["exit_code"],
+                attempt["terminating_signal"], attempt["stdout"]["sha256"],
+                attempt["stdout"]["size_bytes"], attempt["stderr"]["sha256"],
+                attempt["stderr"]["size_bytes"], attempt["attempt_sha256"],
+                mediation["mediation_sha256"],
+            ),
+        )
+        if updated.rowcount != 1:
+            raise ValueError("Action Execution terminal transition was not unique")
+        connection.execute("COMMIT")
+    except (sqlite3.Error, ValueError) as error:
+        if connection is not None and connection.in_transaction:
+            connection.execute("ROLLBACK")
+        if isinstance(error, ValueError):
+            raise
+        raise ValueError("Action Execution finalization failed: " + str(error)) from error
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def _action_execution_mediation_findings(mediation, claim, approval_check, request, now_unix_ms):
+    findings = _action_mediation_structure_findings(mediation)
+    if not isinstance(mediation, dict):
+        return findings
+    expected = {
+        "claim_sha256": claim.get("claim_sha256"),
+        "approval_sha256": approval_check.get("approval_sha256"),
+        "request_sha256": request.get("request_sha256"),
+        "binding_sha256": request["binding"].get("binding_sha256"),
+        "capsule_sha256": request["binding"].get("capsule_sha256"),
+        "invocation_sha256": request["binding"].get("invocation_sha256"),
+        "approval_expires_at_unix_ms": approval_check["approval"].get("expires_at_unix_ms"),
+    }
+    for key, value in expected.items():
+        if mediation.get(key) != value:
+            findings.append({"path": "mediation." + key, "code": "mediation-binding-mismatch", "message": key + " does not match the verified execution chain"})
+    if type(now_unix_ms) is not int or now_unix_ms < 0:
+        findings.append({"path": "now_unix_ms", "code": "invalid-time", "message": "execution time must be a non-negative integer"})
+    elif type(mediation.get("mediated_at_unix_ms")) is int and now_unix_ms < mediation["mediated_at_unix_ms"]:
+        findings.append({"path": "now_unix_ms", "code": "execution-before-mediation", "message": "execution cannot precede mediation"})
+    return findings
+
+
+def _execute_action_host_mediation_v0(
+    approval, request, claim, mediation, manifest, tool_binding, tool_input, program_src,
+    wasm_bytes, builder_surface, builder_components, verifier_components,
+    entrypoint, invocation, environment_values, now_unix_ms, public_key_value, ledger_path,
+):
+    import os
+    approval_check = _verify_action_capsule_approval_v2(
+        approval, request, manifest, tool_binding, tool_input, program_src,
+        wasm_bytes, builder_surface, builder_components, verifier_components,
+        entrypoint, invocation, now_unix_ms, public_key_value,
+    )
+    if not approval_check["valid"]:
+        return _action_execution_validation(None, approval_check["findings"])
+    claim_findings = _action_claim_findings(claim, approval_check, request, now_unix_ms)
+    if claim_findings:
+        return _action_execution_validation(None, claim_findings)
+    mediation_findings = _action_execution_mediation_findings(
+        mediation, claim, approval_check, request, now_unix_ms,
+    )
+    if mediation_findings:
+        return _action_execution_validation(None, mediation_findings)
+    snapshot_directory = None
+    execution = None
+    try:
+        sandbox, prefix = _action_execution_sandbox_provider()
+        _action_execution_probe_sandbox(prefix)
+        remeasurement, environment, stdin_bytes, cwd_path, snapshot_directory, snapshot_path = _action_execution_remeasure(
+            request["binding"], tool_input, environment_values, mediation, ledger_path,
+        )
+        _action_execution_reserve(claim, mediation, remeasurement, now_unix_ms, ledger_path)
+        attempt = _action_execution_run(
+            prefix, snapshot_path, request["binding"]["invocation"]["argv"], cwd_path,
+            environment, stdin_bytes, request["binding"]["invocation"]["timeout_ms"],
+            mediation, remeasurement, sandbox,
+        )
+        body = {
+            "schema": _ACTION_EXECUTION_SCHEMA,
+            "mediation_sha256": mediation["mediation_sha256"],
+            "claim_sha256": mediation["claim_sha256"],
+            "binding_sha256": mediation["binding_sha256"],
+            "host_remeasurement": remeasurement,
+            "host_remeasurement_sha256": remeasurement["host_remeasurement_sha256"],
+            "sandbox": sandbox,
+            "sandbox_sha256": sandbox["sandbox_sha256"],
+            "attempt": attempt,
+            "attempt_sha256": attempt["attempt_sha256"],
+            "executed_at_unix_ms": now_unix_ms,
+            "approval_expires_at_unix_ms": mediation["approval_expires_at_unix_ms"],
+            "status": attempt["result"],
+        }
+        body["execution_sha256"] = _binding_sha256(body)
+        execution = body
+        _action_execution_finish(mediation, remeasurement, attempt, now_unix_ms, ledger_path)
+    except (OSError, ValueError) as error:
+        return _action_execution_validation(execution, [{
+            "path": "host", "code": "action-bounded-execution-failed", "message": str(error),
+        }])
+    finally:
+        if snapshot_directory is not None:
+            try:
+                os.unlink(os.path.join(snapshot_directory, "adapter"))
+            except OSError:
+                pass
+            try:
+                os.rmdir(snapshot_directory)
+            except OSError:
+                pass
+    return _action_execution_validation(execution, [])
+
+
+def execute_action_host_mediation_v0(
+    approval, request, claim, mediation, manifest, tool_binding, tool_input, program_src,
+    wasm_bytes, builder_surface, builder_components, verifier_components,
+    entrypoint, invocation, environment_values, now_unix_ms,
+):
+    """Execute one mediated exact invocation once under a verified network sandbox."""
+    try:
+        public_key = _action_approval_load_public_key()
+    except ValueError as error:
+        return _action_execution_validation(None, [{
+            "path": "public_key", "code": "public-key-unavailable", "message": str(error),
+        }])
+    return _execute_action_host_mediation_v0(
+        approval, request, claim, mediation, manifest, tool_binding, tool_input, program_src,
+        wasm_bytes, builder_surface, builder_components, verifier_components,
+        entrypoint, invocation, environment_values, now_unix_ms, public_key,
+        _action_claim_ledger_path(),
+    )
+
+
 def collect_observation(manifest, result, actions_observed, evidence):
     """Collect read-only Git facts; fail closed where host Git is unavailable."""
     validation = validate_manifest(manifest)
@@ -5534,6 +6170,37 @@ _ACTION_MEDIATION_OBLIGATIONS = (
     "deny-network",
 )
 _ACTION_MEDIATION_MAX_EXECUTABLE_BYTES = 64 * 1024 * 1024
+_ACTION_EXECUTION_SCHEMA = "loom-action-bounded-execution/v0"
+_ACTION_EXECUTION_VALIDATION_SCHEMA = "loom-action-bounded-execution-validation/v0"
+_ACTION_EXECUTION_ATTEMPT_SCHEMA = "loom-action-process-attempt/v0"
+_ACTION_EXECUTION_REMEASUREMENT_SCHEMA = "loom-action-host-remeasurement/v0"
+_ACTION_EXECUTION_SANDBOX_SCHEMA = "loom-action-network-sandbox/v0"
+_ACTION_EXECUTION_LEDGER_TABLE = "action_executions_v0"
+_ACTION_EXECUTION_LEDGER_SCHEMA = (
+    "CREATE TABLE action_executions_v0 ("
+    "mediation_sha256 TEXT PRIMARY KEY CHECK(length(mediation_sha256)=64), "
+    "claim_sha256 TEXT NOT NULL CHECK(length(claim_sha256)=64), "
+    "binding_sha256 TEXT NOT NULL CHECK(length(binding_sha256)=64), "
+    "host_remeasurement_sha256 TEXT NOT NULL CHECK(length(host_remeasurement_sha256)=64), "
+    "reserved_at_unix_ms INTEGER NOT NULL CHECK(reserved_at_unix_ms>=0), "
+    "approval_expires_at_unix_ms INTEGER NOT NULL CHECK(approval_expires_at_unix_ms>reserved_at_unix_ms), "
+    "status TEXT NOT NULL CHECK(status IN ('reserved','completed','failed','timed-out','output-limit-exceeded','spawn-failed')), "
+    "duration_ms INTEGER CHECK(duration_ms IS NULL OR duration_ms>=0), "
+    "exit_code INTEGER, terminating_signal INTEGER, "
+    "stdout_sha256 TEXT CHECK(stdout_sha256 IS NULL OR length(stdout_sha256)=64), "
+    "stdout_size_bytes INTEGER CHECK(stdout_size_bytes IS NULL OR stdout_size_bytes>=0), "
+    "stderr_sha256 TEXT CHECK(stderr_sha256 IS NULL OR length(stderr_sha256)=64), "
+    "stderr_size_bytes INTEGER CHECK(stderr_size_bytes IS NULL OR stderr_size_bytes>=0), "
+    "attempt_sha256 TEXT UNIQUE CHECK(attempt_sha256 IS NULL OR length(attempt_sha256)=64))"
+)
+_ACTION_EXECUTION_LEDGER_CREATE = _ACTION_EXECUTION_LEDGER_SCHEMA.replace(
+    "CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", 1,
+)
+_ACTION_EXECUTION_RESULTS = (
+    "completed", "failed", "timed-out", "output-limit-exceeded", "spawn-failed",
+)
+_ACTION_EXECUTION_MAX_OUTPUT_BYTES = 1024 * 1024
+_ACTION_EXECUTION_DARWIN_PROFILE = "(version 1)(allow default)(deny network*)"
 
 
 def _action_semantics_validation(semantics, compiler_attribution, findings):
@@ -6556,6 +7223,239 @@ def _action_mediation_validation(mediation, findings):
     }
 
 
+def _action_execution_validation(execution, findings):
+    return {
+        "schema": _ACTION_EXECUTION_VALIDATION_SCHEMA,
+        "valid": not findings,
+        "advisory": False,
+        "authorization": "terminal-result-required" if not findings else "none",
+        "execution": execution if execution is not None else None,
+        "findings": findings,
+    }
+
+
+def _action_execution_structure_findings(execution):
+    outer_keys = {
+        "schema", "mediation_sha256", "claim_sha256", "binding_sha256",
+        "host_remeasurement", "host_remeasurement_sha256", "sandbox",
+        "sandbox_sha256", "attempt", "attempt_sha256", "executed_at_unix_ms",
+        "approval_expires_at_unix_ms", "status", "execution_sha256",
+    }
+    findings = _action_invocation_closed_findings(execution, "execution", outer_keys)
+    if not isinstance(execution, dict):
+        return findings
+    if execution.get("schema") != _ACTION_EXECUTION_SCHEMA:
+        findings.append({"path": "execution.schema", "code": "schema-mismatch", "message": "unsupported Bounded Execution schema"})
+    for key in (
+        "mediation_sha256", "claim_sha256", "binding_sha256",
+        "host_remeasurement_sha256", "sandbox_sha256", "attempt_sha256",
+        "execution_sha256",
+    ):
+        if not _binding_is_sha256(execution.get(key)):
+            findings.append({"path": "execution." + key, "code": "expected-sha256", "message": key + " must be lowercase SHA-256 hex"})
+
+    remeasurement = execution.get("host_remeasurement")
+    remeasurement_keys = {
+        "schema", "source_host_measurement_sha256", "executable_sha256",
+        "executable_identity", "launch_identity", "path_custody",
+        "working_directory_identity", "environment_sha256", "stdin_sha256",
+        "stdin_size_bytes", "spawn_boundary", "host_remeasurement_sha256",
+    }
+    findings.extend(_action_invocation_closed_findings(
+        remeasurement, "execution.host_remeasurement", remeasurement_keys,
+    ))
+    if isinstance(remeasurement, dict):
+        if remeasurement.get("schema") != _ACTION_EXECUTION_REMEASUREMENT_SCHEMA:
+            findings.append({"path": "execution.host_remeasurement.schema", "code": "schema-mismatch", "message": "unsupported host remeasurement schema"})
+        for key in (
+            "source_host_measurement_sha256", "executable_sha256", "environment_sha256",
+            "stdin_sha256", "host_remeasurement_sha256",
+        ):
+            if not _binding_is_sha256(remeasurement.get(key)):
+                findings.append({"path": "execution.host_remeasurement." + key, "code": "expected-sha256", "message": key + " must be lowercase SHA-256 hex"})
+        findings.extend(_action_mediation_identity_findings(
+            remeasurement.get("executable_identity"),
+            "execution.host_remeasurement.executable_identity", "regular-file",
+        ))
+        findings.extend(_action_mediation_identity_findings(
+            remeasurement.get("launch_identity"),
+            "execution.host_remeasurement.launch_identity", "regular-file",
+        ))
+        findings.extend(_action_mediation_identity_findings(
+            remeasurement.get("working_directory_identity"),
+            "execution.host_remeasurement.working_directory_identity", "directory",
+        ))
+        stdin_size = remeasurement.get("stdin_size_bytes")
+        if type(stdin_size) is not int or stdin_size < 0:
+            findings.append({"path": "execution.host_remeasurement.stdin_size_bytes", "code": "expected-size", "message": "stdin_size_bytes must be a non-negative integer"})
+        boundary = remeasurement.get("spawn_boundary")
+        custody = remeasurement.get("path_custody")
+        if boundary not in {"private-executable-snapshot", "root-owned-immutable-path"}:
+            findings.append({"path": "execution.host_remeasurement.spawn_boundary", "code": "unsupported-spawn-boundary", "message": "spawn boundary is not supported by Bounded Execution v0"})
+        if not isinstance(custody, list) or len(custody) > 256:
+            findings.append({"path": "execution.host_remeasurement.path_custody", "code": "invalid-path-custody", "message": "path_custody must be a bounded list"})
+        else:
+            for index, item in enumerate(custody):
+                item_path = "execution.host_remeasurement.path_custody[" + str(index) + "]"
+                findings.extend(_action_invocation_closed_findings(item, item_path, {"component_index", "identity"}))
+                if not isinstance(item, dict):
+                    continue
+                if item.get("component_index") != index:
+                    findings.append({"path": item_path + ".component_index", "code": "path-custody-order", "message": "path custody components must be contiguous and ordered"})
+                expected_kind = "regular-file" if index == len(custody) - 1 else "directory"
+                identity = item.get("identity")
+                findings.extend(_action_mediation_identity_findings(identity, item_path + ".identity", expected_kind))
+                if isinstance(identity, dict):
+                    if identity.get("owner_uid") != "0":
+                        findings.append({"path": item_path + ".identity.owner_uid", "code": "path-custody-owner", "message": "immutable path custody must remain root-owned"})
+                    mode = identity.get("mode")
+                    if isinstance(mode, str) and len(mode) == 4 and all(char in "01234567" for char in mode) and int(mode, 8) & 0o022:
+                        findings.append({"path": item_path + ".identity.mode", "code": "path-custody-writable", "message": "immutable path custody must not be group/world-writable"})
+            if boundary == "private-executable-snapshot" and custody:
+                findings.append({"path": "execution.host_remeasurement.path_custody", "code": "unexpected-path-custody", "message": "private snapshots must not claim root path custody"})
+            if boundary == "root-owned-immutable-path":
+                if not custody:
+                    findings.append({"path": "execution.host_remeasurement.path_custody", "code": "missing-path-custody", "message": "immutable path execution requires complete root path custody"})
+                elif isinstance(custody[-1], dict) and remeasurement.get("launch_identity") != custody[-1].get("identity"):
+                    findings.append({"path": "execution.host_remeasurement.launch_identity", "code": "launch-custody-mismatch", "message": "launch identity must be the final immutable path component"})
+                if remeasurement.get("launch_identity") != remeasurement.get("executable_identity"):
+                    findings.append({"path": "execution.host_remeasurement.launch_identity", "code": "launch-identity-mismatch", "message": "immutable path launch must preserve the mediated executable identity"})
+        try:
+            expected_remeasurement_hash = _binding_sha256({
+                key: remeasurement[key] for key in remeasurement_keys if key != "host_remeasurement_sha256"
+            }) if set(remeasurement) >= remeasurement_keys else None
+        except (TypeError, ValueError):
+            expected_remeasurement_hash = None
+            findings.append({"path": "execution.host_remeasurement", "code": "non-canonical-remeasurement", "message": "host remeasurement must contain canonical JSON values"})
+        if expected_remeasurement_hash is not None and remeasurement.get("host_remeasurement_sha256") != expected_remeasurement_hash:
+            findings.append({"path": "execution.host_remeasurement.host_remeasurement_sha256", "code": "remeasurement-hash-mismatch", "message": "host_remeasurement_sha256 does not match the canonical remeasurement"})
+
+    sandbox = execution.get("sandbox")
+    sandbox_keys = {"schema", "profile", "policy_sha256", "provider_sha256", "provider_identity", "network", "sandbox_sha256"}
+    findings.extend(_action_invocation_closed_findings(sandbox, "execution.sandbox", sandbox_keys))
+    if isinstance(sandbox, dict):
+        if sandbox.get("schema") != _ACTION_EXECUTION_SANDBOX_SCHEMA:
+            findings.append({"path": "execution.sandbox.schema", "code": "schema-mismatch", "message": "unsupported network sandbox schema"})
+        if sandbox.get("profile") not in {"darwin-seatbelt-network-deny/v0", "linux-user-network-namespace/v0"}:
+            findings.append({"path": "execution.sandbox.profile", "code": "unsupported-sandbox-profile", "message": "network sandbox profile is not supported"})
+        if sandbox.get("network") != "denied":
+            findings.append({"path": "execution.sandbox.network", "code": "network-not-denied", "message": "sandbox evidence must deny network access"})
+        if not _binding_is_sha256(sandbox.get("provider_sha256")):
+            findings.append({"path": "execution.sandbox.provider_sha256", "code": "expected-sha256", "message": "provider_sha256 must be lowercase SHA-256 hex"})
+        expected_policy = {
+            "darwin-seatbelt-network-deny/v0": ["-p", _ACTION_EXECUTION_DARWIN_PROFILE],
+            "linux-user-network-namespace/v0": ["--user", "--map-root-user", "--net", "--"],
+        }.get(sandbox.get("profile"))
+        if expected_policy is not None and sandbox.get("policy_sha256") != _binding_sha256({
+            "profile": sandbox["profile"], "arguments": expected_policy,
+        }):
+            findings.append({"path": "execution.sandbox.policy_sha256", "code": "sandbox-policy-mismatch", "message": "sandbox policy hash does not bind the fixed v0 profile arguments"})
+        elif not _binding_is_sha256(sandbox.get("policy_sha256")):
+            findings.append({"path": "execution.sandbox.policy_sha256", "code": "expected-sha256", "message": "policy_sha256 must be lowercase SHA-256 hex"})
+        identity = sandbox.get("provider_identity")
+        findings.extend(_action_mediation_identity_findings(identity, "execution.sandbox.provider_identity", "regular-file"))
+        if isinstance(identity, dict) and identity.get("owner_uid") != "0":
+            findings.append({"path": "execution.sandbox.provider_identity.owner_uid", "code": "sandbox-provider-owner", "message": "sandbox provider must be root-owned"})
+        try:
+            expected_sandbox_hash = _binding_sha256({key: sandbox[key] for key in sandbox_keys if key != "sandbox_sha256"}) if set(sandbox) >= sandbox_keys else None
+        except (TypeError, ValueError):
+            expected_sandbox_hash = None
+            findings.append({"path": "execution.sandbox", "code": "non-canonical-sandbox", "message": "sandbox evidence must contain canonical JSON values"})
+        if expected_sandbox_hash is not None and sandbox.get("sandbox_sha256") != expected_sandbox_hash:
+            findings.append({"path": "execution.sandbox.sandbox_sha256", "code": "sandbox-hash-mismatch", "message": "sandbox_sha256 does not match the canonical sandbox evidence"})
+
+    attempt = execution.get("attempt")
+    attempt_keys = {
+        "schema", "result", "mediation_sha256", "host_remeasurement_sha256",
+        "sandbox_sha256", "timeout_ms", "output_limit_bytes", "duration_ms",
+        "exit_code", "terminating_signal", "stdout", "stderr", "stdin_sha256",
+        "shell", "network", "attempt_sha256",
+    }
+    findings.extend(_action_invocation_closed_findings(attempt, "execution.attempt", attempt_keys))
+    if isinstance(attempt, dict):
+        if attempt.get("schema") != _ACTION_EXECUTION_ATTEMPT_SCHEMA:
+            findings.append({"path": "execution.attempt.schema", "code": "schema-mismatch", "message": "unsupported process attempt schema"})
+        if attempt.get("result") not in _ACTION_EXECUTION_RESULTS:
+            findings.append({"path": "execution.attempt.result", "code": "invalid-execution-result", "message": "attempt result is not terminal"})
+        for key in ("mediation_sha256", "host_remeasurement_sha256", "sandbox_sha256", "stdin_sha256", "attempt_sha256"):
+            if not _binding_is_sha256(attempt.get(key)):
+                findings.append({"path": "execution.attempt." + key, "code": "expected-sha256", "message": key + " must be lowercase SHA-256 hex"})
+        if type(attempt.get("timeout_ms")) is not int or attempt.get("timeout_ms", 0) <= 0:
+            findings.append({"path": "execution.attempt.timeout_ms", "code": "invalid-timeout", "message": "timeout_ms must be a positive integer"})
+        if attempt.get("output_limit_bytes") != _ACTION_EXECUTION_MAX_OUTPUT_BYTES:
+            findings.append({"path": "execution.attempt.output_limit_bytes", "code": "output-limit-mismatch", "message": "output limit must match the Bounded Execution v0 constant"})
+        if type(attempt.get("duration_ms")) is not int or attempt.get("duration_ms", -1) < 0:
+            findings.append({"path": "execution.attempt.duration_ms", "code": "invalid-duration", "message": "duration_ms must be a non-negative integer"})
+        for key in ("exit_code", "terminating_signal"):
+            value = attempt.get(key)
+            if value is not None and type(value) is not int:
+                findings.append({"path": "execution.attempt." + key, "code": "invalid-process-status", "message": key + " must be an integer or null"})
+        for name in ("stdout", "stderr"):
+            stream = attempt.get(name)
+            stream_path = "execution.attempt." + name
+            findings.extend(_action_invocation_closed_findings(stream, stream_path, {"sha256", "size_bytes"}))
+            if isinstance(stream, dict):
+                if not _binding_is_sha256(stream.get("sha256")):
+                    findings.append({"path": stream_path + ".sha256", "code": "expected-sha256", "message": name + " sha256 must be lowercase SHA-256 hex"})
+                if type(stream.get("size_bytes")) is not int or stream.get("size_bytes", -1) < 0:
+                    findings.append({"path": stream_path + ".size_bytes", "code": "expected-size", "message": name + " size must be a non-negative integer"})
+                if stream.get("size_bytes", 0) > _ACTION_EXECUTION_MAX_OUTPUT_BYTES and attempt.get("result") != "output-limit-exceeded":
+                    findings.append({"path": stream_path + ".size_bytes", "code": "unaccounted-output-overflow", "message": "oversized output requires output-limit-exceeded result"})
+        if attempt.get("shell") != "denied" or attempt.get("network") != "denied":
+            findings.append({"path": "execution.attempt", "code": "execution-control-mismatch", "message": "attempt must record shell and network as denied"})
+        if attempt.get("result") == "completed" and (attempt.get("exit_code") != 0 or attempt.get("terminating_signal") is not None):
+            findings.append({"path": "execution.attempt", "code": "completed-status-mismatch", "message": "completed attempts require exit code zero and no signal"})
+        if attempt.get("result") == "spawn-failed" and (attempt.get("exit_code") is not None or attempt.get("terminating_signal") is not None):
+            findings.append({"path": "execution.attempt", "code": "spawn-status-mismatch", "message": "spawn-failed attempts cannot contain child process status"})
+        try:
+            expected_attempt_hash = _binding_sha256({key: attempt[key] for key in attempt_keys if key != "attempt_sha256"}) if set(attempt) >= attempt_keys else None
+        except (TypeError, ValueError):
+            expected_attempt_hash = None
+            findings.append({"path": "execution.attempt", "code": "non-canonical-attempt", "message": "process attempt must contain canonical JSON values"})
+        if expected_attempt_hash is not None and attempt.get("attempt_sha256") != expected_attempt_hash:
+            findings.append({"path": "execution.attempt.attempt_sha256", "code": "attempt-hash-mismatch", "message": "attempt_sha256 does not match the canonical process attempt"})
+
+    if isinstance(remeasurement, dict) and execution.get("host_remeasurement_sha256") != remeasurement.get("host_remeasurement_sha256"):
+        findings.append({"path": "execution.host_remeasurement_sha256", "code": "remeasurement-link-mismatch", "message": "outer remeasurement hash does not match nested evidence"})
+    if isinstance(sandbox, dict) and execution.get("sandbox_sha256") != sandbox.get("sandbox_sha256"):
+        findings.append({"path": "execution.sandbox_sha256", "code": "sandbox-link-mismatch", "message": "outer sandbox hash does not match nested evidence"})
+    if isinstance(attempt, dict):
+        links = {
+            "mediation_sha256": execution.get("mediation_sha256"),
+            "host_remeasurement_sha256": execution.get("host_remeasurement_sha256"),
+            "sandbox_sha256": execution.get("sandbox_sha256"),
+        }
+        for key, expected in links.items():
+            if attempt.get(key) != expected:
+                findings.append({"path": "execution.attempt." + key, "code": "attempt-link-mismatch", "message": key + " does not match outer execution evidence"})
+        if execution.get("attempt_sha256") != attempt.get("attempt_sha256"):
+            findings.append({"path": "execution.attempt_sha256", "code": "attempt-link-mismatch", "message": "outer attempt hash does not match nested evidence"})
+        if execution.get("status") != attempt.get("result"):
+            findings.append({"path": "execution.status", "code": "execution-status-mismatch", "message": "execution status must match the terminal process result"})
+        if isinstance(remeasurement, dict) and attempt.get("stdin_sha256") != remeasurement.get("stdin_sha256"):
+            findings.append({"path": "execution.attempt.stdin_sha256", "code": "stdin-link-mismatch", "message": "attempt stdin does not match host remeasurement"})
+    executed = execution.get("executed_at_unix_ms")
+    expires = execution.get("approval_expires_at_unix_ms")
+    if type(executed) is not int or executed < 0:
+        findings.append({"path": "execution.executed_at_unix_ms", "code": "invalid-time", "message": "execution time must be a non-negative integer"})
+    if type(expires) is not int or type(executed) is not int or expires <= executed:
+        findings.append({"path": "execution.approval_expires_at_unix_ms", "code": "invalid-expiry", "message": "approval expiry must be later than execution time"})
+    try:
+        expected_execution_hash = _binding_sha256({key: execution[key] for key in outer_keys if key != "execution_sha256"}) if set(execution) >= outer_keys else None
+    except (TypeError, ValueError):
+        expected_execution_hash = None
+        findings.append({"path": "execution", "code": "non-canonical-execution", "message": "Bounded Execution must contain canonical JSON values"})
+    if expected_execution_hash is not None and execution.get("execution_sha256") != expected_execution_hash:
+        findings.append({"path": "execution.execution_sha256", "code": "execution-hash-mismatch", "message": "execution_sha256 does not match the canonical Bounded Execution"})
+    return findings
+
+
+def validate_action_bounded_execution_v0(execution):
+    """Validate a closed Bounded Execution artifact without performing host IO."""
+    findings = _action_execution_structure_findings(execution)
+    return _action_execution_validation(execution, findings)
+
+
 def _action_approval_prefixed(path, findings):
     return [{
         "path": path + ("." + item["path"] if item.get("path") else ""),
@@ -7427,7 +8327,7 @@ def build_about():
     return {
         "schema": "loom-about/v1",
         "language": "LOOM",
-        "citadel_checks": 493,
+        "citadel_checks": 494,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "i31_bits": INT_BITS,
         "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],

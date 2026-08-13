@@ -36,6 +36,7 @@ ACTION_INVOCATION_BINDING_DOC = ROOT / "docs" / "action_invocation_binding_v0.md
 ACTION_APPROVAL_V2_DOC = ROOT / "docs" / "action_approval_v2.md"
 ACTION_CLAIM_V0_DOC = ROOT / "docs" / "action_claim_v0.md"
 ACTION_HOST_MEDIATION_V0_DOC = ROOT / "docs" / "action_host_mediation_v0.md"
+ACTION_BOUNDED_EXECUTION_V0_DOC = ROOT / "docs" / "action_bounded_execution_v0.md"
 WASM_ARTIFACT_DOC = ROOT / "docs" / "gate_wasm_artifact_v1.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
 
@@ -44,7 +45,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "493-action-host-mediation-v0")',
+        'bundleUrl.searchParams.set("v", "494-bounded-execution-v0")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -145,8 +146,8 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "493 self-verifying checks",
-        ">493</div>",
+        "494 self-verifying checks",
+        ">494</div>",
     )
     forbidden = (
         "456 self-verifying checks",
@@ -1426,6 +1427,38 @@ def _check_action_host_mediation_v0_doc() -> None:
         raise SystemExit("docs parity: Trusted Host Mediation v0 contract drift: missing " + ", ".join(missing))
 
 
+def _check_action_bounded_execution_v0_doc() -> None:
+    words = " ".join(ACTION_BOUNDED_EXECUTION_V0_DOC.read_text().split())
+    required = (
+        "LOOM Bounded Execution v0",
+        "process-executing, and fail-closed on missing network isolation",
+        "execute_action_host_mediation_v0(",
+        "validate_action_bounded_execution_v0(execution)",
+        'authorization: "terminal-result-required"',
+        "does not treat `shell=False` as network isolation",
+        "darwin-seatbelt-network-deny/v0",
+        "linux-user-network-namespace/v0",
+        "`policy_sha256` binds the exact fixed profile arguments",
+        "before ledger reservation and before target execution",
+        "private-executable-snapshot",
+        "root-owned-immutable-path",
+        "path-custody evidence",
+        "Same-UID mutation",
+        "SQLite `BEGIN IMMEDIATE`",
+        "host crash may leave a `reserved` row",
+        "completely replaced environment",
+        "Timeout kills the complete process group",
+        "limited to 1 MiB",
+        "No stdout, stderr, environment value, credential, stdin payload",
+        "does not issue Action Capsule Result v0",
+        "recomputes every nested and outer hash",
+        "fails closed before reservation",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: Bounded Execution v0 contract drift: missing " + ", ".join(missing))
+
+
 def _check_wasm_artifact_doc() -> None:
     text = WASM_ARTIFACT_DOC.read_text()
     words = " ".join(text.split())
@@ -1521,6 +1554,7 @@ def main() -> int:
     _check_action_approval_v2_parity()
     _check_action_claim_v0_doc()
     _check_action_host_mediation_v0_doc()
+    _check_action_bounded_execution_v0_doc()
     _check_wasm_artifact_doc()
     _check_secret_credential_policy_doc()
     _check_pyodide_import_boundary()
