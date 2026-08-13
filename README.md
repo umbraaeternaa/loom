@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 495 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 496 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 495/495 citadel checks
+PASS — 496/496 citadel checks
 ```
 
 ## The idea in one screen
@@ -173,8 +173,11 @@ launches through either an exact private snapshot or a fully checked root-owned
 immutable macOS path, replaces the complete environment, supplies canonical
 stdin, enforces timeout/output bounds, and records only redacted terminal
 attempt hashes. Its pure validator closes every evidence shape, nested hash,
-and cross-link. It returns `terminal-result-required`; Result v0 is still a
-separate future contract.
+and cross-link. It returns `terminal-result-required`.
+[`Action Capsule Result v0`](docs/action_capsule_result_v0.md) then verifies the
+complete signed lifecycle at the execution-time approval boundary, embeds the
+redacted chain in one content-addressed terminal artifact, atomically closes
+the Claim, and denies replay or further authorization.
 
 Certified recursion can also use [`Proven Value Bounds v1`](docs/proven_value_bounds_v1.md):
 the checker derives conservative i31 and list-length upper bounds through

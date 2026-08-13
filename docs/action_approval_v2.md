@@ -125,6 +125,6 @@ and signature before returning the approval hash.
 Approval v2 is additive. Existing Gate Approval v1, Gate claim/executor,
 Action Capsule v0, Invocation Binding v0, Compiler Evidence, Receipt, Workflow,
 CLI, Playground, MCP, A2A, WASI, and host-executor schemas are unchanged.
-Capsule Claim v0 and Trusted Host Mediation v0 are implemented as separate
-additive stateful contracts. Bounded execution and terminal Action Capsule
-Result v0 remain separate future contracts.
+Capsule Claim v0, Trusted Host Mediation v0, Bounded Execution v0, and terminal
+Action Capsule Result v0 are implemented as separate additive stateful
+contracts.

@@ -37,6 +37,7 @@ ACTION_APPROVAL_V2_DOC = ROOT / "docs" / "action_approval_v2.md"
 ACTION_CLAIM_V0_DOC = ROOT / "docs" / "action_claim_v0.md"
 ACTION_HOST_MEDIATION_V0_DOC = ROOT / "docs" / "action_host_mediation_v0.md"
 ACTION_BOUNDED_EXECUTION_V0_DOC = ROOT / "docs" / "action_bounded_execution_v0.md"
+ACTION_CAPSULE_RESULT_V0_DOC = ROOT / "docs" / "action_capsule_result_v0.md"
 WASM_ARTIFACT_DOC = ROOT / "docs" / "gate_wasm_artifact_v1.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
 
@@ -45,7 +46,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "495-sequence-semantics-v0")',
+        'bundleUrl.searchParams.set("v", "496-action-result-v0")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -146,8 +147,8 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "495 self-verifying checks",
-        ">495</div>",
+        "496 self-verifying checks",
+        ">496</div>",
     )
     forbidden = (
         "494 self-verifying checks",
@@ -1124,7 +1125,7 @@ def _check_action_invocation_binding_doc() -> None:
         "wasm-compiler-drift",
         "perform no filesystem lookup",
         "does not approve or execute",
-        "remain separate future contracts",
+        "implemented as separate stateful contracts",
         "Existing Gate, Interface/Tool Binding, Action Semantics, Action Capsule",
     )
     missing = [needle for needle in required if needle not in words]
@@ -1269,8 +1270,7 @@ def _check_action_approval_v2_doc() -> None:
         "explicit trusted-host input",
         "writes only `approval.json`",
         "cannot be substituted",
-        "Capsule Claim v0 and Trusted Host Mediation v0 are implemented as separate additive stateful contracts",
-        "terminal Action Capsule Result v0 remain separate future contracts",
+        "Capsule Claim v0, Trusted Host Mediation v0, Bounded Execution v0, and terminal Action Capsule Result v0 are implemented as separate additive stateful contracts",
     )
     missing = [needle for needle in required if needle not in words]
     if missing:
@@ -1452,13 +1452,37 @@ def _check_action_bounded_execution_v0_doc() -> None:
         "Timeout kills the complete process group",
         "limited to 1 MiB",
         "No stdout, stderr, environment value, credential, stdin payload",
-        "does not issue Action Capsule Result v0",
+        "does not itself issue Action Capsule Result v0",
         "recomputes every nested and outer hash",
         "fails closed before reservation",
     )
     missing = [needle for needle in required if needle not in words]
     if missing:
         raise SystemExit("docs parity: Bounded Execution v0 contract drift: missing " + ", ".join(missing))
+
+
+def _check_action_capsule_result_v0_doc() -> None:
+    words = " ".join(ACTION_CAPSULE_RESULT_V0_DOC.read_text().split())
+    required = (
+        "LOOM Action Capsule Result v0",
+        "terminal, content-addressed, stateful, one-use, and non-authorizing",
+        "finalize_action_capsule_result_v0(",
+        "validate_action_capsule_result_v0(result, public_key_value)",
+        "loom-action-capsule-result/v0",
+        "loom-action-terminal-outcome/v0",
+        "loom-action-result-lifecycle/v0",
+        "execution start time",
+        "contains no stdout, stderr, environment value, credential, stdin payload",
+        "SQLite `BEGIN IMMEDIATE`",
+        "exact canonical `action_claims_v0`, `action_mediations_v0`, `action_executions_v0`, and `action_results_v0` table schemas",
+        "Replay and concurrent finalization",
+        'authorization: "none"',
+        'replay: "denied"',
+        "does not execute this API",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: Action Capsule Result v0 contract drift: missing " + ", ".join(missing))
 
 
 def _check_wasm_artifact_doc() -> None:
@@ -1557,6 +1581,7 @@ def main() -> int:
     _check_action_claim_v0_doc()
     _check_action_host_mediation_v0_doc()
     _check_action_bounded_execution_v0_doc()
+    _check_action_capsule_result_v0_doc()
     _check_wasm_artifact_doc()
     _check_secret_credential_policy_doc()
     _check_pyodide_import_boundary()

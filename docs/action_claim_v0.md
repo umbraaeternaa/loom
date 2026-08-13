@@ -93,9 +93,9 @@ schemas are unchanged; an Approval v2 cannot be consumed through the v1 API.
 Claim v0 does not remeasure executable bytes or environment values, install
 resource limits, obtain credentials, execute a process, update a claim to a
 terminal state, collect observation, or issue an Action Capsule Result. Trusted
-Host Mediation v0 now owns the first host measurement and one-use redacted
-handoff. Bounded execution, terminal state transition, and Result v0 remain
-separate.
+Host Mediation v0 owns the first host measurement and one-use redacted handoff;
+Bounded Execution v0 owns process launch; Result v0 alone owns the atomic
+terminal Claim transition. These remain separate contracts.
 
 The standalone browser bundle carries the same API and semantics for parity,
 but imports SQLite only when claim is invoked. Browser/Pyodide loading and the

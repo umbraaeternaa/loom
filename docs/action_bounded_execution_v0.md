@@ -125,10 +125,10 @@ snapshot pathname is returned or persisted.
 
 The terminal attempt updates the already-reserved ledger row exactly once and
 is wrapped by `loom-action-bounded-execution/v0`. Bounded Execution v0 does not
-issue Action Capsule Result v0, sign an attestation, or claim filesystem
+itself issue Action Capsule Result v0, sign an attestation, or claim filesystem
 confinement beyond the explicit no-follow measurements and selected launch
 boundary.
-Terminal Result v0 remains the next contract.
+The separately implemented Result v0 consumes this exact terminal handoff.
 
 `validate_action_bounded_execution_v0` performs no host IO. It validates the
 closed execution, remeasurement, sandbox, path-custody, stream metadata, and

@@ -2119,7 +2119,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             "actions_observed": ["read", "write", "test", "git-commit"],
             "evidence": [
                 {"kind": "syntax", "status": "pass", "detail": "PASS syntax"},
-                {"kind": "citadel", "status": "pass", "detail": "495/495"},
+                {"kind": "citadel", "status": "pass", "detail": "496/496"},
                 {"kind": "docs-parity", "status": "pass", "detail": "PASS docs parity"},
                 {"kind": "git-clean", "status": "pass", "detail": "clean"},
                 {"kind": "git-sync", "status": "pass", "detail": "HEAD == origin/main"},
@@ -4495,6 +4495,18 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
                 now, test_key, ledger_path,
             )
 
+        def finalize_result_v0(
+            ledger_path, candidate_approval, candidate_request, candidate_claim,
+            candidate_mediation, candidate_execution, candidate_invocation,
+            now=action_issued + 1000,
+        ):
+            return _loom._finalize_action_capsule_result_v0(
+                candidate_approval, candidate_request, candidate_claim, candidate_mediation,
+                candidate_execution, semantics_manifest, semantics_tool, semantics_input,
+                semantics_src, semantics_wasm, running_surface, compiler_components,
+                compiler_components, "main", candidate_invocation, now, test_key, ledger_path,
+            )
+
         try:
             execution_provider, execution_prefix = _loom._action_execution_sandbox_provider()
             _loom._action_execution_probe_sandbox(execution_prefix)
@@ -4636,6 +4648,9 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
                 concurrency_ok = sum(item["valid"] for item in concurrent_executions) == 1 and concurrent_execution_rows == 1
 
             execution_artifact_validation_ok = True
+            action_result = action_result_replay = timeout_result = None
+            result_schema = result_row = result_claim_status = None
+            result_artifact_validation_ok = result_concurrency_ok = result_timeout_ok = True
             if execution_sandbox_available:
                 validated_execution = _loom.validate_action_bounded_execution_v0(cat_execution["execution"])
                 tampered_execution = json.loads(json.dumps(cat_execution["execution"]))
@@ -4651,6 +4666,114 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
                     and any(item["code"] == "attempt-hash-mismatch" for item in rejected_tampered_execution["findings"])
                     and not rejected_noncanonical_execution["valid"]
                     and any(item["code"] == "non-canonical-attempt" for item in rejected_noncanonical_execution["findings"])
+                )
+
+                action_result = finalize_result_v0(
+                    execution_ledger, cat_approval, cat_request, cat_claim, cat_mediation,
+                    cat_execution["execution"], cat_invocation,
+                )
+                action_result_replay = finalize_result_v0(
+                    execution_ledger, cat_approval, cat_request, cat_claim, cat_mediation,
+                    cat_execution["execution"], cat_invocation,
+                )
+                validated_result = _loom.validate_action_capsule_result_v0(
+                    action_result["result"], test_key,
+                )
+                tampered_result = json.loads(json.dumps(action_result["result"]))
+                tampered_result["outcome"]["stdout"]["sha256"] = "0" * 64
+                rejected_tampered_result = _loom.validate_action_capsule_result_v0(
+                    tampered_result, test_key,
+                )
+                noncanonical_result = json.loads(json.dumps(action_result["result"]))
+                noncanonical_result["outcome"]["stdout"]["sha256"] = {"not-json"}
+                rejected_noncanonical_result = _loom.validate_action_capsule_result_v0(
+                    noncanonical_result, test_key,
+                )
+                forged_result = json.loads(json.dumps(action_result["result"]))
+                forged_result["approval"]["signature"] = "AA=="
+                forged_result["approval_sha256"] = _loom._binding_sha256(forged_result["approval"])
+                forged_result["result_sha256"] = _loom._binding_sha256({
+                    key: value for key, value in forged_result.items() if key != "result_sha256"
+                })
+                rejected_forged_result = _loom.validate_action_capsule_result_v0(
+                    forged_result, test_key,
+                )
+                noncanonical_approval_result = json.loads(json.dumps(action_result["result"]))
+                noncanonical_approval_result["approval"]["approver"] = {"not-json"}
+                rejected_noncanonical_approval = _loom.validate_action_capsule_result_v0(
+                    noncanonical_approval_result, test_key,
+                )
+                malformed_claim_result = json.loads(json.dumps(action_result["result"]))
+                malformed_claim_result["claim"] = []
+                rejected_malformed_claim = _loom.validate_action_capsule_result_v0(
+                    malformed_claim_result, test_key,
+                )
+                result_json = json.dumps(action_result["result"], sort_keys=True)
+                result_artifact_validation_ok = (
+                    validated_result["valid"]
+                    and validated_result["authorization"] == "none"
+                    and validated_result["result"] == action_result["result"]
+                    and not rejected_tampered_result["valid"]
+                    and any(item["code"] == "outcome-mismatch" for item in rejected_tampered_result["findings"])
+                    and not rejected_noncanonical_result["valid"]
+                    and any(item["code"] in {"outcome-mismatch", "non-canonical-result"} for item in rejected_noncanonical_result["findings"])
+                    and not rejected_forged_result["valid"]
+                    and any(item["code"] == "invalid-signature" for item in rejected_forged_result["findings"])
+                    and not rejected_noncanonical_approval["valid"]
+                    and any(item["code"] == "non-canonical-approval" for item in rejected_noncanonical_approval["findings"])
+                    and not rejected_malformed_claim["valid"]
+                    and any(item["code"] == "expected-object" for item in rejected_malformed_claim["findings"])
+                    and "not-embedded-secret" not in result_json
+                    and canonical(semantics_input) not in result_json
+                    and ".loom-exec-" not in result_json
+                )
+                with sqlite3.connect(execution_ledger) as connection:
+                    result_schema = connection.execute(
+                        "SELECT sql FROM sqlite_master WHERE type='table' AND name='action_results_v0'",
+                    ).fetchone()
+                    result_row = connection.execute(
+                        "SELECT execution_sha256,attempt_sha256,mediation_sha256,claim_sha256,status,"
+                        "claim_status,result_sha256 FROM action_results_v0",
+                    ).fetchone()
+                    result_claim_status = connection.execute(
+                        "SELECT status FROM action_claims_v0 WHERE claim_sha256=?",
+                        (cat_claim["claim_sha256"],),
+                    ).fetchone()
+
+                timeout_result = finalize_result_v0(
+                    sleep_ledger, sleep_approval, sleep_request, sleep_claim, sleep_mediation,
+                    sleep_execution["execution"], sleep_invocation,
+                )
+                with sqlite3.connect(sleep_ledger) as connection:
+                    timeout_claim_status = connection.execute(
+                        "SELECT status FROM action_claims_v0 WHERE claim_sha256=?",
+                        (sleep_claim["claim_sha256"],),
+                    ).fetchone()
+                result_timeout_ok = (
+                    timeout_result["valid"]
+                    and timeout_result["result"]["outcome"]["status"] == "timed-out"
+                    and timeout_result["result"]["lifecycle"]["claim_status"] == "failed"
+                    and timeout_claim_status == ("failed",)
+                )
+
+                successful_concurrent_execution = next(
+                    item["execution"] for item in concurrent_executions if item["valid"]
+                )
+                with ThreadPoolExecutor(max_workers=4) as pool:
+                    concurrent_results = list(pool.map(
+                        lambda _: finalize_result_v0(
+                            concurrent_ledger, cat_approval, cat_request, concurrent_claim,
+                            concurrent_mediation, successful_concurrent_execution, cat_invocation,
+                        ),
+                        range(4),
+                    ))
+                with sqlite3.connect(concurrent_ledger) as connection:
+                    concurrent_result_rows = connection.execute(
+                        "SELECT COUNT(*) FROM action_results_v0",
+                    ).fetchone()[0]
+                result_concurrency_ok = (
+                    sum(item["valid"] for item in concurrent_results) == 1
+                    and concurrent_result_rows == 1
                 )
 
         if execution_sandbox_available:
@@ -4692,6 +4815,49 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             }, sort_keys=True))
         ok += execution_v0_ok
         print(f"  {'ok  ' if execution_v0_ok else 'FAIL'} gate: Bounded Execution v0")
+        if execution_sandbox_available:
+            action_result_v0_ok = (
+                action_result["valid"] and action_result["authorization"] == "none"
+                and action_result["result"]["lifecycle"] == {
+                    "schema": "loom-action-result-lifecycle/v0", "terminal": True,
+                    "claim_status": "completed", "authorization": "none",
+                    "replay": "denied", "remaining_evidence": ["loom-gate-receipt/v4"],
+                }
+                and not action_result_replay["valid"]
+                and any(item["code"] == "action-result-finalization-failed" for item in action_result_replay["findings"])
+                and result_schema == (_loom._ACTION_RESULT_LEDGER_SCHEMA,)
+                and result_row == (
+                    cat_execution["execution"]["execution_sha256"],
+                    cat_execution["execution"]["attempt_sha256"],
+                    cat_mediation["mediation_sha256"], cat_claim["claim_sha256"],
+                    "completed", "completed", action_result["result_sha256"],
+                )
+                and result_claim_status == ("completed",)
+                and result_artifact_validation_ok and result_timeout_ok and result_concurrency_ok
+            )
+        else:
+            unavailable_result = finalize_result_v0(
+                execution_ledger, cat_approval, cat_request, cat_claim, cat_mediation,
+                cat_execution.get("execution"), cat_invocation,
+            )
+            action_result_v0_ok = (
+                not unavailable_result["valid"] and result_schema is None
+                and any(item["code"] in {"expected-object", "invalid-execution-time", "invalid-verification-time"} for item in unavailable_result["findings"])
+            )
+        if not action_result_v0_ok:
+            print("       action-result diagnostics:", json.dumps({
+                "sandbox_available": execution_sandbox_available,
+                "result": action_result,
+                "replay": action_result_replay,
+                "schema": result_schema,
+                "row": result_row,
+                "claim_status": result_claim_status,
+                "artifact_validation_ok": result_artifact_validation_ok,
+                "timeout_ok": result_timeout_ok,
+                "concurrency_ok": result_concurrency_ok,
+            }, sort_keys=True))
+        ok += action_result_v0_ok
+        print(f"  {'ok  ' if action_result_v0_ok else 'FAIL'} gate: Action Capsule Result v0")
         integrated_observation = {
             "schema": "loom-gate-observation/v1", "result": "completed",
             "repositories": [{"root": "/Users/macbook/Projects/loom", "before_head": "4281c7b", "after_head": "f" * 40}],
@@ -5044,7 +5210,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 495
+            and about_json["citadel_checks"] == 496
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
@@ -5273,7 +5439,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 495/495 citadel checks" in quick
+            and "PASS -- 496/496 citadel checks" in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
             and "loom examples" in quick
@@ -5383,7 +5549,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "495-sequence-semantics-v0")' in play
+            and 'bundleUrl.searchParams.set("v", "496-action-result-v0")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -6000,7 +6166,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 495/495 citadel checks" in rdoc
+            and "PASS -- 496/496 citadel checks" in rdoc
             and "loom examples --format json" in rdoc
             and "loom doctor --dry-run --format json" in rdoc
             and "python3 verify_docs_parity.py" in rdoc
@@ -6009,7 +6175,8 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "LOOM Gate advisory contracts" in rdoc
             and "Compiler Receipt v4" in stable_words
             and "Experimental or bounded" in rdoc
-            and "terminal Action Capsule Result v0 remain future contracts" in bounded_words
+            and "Action Capsule Result v0 closes the one-use host lifecycle" in stable_words
+            and "terminal Action Capsule Result v0 remain future contracts" not in rdoc_words
             and "Receipt v4 remain future contracts" not in rdoc_words
             and "does not magically confine arbitrary external tools" in rdoc_words
             and "Native operator signing is intentionally outside the public language runtime." in rdoc
@@ -6061,7 +6228,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 142   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 143   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

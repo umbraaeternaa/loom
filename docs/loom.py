@@ -5684,6 +5684,412 @@ def execute_action_host_mediation_v0(
     )
 
 
+def _action_result_validation(result, findings):
+    return {
+        "schema": _ACTION_RESULT_VALIDATION_SCHEMA,
+        "valid": not findings,
+        "advisory": False,
+        "authorization": "none",
+        "result": result if not findings else None,
+        "result_sha256": result.get("result_sha256") if not findings else None,
+        "findings": findings,
+    }
+
+
+def _action_result_approval_check(approval, request, execution_time, public_key_value):
+    request_check = validate_action_approval_request_v2(request)
+    findings = _action_approval_prefixed("request", request_check["findings"])
+    public_key, key_findings = _action_approval_validate_public_key(public_key_value)
+    findings.extend(key_findings)
+    required = {
+        "schema", "request_sha256", "challenge_sha256", "binding_sha256",
+        "capsule_sha256", "invocation_sha256", "approval_scope", "approver",
+        "decision", "issued_at_unix_ms", "expires_at_unix_ms", "claim_required",
+        "key_sha256", "signature",
+    }
+    findings.extend(_action_invocation_closed_findings(approval, "approval", required))
+    if not isinstance(approval, dict) or not request_check["valid"]:
+        return _action_approval_validation(None, None, findings)
+    binding = request["binding"]
+    challenge = request["challenge"]
+    fixed = {
+        "schema": _ACTION_APPROVAL_SCHEMA,
+        "request_sha256": request["request_sha256"],
+        "challenge_sha256": challenge["challenge_sha256"],
+        "binding_sha256": binding["binding_sha256"],
+        "capsule_sha256": binding["capsule_sha256"],
+        "invocation_sha256": binding["invocation_sha256"],
+        "approval_scope": _ACTION_APPROVAL_SCOPE,
+        "approver": "operator",
+        "decision": "approve",
+        "claim_required": True,
+    }
+    for key, value in fixed.items():
+        if approval.get(key) != value:
+            findings.append({
+                "path": "approval." + key, "code": "approval-binding-mismatch",
+                "message": key + " does not match the embedded Action Approval request",
+            })
+    issued = approval.get("issued_at_unix_ms")
+    expires = approval.get("expires_at_unix_ms")
+    if type(issued) is not int or issued < 0:
+        findings.append({"path": "approval.issued_at_unix_ms", "code": "invalid-issued-time", "message": "issued_at_unix_ms must be a non-negative integer"})
+    if type(expires) is not int or expires < 0:
+        findings.append({"path": "approval.expires_at_unix_ms", "code": "invalid-expiry-time", "message": "expires_at_unix_ms must be a non-negative integer"})
+    if type(execution_time) is not int or execution_time < 0:
+        findings.append({"path": "execution.executed_at_unix_ms", "code": "invalid-execution-time", "message": "execution time must be a non-negative integer"})
+    if type(issued) is int and type(expires) is int:
+        if expires <= issued or expires - issued > _ACTION_APPROVAL_MAX_TTL_MS:
+            findings.append({"path": "approval.expires_at_unix_ms", "code": "invalid-validity-window", "message": "Action Approval validity must be positive and at most 900000 milliseconds"})
+        if type(execution_time) is int and not issued <= execution_time < expires:
+            findings.append({"path": "execution.executed_at_unix_ms", "code": "execution-outside-approval", "message": "Bounded Execution must begin inside the signed approval window"})
+    if public_key is not None:
+        if approval.get("key_sha256") != _binding_sha256(public_key):
+            findings.append({"path": "approval.key_sha256", "code": "key-mismatch", "message": "Action Approval is signed by a different key"})
+        signed = {key: approval[key] for key in sorted(required - {"signature"})} if set(approval) >= required else None
+        if signed is not None:
+            try:
+                signed_bytes = _action_approval_canonical(signed).encode("utf-8")
+            except (TypeError, ValueError):
+                findings.append({"path": "approval", "code": "non-canonical-approval", "message": "Action Approval must contain canonical JSON values"})
+            else:
+                if not _action_approval_rsa_verify(signed_bytes, approval.get("signature"), public_key):
+                    findings.append({"path": "approval.signature", "code": "invalid-signature", "message": "Action Approval signature is invalid"})
+    if findings:
+        return _action_approval_validation(None, None, findings)
+    return _action_approval_validation(approval, _binding_sha256(approval), [])
+
+
+def _action_result_outcome(execution):
+    attempt = execution["attempt"]
+    outcome = {
+        "schema": _ACTION_RESULT_OUTCOME_SCHEMA,
+        "status": execution["status"],
+        "duration_ms": attempt["duration_ms"],
+        "exit_code": attempt["exit_code"],
+        "terminating_signal": attempt["terminating_signal"],
+        "stdout": dict(attempt["stdout"]),
+        "stderr": dict(attempt["stderr"]),
+        "host_remeasurement_sha256": execution["host_remeasurement_sha256"],
+        "sandbox_sha256": execution["sandbox_sha256"],
+        "attempt_sha256": execution["attempt_sha256"],
+    }
+    outcome["outcome_sha256"] = _binding_sha256(outcome)
+    return outcome
+
+
+def _action_result_structure_findings(result, public_key_value):
+    outer_keys = {
+        "schema", "request", "request_sha256", "approval", "approval_sha256",
+        "claim", "claim_sha256", "mediation", "mediation_sha256", "execution",
+        "execution_sha256", "outcome", "outcome_sha256", "finalized_at_unix_ms",
+        "lifecycle", "result_sha256",
+    }
+    findings = _action_invocation_closed_findings(result, "result", outer_keys)
+    if not isinstance(result, dict):
+        return findings
+    if result.get("schema") != _ACTION_RESULT_SCHEMA:
+        findings.append({"path": "result.schema", "code": "schema-mismatch", "message": "unsupported Action Capsule Result schema"})
+    for key in (
+        "request_sha256", "approval_sha256", "claim_sha256", "mediation_sha256",
+        "execution_sha256", "outcome_sha256", "result_sha256",
+    ):
+        if not _binding_is_sha256(result.get(key)):
+            findings.append({"path": "result." + key, "code": "expected-sha256", "message": key + " must be lowercase SHA-256 hex"})
+
+    request = result.get("request")
+    request_check = validate_action_approval_request_v2(request)
+    findings.extend(_action_approval_prefixed("result.request", request_check["findings"]))
+    execution = result.get("execution")
+    execution_findings = _action_execution_structure_findings(execution)
+    findings.extend(_action_approval_prefixed("result", execution_findings))
+    execution_time = execution.get("executed_at_unix_ms") if isinstance(execution, dict) else None
+    approval_check = _action_result_approval_check(
+        result.get("approval"), request, execution_time, public_key_value,
+    )
+    findings.extend(_action_approval_prefixed("result", approval_check["findings"]))
+
+    claim = result.get("claim")
+    mediation = result.get("mediation")
+    if approval_check["valid"] and request_check["valid"]:
+        findings.extend(_action_approval_prefixed(
+            "result", _action_claim_findings(claim, approval_check, request, execution_time),
+        ))
+        if isinstance(claim, dict):
+            findings.extend(_action_approval_prefixed(
+                "result", _action_execution_mediation_findings(
+                    mediation, claim, approval_check, request, execution_time,
+                ),
+            ))
+        else:
+            findings.extend(_action_approval_prefixed("result", _action_mediation_structure_findings(mediation)))
+    else:
+        findings.extend(_action_approval_prefixed("result", _action_mediation_structure_findings(mediation)))
+
+    try:
+        embedded_approval_sha256 = _binding_sha256(result["approval"]) if isinstance(result.get("approval"), dict) else None
+    except (TypeError, ValueError):
+        embedded_approval_sha256 = None
+        findings.append({"path": "result.approval", "code": "non-canonical-approval", "message": "embedded Action Approval must contain canonical JSON values"})
+    links = {
+        "request_sha256": request.get("request_sha256") if isinstance(request, dict) else None,
+        "approval_sha256": embedded_approval_sha256,
+        "claim_sha256": claim.get("claim_sha256") if isinstance(claim, dict) else None,
+        "mediation_sha256": mediation.get("mediation_sha256") if isinstance(mediation, dict) else None,
+        "execution_sha256": execution.get("execution_sha256") if isinstance(execution, dict) else None,
+    }
+    for key, value in links.items():
+        if result.get(key) != value:
+            findings.append({"path": "result." + key, "code": "result-link-mismatch", "message": key + " does not match its embedded lifecycle artifact"})
+    if isinstance(request, dict) and isinstance(execution, dict):
+        binding = request.get("binding")
+        expected_execution_links = {
+            "binding_sha256": binding.get("binding_sha256") if isinstance(binding, dict) else None,
+            "claim_sha256": result.get("claim_sha256"),
+            "mediation_sha256": result.get("mediation_sha256"),
+        }
+        for key, value in expected_execution_links.items():
+            if execution.get(key) != value:
+                findings.append({"path": "result.execution." + key, "code": "execution-link-mismatch", "message": key + " does not match the embedded Result chain"})
+
+    outcome = result.get("outcome")
+    if isinstance(execution, dict) and not execution_findings:
+        expected_outcome = _action_result_outcome(execution)
+        if outcome != expected_outcome:
+            findings.append({"path": "result.outcome", "code": "outcome-mismatch", "message": "terminal outcome does not match the exact Bounded Execution"})
+        if result.get("outcome_sha256") != expected_outcome["outcome_sha256"]:
+            findings.append({"path": "result.outcome_sha256", "code": "outcome-link-mismatch", "message": "outer outcome hash does not match terminal outcome"})
+    else:
+        findings.extend(_action_invocation_closed_findings(outcome, "result.outcome", {
+            "schema", "status", "duration_ms", "exit_code", "terminating_signal", "stdout",
+            "stderr", "host_remeasurement_sha256", "sandbox_sha256", "attempt_sha256", "outcome_sha256",
+        }))
+
+    finalized = result.get("finalized_at_unix_ms")
+    if type(finalized) is not int or not 0 <= finalized <= _BINDING_MAX_SAFE_INTEGER:
+        findings.append({"path": "result.finalized_at_unix_ms", "code": "invalid-finalization-time", "message": "finalization time must be a non-negative portable integer"})
+    elif isinstance(execution, dict) and type(execution_time) is int:
+        duration = execution.get("attempt", {}).get("duration_ms")
+        if type(duration) is int and finalized < execution_time + duration:
+            findings.append({"path": "result.finalized_at_unix_ms", "code": "result-before-execution-finished", "message": "Result cannot predate the measured execution duration"})
+    status = execution.get("status") if isinstance(execution, dict) else None
+    claim_status = "completed" if status == "completed" else "failed"
+    expected_lifecycle = {
+        "schema": _ACTION_RESULT_LIFECYCLE_SCHEMA,
+        "terminal": True,
+        "claim_status": claim_status,
+        "authorization": "none",
+        "replay": "denied",
+        "remaining_evidence": ["loom-gate-receipt/v4"],
+    }
+    if result.get("lifecycle") != expected_lifecycle:
+        findings.append({"path": "result.lifecycle", "code": "lifecycle-mismatch", "message": "Action Capsule Result must be terminal, non-authorizing, and replay-denied"})
+    if set(result) >= outer_keys:
+        try:
+            expected_hash = _binding_sha256({key: result[key] for key in outer_keys if key != "result_sha256"})
+        except (TypeError, ValueError):
+            findings.append({"path": "result", "code": "non-canonical-result", "message": "Action Capsule Result must contain canonical JSON values"})
+        else:
+            if result.get("result_sha256") != expected_hash:
+                findings.append({"path": "result.result_sha256", "code": "result-hash-mismatch", "message": "result_sha256 does not match the canonical terminal Result"})
+    return findings
+
+
+def validate_action_capsule_result_v0(result, public_key_value):
+    """Validate a terminal Result and its operator signature without host IO."""
+    findings = _action_result_structure_findings(result, public_key_value)
+    return _action_result_validation(result, findings)
+
+
+def _action_result_execution_row(execution):
+    attempt = execution["attempt"]
+    return (
+        execution["claim_sha256"], execution["binding_sha256"],
+        execution["host_remeasurement_sha256"], execution["executed_at_unix_ms"],
+        execution["approval_expires_at_unix_ms"], execution["status"],
+        attempt["duration_ms"], attempt["exit_code"], attempt["terminating_signal"],
+        attempt["stdout"]["sha256"], attempt["stdout"]["size_bytes"],
+        attempt["stderr"]["sha256"], attempt["stderr"]["size_bytes"],
+        execution["attempt_sha256"],
+    )
+
+
+def _action_result_finalize_once(result, ledger_path):
+    import sqlite3
+    claim = result["claim"]
+    mediation = result["mediation"]
+    execution = result["execution"]
+    connection = None
+    try:
+        connection = _action_execution_open_ledger(ledger_path)
+        connection.execute("BEGIN IMMEDIATE")
+        schemas = {}
+        for name in (_ACTION_CLAIM_LEDGER_TABLE, _ACTION_MEDIATION_LEDGER_TABLE, _ACTION_EXECUTION_LEDGER_TABLE):
+            schemas[name] = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (name,),
+            ).fetchone()
+        if schemas != {
+            _ACTION_CLAIM_LEDGER_TABLE: (_ACTION_CLAIM_LEDGER_SCHEMA,),
+            _ACTION_MEDIATION_LEDGER_TABLE: (_ACTION_MEDIATION_LEDGER_SCHEMA,),
+            _ACTION_EXECUTION_LEDGER_TABLE: (_ACTION_EXECUTION_LEDGER_SCHEMA,),
+        }:
+            raise ValueError("Action Result source ledger schemas are not canonical")
+        connection.execute(_ACTION_RESULT_LEDGER_CREATE)
+        result_schema = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (_ACTION_RESULT_LEDGER_TABLE,),
+        ).fetchone()
+        if result_schema != (_ACTION_RESULT_LEDGER_SCHEMA,):
+            raise ValueError("Action Result ledger table schema is not canonical")
+        if connection.execute("SELECT name FROM sqlite_master WHERE type IN ('trigger','view') LIMIT 1").fetchone():
+            raise ValueError("Action ledger must not contain triggers or views")
+        stored_claim = connection.execute(
+            "SELECT approval_sha256,request_sha256,challenge_sha256,binding_sha256,capsule_sha256,"
+            "invocation_sha256,claimed_at_unix_ms,approval_expires_at_unix_ms,claim_sha256,status "
+            "FROM action_claims_v0 WHERE claim_sha256=?", (claim["claim_sha256"],),
+        ).fetchone()
+        stored_mediation = connection.execute(
+            "SELECT claim_sha256,approval_sha256,binding_sha256,invocation_sha256,host_measurement_sha256,"
+            "executable_sha256,environment_sha256,stdin_sha256,mediated_at_unix_ms,"
+            "approval_expires_at_unix_ms,mediation_sha256,status FROM action_mediations_v0 WHERE mediation_sha256=?",
+            (mediation["mediation_sha256"],),
+        ).fetchone()
+        stored_execution = connection.execute(
+            "SELECT claim_sha256,binding_sha256,host_remeasurement_sha256,reserved_at_unix_ms,"
+            "approval_expires_at_unix_ms,status,duration_ms,exit_code,terminating_signal,stdout_sha256,"
+            "stdout_size_bytes,stderr_sha256,stderr_size_bytes,attempt_sha256 FROM action_executions_v0 "
+            "WHERE mediation_sha256=?", (execution["mediation_sha256"],),
+        ).fetchone()
+        if stored_claim != _action_execution_claim_row(claim):
+            raise ValueError("Action Claim is absent, terminal, or changed")
+        if stored_mediation != _action_execution_mediation_row(mediation):
+            raise ValueError("Action Mediation is absent or changed")
+        if stored_execution != _action_result_execution_row(execution):
+            raise ValueError("Bounded Execution is absent or does not match its terminal ledger row")
+        claim_status = result["lifecycle"]["claim_status"]
+        updated = connection.execute(
+            "UPDATE action_claims_v0 SET status=? WHERE claim_sha256=? AND status='claimed'",
+            (claim_status, claim["claim_sha256"]),
+        )
+        if updated.rowcount != 1:
+            raise ValueError("Action Claim terminal transition was not unique")
+        connection.execute(
+            "INSERT INTO action_results_v0 (execution_sha256,attempt_sha256,mediation_sha256,claim_sha256,"
+            "approval_sha256,request_sha256,binding_sha256,capsule_sha256,outcome_sha256,"
+            "finalized_at_unix_ms,status,claim_status,result_sha256) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                result["execution_sha256"], execution["attempt_sha256"], result["mediation_sha256"],
+                result["claim_sha256"], result["approval_sha256"], result["request_sha256"],
+                result["request"]["binding"]["binding_sha256"],
+                result["request"]["binding"]["capsule_sha256"], result["outcome_sha256"],
+                result["finalized_at_unix_ms"], execution["status"], claim_status,
+                result["result_sha256"],
+            ),
+        )
+        connection.execute("COMMIT")
+    except sqlite3.IntegrityError as error:
+        if connection is not None and connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise ValueError("Action Result was already finalized or the result ledger rejected it") from error
+    except (sqlite3.Error, ValueError) as error:
+        if connection is not None and connection.in_transaction:
+            connection.execute("ROLLBACK")
+        if isinstance(error, ValueError):
+            raise
+        raise ValueError("Action Result finalization failed: " + str(error)) from error
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def _finalize_action_capsule_result_v0(
+    approval, request, claim, mediation, execution, manifest, tool_binding, tool_input,
+    program_src, wasm_bytes, builder_surface, builder_components, verifier_components,
+    entrypoint, invocation, finalized_at_unix_ms, public_key_value, ledger_path,
+):
+    execution_time = execution.get("executed_at_unix_ms") if isinstance(execution, dict) else None
+    approval_check = _verify_action_capsule_approval_v2(
+        approval, request, manifest, tool_binding, tool_input, program_src,
+        wasm_bytes, builder_surface, builder_components, verifier_components,
+        entrypoint, invocation, execution_time, public_key_value,
+    )
+    if not approval_check["valid"]:
+        return _action_result_validation(None, approval_check["findings"])
+    findings = _action_claim_findings(claim, approval_check, request, execution_time)
+    if isinstance(claim, dict):
+        findings.extend(_action_execution_mediation_findings(
+            mediation, claim, approval_check, request, execution_time,
+        ))
+    else:
+        findings.extend(_action_mediation_structure_findings(mediation))
+    findings.extend(_action_execution_structure_findings(execution))
+    if isinstance(execution, dict):
+        expected_links = {
+            "mediation_sha256": mediation.get("mediation_sha256") if isinstance(mediation, dict) else None,
+            "claim_sha256": claim.get("claim_sha256") if isinstance(claim, dict) else None,
+            "binding_sha256": request["binding"]["binding_sha256"],
+        }
+        for key, value in expected_links.items():
+            if execution.get(key) != value:
+                findings.append({"path": "execution." + key, "code": "execution-link-mismatch", "message": key + " does not match the verified action lifecycle"})
+    if findings:
+        return _action_result_validation(None, findings)
+    outcome = _action_result_outcome(execution)
+    claim_status = "completed" if execution["status"] == "completed" else "failed"
+    body = {
+        "schema": _ACTION_RESULT_SCHEMA,
+        "request": request,
+        "request_sha256": request["request_sha256"],
+        "approval": approval,
+        "approval_sha256": approval_check["approval_sha256"],
+        "claim": claim,
+        "claim_sha256": claim["claim_sha256"],
+        "mediation": mediation,
+        "mediation_sha256": mediation["mediation_sha256"],
+        "execution": execution,
+        "execution_sha256": execution["execution_sha256"],
+        "outcome": outcome,
+        "outcome_sha256": outcome["outcome_sha256"],
+        "finalized_at_unix_ms": finalized_at_unix_ms,
+        "lifecycle": {
+            "schema": _ACTION_RESULT_LIFECYCLE_SCHEMA,
+            "terminal": True,
+            "claim_status": claim_status,
+            "authorization": "none",
+            "replay": "denied",
+            "remaining_evidence": ["loom-gate-receipt/v4"],
+        },
+    }
+    body["result_sha256"] = _binding_sha256(body)
+    validation = validate_action_capsule_result_v0(body, public_key_value)
+    if not validation["valid"]:
+        return validation
+    try:
+        _action_result_finalize_once(body, ledger_path)
+    except (OSError, ValueError) as error:
+        return _action_result_validation(None, [{
+            "path": "ledger", "code": "action-result-finalization-failed", "message": str(error),
+        }])
+    return validation
+
+
+def finalize_action_capsule_result_v0(
+    approval, request, claim, mediation, execution, manifest, tool_binding, tool_input,
+    program_src, wasm_bytes, builder_surface, builder_components, verifier_components,
+    entrypoint, invocation, finalized_at_unix_ms,
+):
+    """Finalize one Bounded Execution as a terminal, replay-denied Result v0."""
+    try:
+        public_key = _action_approval_load_public_key()
+    except ValueError as error:
+        return _action_result_validation(None, [{
+            "path": "public_key", "code": "public-key-unavailable", "message": str(error),
+        }])
+    return _finalize_action_capsule_result_v0(
+        approval, request, claim, mediation, execution, manifest, tool_binding, tool_input,
+        program_src, wasm_bytes, builder_surface, builder_components, verifier_components,
+        entrypoint, invocation, finalized_at_unix_ms, public_key, _action_claim_ledger_path(),
+    )
+
 def collect_observation(manifest, result, actions_observed, evidence):
     """Collect read-only Git facts; fail closed where host Git is unavailable."""
     validation = validate_manifest(manifest)
@@ -6226,6 +6632,30 @@ _ACTION_EXECUTION_RESULTS = (
 )
 _ACTION_EXECUTION_MAX_OUTPUT_BYTES = 1024 * 1024
 _ACTION_EXECUTION_DARWIN_PROFILE = "(version 1)(allow default)(deny network*)"
+_ACTION_RESULT_SCHEMA = "loom-action-capsule-result/v0"
+_ACTION_RESULT_VALIDATION_SCHEMA = "loom-action-capsule-result-validation/v0"
+_ACTION_RESULT_OUTCOME_SCHEMA = "loom-action-terminal-outcome/v0"
+_ACTION_RESULT_LIFECYCLE_SCHEMA = "loom-action-result-lifecycle/v0"
+_ACTION_RESULT_LEDGER_TABLE = "action_results_v0"
+_ACTION_RESULT_LEDGER_SCHEMA = (
+    "CREATE TABLE action_results_v0 ("
+    "execution_sha256 TEXT PRIMARY KEY CHECK(length(execution_sha256)=64), "
+    "attempt_sha256 TEXT UNIQUE NOT NULL CHECK(length(attempt_sha256)=64), "
+    "mediation_sha256 TEXT UNIQUE NOT NULL CHECK(length(mediation_sha256)=64), "
+    "claim_sha256 TEXT UNIQUE NOT NULL CHECK(length(claim_sha256)=64), "
+    "approval_sha256 TEXT UNIQUE NOT NULL CHECK(length(approval_sha256)=64), "
+    "request_sha256 TEXT NOT NULL CHECK(length(request_sha256)=64), "
+    "binding_sha256 TEXT NOT NULL CHECK(length(binding_sha256)=64), "
+    "capsule_sha256 TEXT NOT NULL CHECK(length(capsule_sha256)=64), "
+    "outcome_sha256 TEXT UNIQUE NOT NULL CHECK(length(outcome_sha256)=64), "
+    "finalized_at_unix_ms INTEGER NOT NULL CHECK(finalized_at_unix_ms>=0), "
+    "status TEXT NOT NULL CHECK(status IN ('completed','failed','timed-out','output-limit-exceeded','spawn-failed')), "
+    "claim_status TEXT NOT NULL CHECK(claim_status IN ('completed','failed')), "
+    "result_sha256 TEXT UNIQUE NOT NULL CHECK(length(result_sha256)=64))"
+)
+_ACTION_RESULT_LEDGER_CREATE = _ACTION_RESULT_LEDGER_SCHEMA.replace(
+    "CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", 1,
+)
 
 
 def _action_semantics_validation(semantics, compiler_attribution, findings):
@@ -8352,7 +8782,7 @@ def build_about():
     return {
         "schema": "loom-about/v1",
         "language": "LOOM",
-        "citadel_checks": 495,
+        "citadel_checks": 496,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "i31_bits": INT_BITS,
         "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],

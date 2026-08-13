@@ -6,7 +6,7 @@ experimental, and what LOOM does not claim yet.
 
 ## Current public baseline
 
-- Canonical self-verification: `PASS -- 495/495 citadel checks`.
+- Canonical self-verification: `PASS -- 496/496 citadel checks`.
 - Published browser bundle parity is required before release:
   `python3 verify_docs_parity.py`.
 - The public compatibility surface is `loom.py`; module boundaries are pinned in
@@ -102,13 +102,17 @@ experimental, and what LOOM does not claim yet.
   enforces process-group timeout and a 1 MiB per-stream limit, persists only
   redacted terminal hashes, and exposes a pure closed-artifact validator.
   Success returns `terminal-result-required`.
+- Action Capsule Result v0 closes the one-use host lifecycle. It verifies the
+  embedded request, operator signature, Claim, Mediation, and Bounded Execution;
+  emits one redacted content-addressed terminal artifact; and atomically moves
+  the private Claim to `completed` or `failed`. It authorizes no further action.
 - Deterministic property fuzz smoke is part of the citadel.
 
 ## Experimental or bounded
 
 - LOOM is still a research kernel, not a package-manager ecosystem.
-- Multi-action semantics and terminal Action Capsule Result v0 remain future
-  contracts. Cross-platform sandbox providers beyond macOS Seatbelt and Linux
+- Multi-action semantics remain future contracts. Cross-platform sandbox
+  providers beyond macOS Seatbelt and Linux
   user/network namespaces also remain future work. Compiler
   Receipt v4 is already stable evidence and is not embedded in the
   pre-execution Capsule because no execution observation exists yet.
@@ -168,10 +172,10 @@ python3 loom.py about --format json
 
 Expected public markers:
 
-- `run_tests.py` prints `PASS -- 495/495 citadel checks`.
+- `run_tests.py` prints `PASS -- 496/496 citadel checks`.
 - `verify_docs_parity.py` prints that the published bundle is standalone and
   citadel-green.
-- `loom.py about --format json` reports `citadel_checks: 495`, the current
+- `loom.py about --format json` reports `citadel_checks: 496`, the current
   WASM ABI version, and the supported backend list.
 - An installed checkout exposes `loom` as the same CLI surface as
   `python3 loom.py`.
