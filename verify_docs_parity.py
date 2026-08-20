@@ -38,6 +38,7 @@ ACTION_CLAIM_V0_DOC = ROOT / "docs" / "action_claim_v0.md"
 ACTION_HOST_MEDIATION_V0_DOC = ROOT / "docs" / "action_host_mediation_v0.md"
 ACTION_BOUNDED_EXECUTION_V0_DOC = ROOT / "docs" / "action_bounded_execution_v0.md"
 ACTION_CAPSULE_RESULT_V0_DOC = ROOT / "docs" / "action_capsule_result_v0.md"
+ACTION_RESULT_ATTESTATION_V0_DOC = ROOT / "docs" / "action_result_attestation_v0.md"
 WASM_ARTIFACT_DOC = ROOT / "docs" / "gate_wasm_artifact_v1.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
 
@@ -46,7 +47,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "496-action-result-v0")',
+        'bundleUrl.searchParams.set("v", "497-action-attestation-v0")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -147,10 +148,12 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "496 self-verifying checks",
-        ">496</div>",
+        "497 self-verifying checks",
+        ">497</div>",
     )
     forbidden = (
+        "496 self-verifying checks",
+        ">496</div>",
         "494 self-verifying checks",
         ">494</div>",
         "456 self-verifying checks",
@@ -1485,6 +1488,31 @@ def _check_action_capsule_result_v0_doc() -> None:
         raise SystemExit("docs parity: Action Capsule Result v0 contract drift: missing " + ", ".join(missing))
 
 
+def _check_action_result_attestation_v0_doc() -> None:
+    words = " ".join(ACTION_RESULT_ATTESTATION_V0_DOC.read_text().split())
+    required = (
+        "LOOM Action Result Attestation v0",
+        "signed, content-addressed, post-execution, externally issued, and non-authorizing",
+        "prepare_action_result_attestation_v0(",
+        "build_action_result_attestation_v0(",
+        "verify_action_result_attestation_v0(",
+        "never reads or receives a private key",
+        "https://in-toto.io/Statement/v1",
+        "https://umbraaeternaa.github.io/loom/attestation/action-result/v0",
+        "application/vnd.in-toto+json",
+        "verify the DSSE signature over the exact payload bytes",
+        "parse that payload once",
+        "reject duplicate keys, NaN or Infinity, excessive depth or node count",
+        "The Result status must match the Receipt result",
+        'authorization: "none"',
+        'execution_repeated: false',
+        "Approval v2 remains the only operator-signed pre-execution authority",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: Action Result Attestation v0 contract drift: missing " + ", ".join(missing))
+
+
 def _check_wasm_artifact_doc() -> None:
     text = WASM_ARTIFACT_DOC.read_text()
     words = " ".join(text.split())
@@ -1582,6 +1610,7 @@ def main() -> int:
     _check_action_host_mediation_v0_doc()
     _check_action_bounded_execution_v0_doc()
     _check_action_capsule_result_v0_doc()
+    _check_action_result_attestation_v0_doc()
     _check_wasm_artifact_doc()
     _check_secret_credential_policy_doc()
     _check_pyodide_import_boundary()

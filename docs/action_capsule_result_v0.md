@@ -108,7 +108,9 @@ replay: "denied"
 ~~~
 
 The lifecycle lists `loom-gate-receipt/v4` as remaining evidence, not as new
-execution authority. Result v0 does not sign a supply-chain attestation, collect
+execution authority. The additive Action Result Attestation v0 contract
+composes this unchanged Result with that exact Receipt in a signed in-toto
+Statement. Result v0 itself does not sign a supply-chain attestation, collect
 Git or CI observation, grant ambient capabilities, rerun the process, or claim
 filesystem confinement beyond the evidence already stated by Mediation and
 Bounded Execution.

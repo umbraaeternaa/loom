@@ -7,6 +7,8 @@
 # a pure fn => networked code becomes provably pure). Plus control flow (if/let), recursion, and first-class
 # functions with ROW-POLYMORPHISM + anonymous LAMBDAS/CLOSURES. A tiny s-expr language + static effect checker
 # + interpreter. Grown nightly by the organism, verified by run_tests.py — the language only ever grows GREEN.
+import base64
+import binascii
 import hashlib
 import hmac
 import json
@@ -6090,6 +6092,303 @@ def finalize_action_capsule_result_v0(
         entrypoint, invocation, finalized_at_unix_ms, public_key, _action_claim_ledger_path(),
     )
 
+
+def _action_attestation_validation(statement, envelope, attester_key_sha256, findings):
+    return {
+        "schema": _ACTION_ATTESTATION_VALIDATION_SCHEMA,
+        "valid": not findings,
+        "advisory": True,
+        "authorization": "none",
+        "statement": statement if not findings else None,
+        "envelope": envelope if not findings else None,
+        "attester_key_sha256": attester_key_sha256 if not findings else None,
+        "findings": findings,
+    }
+
+
+def _action_attestation_pae(payload_type, payload):
+    type_bytes = payload_type.encode("utf-8")
+    return (
+        b"DSSEv1 " + str(len(type_bytes)).encode("ascii") + b" " + type_bytes
+        + b" " + str(len(payload)).encode("ascii") + b" " + payload
+    )
+
+
+def _action_attestation_base64_decode(value, path, maximum):
+    if not isinstance(value, str):
+        return None, [{"path": path, "code": "expected-base64", "message": "expected a Base64 string"}]
+    if len(value) > ((maximum + 2) // 3) * 4 + 4:
+        return None, [{"path": path, "code": "base64-too-large", "message": "Base64 value exceeds the LOOM attestation bound"}]
+    try:
+        encoded = value.encode("ascii")
+        decoded = base64.b64decode(encoded, altchars=b"-_", validate=True)
+    except (UnicodeEncodeError, ValueError, binascii.Error):
+        return None, [{"path": path, "code": "invalid-base64", "message": "invalid standard or URL-safe Base64"}]
+    if len(decoded) > maximum:
+        return None, [{"path": path, "code": "base64-too-large", "message": "decoded value exceeds the LOOM attestation bound"}]
+    return decoded, []
+
+
+def _action_attestation_json(payload):
+    def closed_object(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("duplicate JSON key: " + key)
+            value[key] = item
+        return value
+    try:
+        text = payload.decode("utf-8")
+        value = json.loads(
+            text,
+            object_pairs_hook=closed_object,
+            parse_constant=lambda value: (_ for _ in ()).throw(ValueError("invalid JSON constant: " + value)),
+        )
+    except (UnicodeDecodeError, TypeError, ValueError, json.JSONDecodeError, RecursionError) as error:
+        return None, [{"path": "envelope.payload", "code": "invalid-statement-json", "message": str(error)}]
+    if not isinstance(value, dict):
+        return None, [{"path": "envelope.payload", "code": "expected-statement-object", "message": "in-toto payload must decode to an object"}]
+    stack = [(value, 0)]
+    nodes = 0
+    while stack:
+        item, depth = stack.pop()
+        nodes += 1
+        if nodes > _ACTION_ATTESTATION_MAX_JSON_NODES:
+            return None, [{"path": "envelope.payload", "code": "statement-too-large", "message": "attestation statement exceeds the LOOM JSON node bound"}]
+        if depth > _ACTION_ATTESTATION_MAX_JSON_DEPTH:
+            return None, [{"path": "envelope.payload", "code": "statement-too-deep", "message": "attestation statement exceeds the LOOM JSON depth bound"}]
+        if isinstance(item, dict):
+            stack.extend((nested, depth + 1) for nested in item.values())
+        elif isinstance(item, list):
+            stack.extend((nested, depth + 1) for nested in item)
+    try:
+        canonical = _artifact_json(value).encode("utf-8")
+    except (TypeError, ValueError, RecursionError):
+        return None, [{"path": "envelope.payload", "code": "non-canonical-statement", "message": "attestation statement must contain canonical JSON values"}]
+    if canonical != payload:
+        return None, [{"path": "envelope.payload", "code": "non-canonical-statement", "message": "LOOM attestation payload must use canonical UTF-8 JSON"}]
+    return value, []
+
+
+def _action_attestation_cross_links(result, receipt):
+    capsule = result["request"]["binding"]["capsule"]
+    semantics = capsule["action_semantics"]
+    artifact = receipt["artifact_evidence"]
+    compiler = receipt["compiler_evidence"]
+    links = {
+        "schema": _ACTION_ATTESTATION_CROSS_LINKS_SCHEMA,
+        "manifest_sha256": capsule["manifest_sha256"],
+        "capsule_sha256": result["request"]["binding"]["capsule_sha256"],
+        "invocation_sha256": result["request"]["binding"]["invocation_sha256"],
+        "approval_sha256": result["approval_sha256"],
+        "execution_sha256": result["execution_sha256"],
+        "outcome_sha256": result["outcome_sha256"],
+        "result_sha256": result["result_sha256"],
+        "receipt_sha256": receipt["receipt_sha256"],
+        "artifact_binding_sha256": artifact["binding_sha256"],
+        "compiler_evidence_sha256": compiler["evidence_sha256"],
+    }
+    findings = []
+    expected_receipt_result = "completed" if result["execution"]["status"] == "completed" else "failed"
+    checks = (
+        ("gate_receipt.manifest_sha256", receipt["manifest_sha256"], capsule["manifest_sha256"], "attestation-manifest-mismatch"),
+        ("gate_receipt.result", receipt["result"], expected_receipt_result, "attestation-result-status-mismatch"),
+        ("gate_receipt.actions_observed", receipt["actions_observed"], ["process"], "attestation-observation-mismatch"),
+        ("gate_receipt.compiler_evidence", compiler, semantics["compiler_evidence"], "attestation-compiler-evidence-mismatch"),
+        ("gate_receipt.compiler_evidence_sha256", receipt["compiler_evidence_sha256"], semantics["compiler_evidence_sha256"], "attestation-compiler-hash-mismatch"),
+        ("gate_receipt.artifact_evidence.binding_sha256", artifact["binding_sha256"], semantics["artifact_binding_sha256"], "attestation-artifact-mismatch"),
+    )
+    for path, actual, expected, code in checks:
+        if actual != expected:
+            findings.append({"path": path, "code": code, "message": "Action Result and Gate Receipt v4 do not describe the same exact action evidence"})
+    return links, findings
+
+
+def prepare_action_result_attestation_v0(
+    result, gate_receipt, manifest, observation, program_src, wasm_bytes,
+    builder_surface, builder_components, verifier_components,
+    approval_public_key, attester_public_key, attested_at_unix_ms,
+):
+    """Prepare a canonical in-toto Statement and DSSE PAE without touching a private key."""
+    result_check = validate_action_capsule_result_v0(result, approval_public_key)
+    receipt_check = verify_wasm_compiler_receipt_v4(
+        gate_receipt, manifest, observation, program_src, wasm_bytes,
+        builder_surface, builder_components, verifier_components,
+    )
+    attester_key, key_findings = _action_approval_validate_public_key(attester_public_key)
+    findings = _action_approval_prefixed("action_result", result_check["findings"])
+    findings.extend(_compiler_evidence_findings("gate_receipt", receipt_check["findings"]))
+    findings.extend(_action_approval_prefixed("attester_public_key", key_findings))
+    if type(attested_at_unix_ms) is not int or not 0 <= attested_at_unix_ms <= _BINDING_MAX_SAFE_INTEGER:
+        findings.append({"path": "attested_at_unix_ms", "code": "invalid-attestation-time", "message": "attestation time must be a non-negative portable integer"})
+    elif result_check["valid"] and attested_at_unix_ms < result["finalized_at_unix_ms"]:
+        findings.append({"path": "attested_at_unix_ms", "code": "attestation-before-result", "message": "post-execution attestation cannot predate terminal Result finalization"})
+    if findings:
+        return _action_attestation_validation(None, None, None, findings)
+
+    links, link_findings = _action_attestation_cross_links(result, gate_receipt)
+    if link_findings:
+        return _action_attestation_validation(None, None, None, link_findings)
+    key_sha256 = _binding_sha256(attester_key)
+    wasm_sha256 = gate_receipt["artifact_evidence"]["binding"]["wasm_sha256"]
+    predicate = {
+        "schema": _ACTION_ATTESTATION_PREDICATE_SCHEMA,
+        "attester": {
+            "schema": _ACTION_ATTESTATION_ATTESTER_SCHEMA,
+            "role": "post-execution-attester",
+            "algorithm": attester_key["algorithm"],
+            "key_sha256": key_sha256,
+        },
+        "action_result": result,
+        "action_result_sha256": result["result_sha256"],
+        "gate_receipt": gate_receipt,
+        "gate_receipt_sha256": gate_receipt["receipt_sha256"],
+        "cross_links": links,
+        "attested_at_unix_ms": attested_at_unix_ms,
+        "lifecycle": {
+            "schema": _ACTION_ATTESTATION_LIFECYCLE_SCHEMA,
+            "terminal": True,
+            "evidence": "signed-post-execution",
+            "authorization": "none",
+            "execution_repeated": False,
+        },
+    }
+    statement = {
+        "_type": _ACTION_ATTESTATION_STATEMENT_TYPE,
+        "subject": [
+            {"name": "loom-action-result.json", "digest": {"sha256": result["result_sha256"]}},
+            {"name": "loom-gate-receipt-v4.json", "digest": {"sha256": gate_receipt["receipt_sha256"]}},
+            {"name": "loom-program.wasm", "digest": {"sha256": wasm_sha256}},
+        ],
+        "predicateType": _ACTION_ATTESTATION_PREDICATE_TYPE,
+        "predicate": predicate,
+    }
+    payload = _artifact_json(statement).encode("utf-8")
+    pae = _action_attestation_pae(_ACTION_ATTESTATION_PAYLOAD_TYPE, payload)
+    validation = _action_attestation_validation(statement, None, key_sha256, [])
+    validation.update({
+        "payload_type": _ACTION_ATTESTATION_PAYLOAD_TYPE,
+        "payload": base64.b64encode(payload).decode("ascii"),
+        "signing_bytes": base64.b64encode(pae).decode("ascii"),
+        "signing_bytes_sha256": hashlib.sha256(pae).hexdigest(),
+    })
+    return validation
+
+
+def build_action_result_attestation_v0(
+    result, gate_receipt, manifest, observation, program_src, wasm_bytes,
+    builder_surface, builder_components, verifier_components,
+    approval_public_key, attester_public_key, attested_at_unix_ms, signature,
+):
+    """Build one DSSE envelope from an externally produced post-execution signature."""
+    prepared = prepare_action_result_attestation_v0(
+        result, gate_receipt, manifest, observation, program_src, wasm_bytes,
+        builder_surface, builder_components, verifier_components,
+        approval_public_key, attester_public_key, attested_at_unix_ms,
+    )
+    if not prepared["valid"]:
+        return prepared
+    signature_bytes, findings = _action_attestation_base64_decode(
+        signature, "signature", _ACTION_ATTESTATION_MAX_SIGNATURE_BYTES,
+    )
+    if findings:
+        return _action_attestation_validation(None, None, None, findings)
+    pae, _ = _action_attestation_base64_decode(
+        prepared["signing_bytes"], "signing_bytes", _ACTION_ATTESTATION_MAX_PAYLOAD_BYTES + 1024,
+    )
+    public_key, key_findings = _action_approval_validate_public_key(attester_public_key)
+    if key_findings or not _action_approval_rsa_verify(pae, signature_bytes.hex(), public_key):
+        return _action_attestation_validation(None, None, None, [{
+            "path": "signature", "code": "invalid-attestation-signature",
+            "message": "post-execution DSSE signature is invalid for the attester key",
+        }])
+    envelope = {
+        "payloadType": prepared["payload_type"],
+        "payload": prepared["payload"],
+        "signatures": [{
+            "keyid": prepared["attester_key_sha256"],
+            "sig": base64.b64encode(signature_bytes).decode("ascii"),
+        }],
+    }
+    return _action_attestation_validation(
+        prepared["statement"], envelope, prepared["attester_key_sha256"], [],
+    )
+
+
+def verify_action_result_attestation_v0(
+    envelope, manifest, observation, program_src, wasm_bytes,
+    builder_surface, builder_components, verifier_components,
+    approval_public_key, attester_public_key,
+):
+    """Verify DSSE bytes before parsing one exact in-toto Action Result Statement."""
+    if not isinstance(envelope, dict):
+        return _action_attestation_validation(None, None, None, [{
+            "path": "envelope", "code": "expected-object", "message": "DSSE envelope must be an object",
+        }])
+    for key in ("payloadType", "payload", "signatures"):
+        if key not in envelope:
+            return _action_attestation_validation(None, None, None, [{
+                "path": "envelope." + key, "code": "missing-field", "message": "DSSE envelope is missing a required field",
+            }])
+    if envelope.get("payloadType") != _ACTION_ATTESTATION_PAYLOAD_TYPE:
+        return _action_attestation_validation(None, None, None, [{
+            "path": "envelope.payloadType", "code": "unsupported-payload-type", "message": "expected application/vnd.in-toto+json",
+        }])
+    payload, findings = _action_attestation_base64_decode(
+        envelope.get("payload"), "envelope.payload", _ACTION_ATTESTATION_MAX_PAYLOAD_BYTES,
+    )
+    if findings:
+        return _action_attestation_validation(None, None, None, findings)
+    signatures = envelope.get("signatures")
+    if not isinstance(signatures, list) or not 1 <= len(signatures) <= _ACTION_ATTESTATION_MAX_SIGNATURES:
+        return _action_attestation_validation(None, None, None, [{
+            "path": "envelope.signatures", "code": "invalid-signature-set", "message": "DSSE envelope requires 1 to 16 signatures",
+        }])
+    public_key, key_findings = _action_approval_validate_public_key(attester_public_key)
+    if key_findings:
+        return _action_attestation_validation(
+            None, None, None, _action_approval_prefixed("attester_public_key", key_findings),
+        )
+    pae = _action_attestation_pae(_ACTION_ATTESTATION_PAYLOAD_TYPE, payload)
+    signature_valid = False
+    for item in signatures:
+        if not isinstance(item, dict) or "sig" not in item:
+            continue
+        signature_bytes, signature_findings = _action_attestation_base64_decode(
+            item.get("sig"), "envelope.signatures.sig", _ACTION_ATTESTATION_MAX_SIGNATURE_BYTES,
+        )
+        if not signature_findings and _action_approval_rsa_verify(pae, signature_bytes.hex(), public_key):
+            signature_valid = True
+            break
+    if not signature_valid:
+        return _action_attestation_validation(None, None, None, [{
+            "path": "envelope.signatures", "code": "invalid-attestation-signature",
+            "message": "no DSSE signature verifies with the trusted attester key",
+        }])
+
+    statement, findings = _action_attestation_json(payload)
+    if findings:
+        return _action_attestation_validation(None, None, None, findings)
+    predicate = statement.get("predicate") if isinstance(statement, dict) else None
+    result = predicate.get("action_result") if isinstance(predicate, dict) else None
+    receipt = predicate.get("gate_receipt") if isinstance(predicate, dict) else None
+    attested_at = predicate.get("attested_at_unix_ms") if isinstance(predicate, dict) else None
+    expected = prepare_action_result_attestation_v0(
+        result, receipt, manifest, observation, program_src, wasm_bytes,
+        builder_surface, builder_components, verifier_components,
+        approval_public_key, attester_public_key, attested_at,
+    )
+    if not expected["valid"]:
+        return expected
+    if statement != expected["statement"]:
+        return _action_attestation_validation(None, None, None, [{
+            "path": "statement", "code": "attestation-statement-mismatch",
+            "message": "signed statement does not match the exact Action Result, Gate Receipt, and attester inputs",
+        }])
+    return _action_attestation_validation(
+        statement, envelope, expected["attester_key_sha256"], [],
+    )
+
 def collect_observation(manifest, result, actions_observed, evidence):
     """Collect read-only Git facts; fail closed where host Git is unavailable."""
     validation = validate_manifest(manifest)
@@ -6656,6 +6955,19 @@ _ACTION_RESULT_LEDGER_SCHEMA = (
 _ACTION_RESULT_LEDGER_CREATE = _ACTION_RESULT_LEDGER_SCHEMA.replace(
     "CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", 1,
 )
+_ACTION_ATTESTATION_VALIDATION_SCHEMA = "loom-action-result-attestation-validation/v0"
+_ACTION_ATTESTATION_PREDICATE_SCHEMA = "loom-action-result-attestation-predicate/v0"
+_ACTION_ATTESTATION_CROSS_LINKS_SCHEMA = "loom-action-result-attestation-links/v0"
+_ACTION_ATTESTATION_ATTESTER_SCHEMA = "loom-action-result-attester/v0"
+_ACTION_ATTESTATION_LIFECYCLE_SCHEMA = "loom-action-result-attestation-lifecycle/v0"
+_ACTION_ATTESTATION_STATEMENT_TYPE = "https://in-toto.io/Statement/v1"
+_ACTION_ATTESTATION_PREDICATE_TYPE = "https://umbraaeternaa.github.io/loom/attestation/action-result/v0"
+_ACTION_ATTESTATION_PAYLOAD_TYPE = "application/vnd.in-toto+json"
+_ACTION_ATTESTATION_MAX_PAYLOAD_BYTES = 8 * 1024 * 1024
+_ACTION_ATTESTATION_MAX_SIGNATURE_BYTES = 8192
+_ACTION_ATTESTATION_MAX_SIGNATURES = 16
+_ACTION_ATTESTATION_MAX_JSON_DEPTH = 64
+_ACTION_ATTESTATION_MAX_JSON_NODES = 65536
 
 
 def _action_semantics_validation(semantics, compiler_attribution, findings):
@@ -8782,7 +9094,7 @@ def build_about():
     return {
         "schema": "loom-about/v1",
         "language": "LOOM",
-        "citadel_checks": 496,
+        "citadel_checks": 497,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "i31_bits": INT_BITS,
         "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],

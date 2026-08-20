@@ -2,6 +2,7 @@
 # ARGUS/plt CITADEL test suite — the growing, self-verifying proof that LOOM's design holds.
 # The organism appends new CASES here every cycle; the language only grows if ALL stay green.
 import sys
+import base64
 import json
 import hashlib
 import subprocess
@@ -2119,7 +2120,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             "actions_observed": ["read", "write", "test", "git-commit"],
             "evidence": [
                 {"kind": "syntax", "status": "pass", "detail": "PASS syntax"},
-                {"kind": "citadel", "status": "pass", "detail": "496/496"},
+                {"kind": "citadel", "status": "pass", "detail": "497/497"},
                 {"kind": "docs-parity", "status": "pass", "detail": "PASS docs parity"},
                 {"kind": "git-clean", "status": "pass", "detail": "clean"},
                 {"kind": "git-sync", "status": "pass", "detail": "HEAD == origin/main"},
@@ -3861,11 +3862,14 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         key_hash = hashlib.sha256(canonical(test_key).encode()).hexdigest()
         approval = {"schema": "loom-gate-operator-approval/v1", "challenge_sha256": challenge["challenge_sha256"], "manifest_sha256": challenge["manifest_sha256"], "approver": "operator", "decision": "approve", "key_sha256": key_hash}
         modulus = int(test_n_hex, 16); size = (modulus.bit_length() + 7) // 8
-        def sign_approval(body):
-            message = canonical(body).encode(); digest_info = bytes.fromhex("3031300d060960864801650304020105000420") + hashlib.sha256(message).digest()
+        def sign_bytes(message):
+            digest_info = bytes.fromhex("3031300d060960864801650304020105000420") + hashlib.sha256(message).digest()
             encoded = b"\x00\x01" + b"\xff" * (size - len(digest_info) - 3) + b"\x00" + digest_info
+            return pow(int.from_bytes(encoded, "big"), test_d, modulus).to_bytes(size, "big")
+        def sign_approval(body):
+            message = canonical(body).encode()
             signed = dict(body)
-            signed["signature"] = pow(int.from_bytes(encoded, "big"), test_d, modulus).to_bytes(size, "big").hex()
+            signed["signature"] = sign_bytes(message).hex()
             return signed
         approval = sign_approval(approval)
         verify_fn = getattr(approval_impl, "_verify", getattr(_loom, "_gate_verify_approval", None))
@@ -4858,6 +4862,270 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             }, sort_keys=True))
         ok += action_result_v0_ok
         print(f"  {'ok  ' if action_result_v0_ok else 'FAIL'} gate: Action Capsule Result v0")
+        action_attestation_v0_ok = True
+        action_attestation_diagnostics = {}
+        if execution_sandbox_available and action_result_v0_ok:
+            attestation_observation = {
+                "schema": "loom-gate-observation/v1",
+                "result": "completed",
+                "repositories": [],
+                "files_changed": [],
+                "actions_observed": ["process"],
+                "evidence": [{
+                    "kind": "operator-approval", "status": "pass",
+                    "detail": "exact Action Approval v2 verified at execution start",
+                }],
+            }
+            attestation_receipt_result = _loom.build_wasm_compiler_receipt_v4(
+                semantics_manifest, attestation_observation, semantics_src,
+                semantics_wasm, compiler_components,
+            )
+            attestation_receipt = attestation_receipt_result["receipt"]
+            attested_at = action_result["result"]["finalized_at_unix_ms"] + 1
+            prepared_attestation = _loom.prepare_action_result_attestation_v0(
+                action_result["result"], attestation_receipt, semantics_manifest,
+                attestation_observation, semantics_src, semantics_wasm,
+                running_surface, compiler_components, compiler_components,
+                test_key, test_key, attested_at,
+            )
+            signing_bytes = base64.b64decode(prepared_attestation["signing_bytes"])
+            attestation_signature = base64.b64encode(sign_bytes(signing_bytes)).decode("ascii")
+            action_attestation = _loom.build_action_result_attestation_v0(
+                action_result["result"], attestation_receipt, semantics_manifest,
+                attestation_observation, semantics_src, semantics_wasm,
+                running_surface, compiler_components, compiler_components,
+                test_key, test_key, attested_at, attestation_signature,
+            )
+            verified_attestation = _loom.verify_action_result_attestation_v0(
+                action_attestation["envelope"], semantics_manifest,
+                attestation_observation, semantics_src, semantics_wasm,
+                running_surface, compiler_components, compiler_components,
+                test_key, test_key,
+            )
+
+            tampered_envelope = json.loads(json.dumps(action_attestation["envelope"]))
+            tampered_payload = bytearray(base64.b64decode(tampered_envelope["payload"]))
+            tampered_payload[-2] ^= 1
+            tampered_envelope["payload"] = base64.b64encode(bytes(tampered_payload)).decode("ascii")
+            rejected_unsigned_tamper = _loom.verify_action_result_attestation_v0(
+                tampered_envelope, semantics_manifest, attestation_observation,
+                semantics_src, semantics_wasm, running_surface,
+                compiler_components, compiler_components, test_key, test_key,
+            )
+
+            signed_bad_statement = json.loads(json.dumps(prepared_attestation["statement"]))
+            signed_bad_statement["predicate"]["action_result"]["outcome"]["stdout"]["sha256"] = "0" * 64
+            signed_bad_payload = canonical(signed_bad_statement).encode("utf-8")
+            signed_bad_pae = _loom._action_attestation_pae(
+                "application/vnd.in-toto+json", signed_bad_payload,
+            )
+            signed_bad_envelope = {
+                "payloadType": "application/vnd.in-toto+json",
+                "payload": base64.b64encode(signed_bad_payload).decode("ascii"),
+                "signatures": [{
+                    "keyid": "untrusted-hint",
+                    "sig": base64.b64encode(sign_bytes(signed_bad_pae)).decode("ascii"),
+                }],
+            }
+            rejected_signed_bad_result = _loom.verify_action_result_attestation_v0(
+                signed_bad_envelope, semantics_manifest, attestation_observation,
+                semantics_src, semantics_wasm, running_surface,
+                compiler_components, compiler_components, test_key, test_key,
+            )
+
+            duplicate_payload = (
+                b'{"_type":"https://in-toto.io/Statement/v1",'
+                b'"_type":"https://in-toto.io/Statement/v1",'
+                b'"subject":[],"predicateType":"x","predicate":{}}'
+            )
+            duplicate_pae = _loom._action_attestation_pae(
+                "application/vnd.in-toto+json", duplicate_payload,
+            )
+            duplicate_envelope = {
+                "payloadType": "application/vnd.in-toto+json",
+                "payload": base64.b64encode(duplicate_payload).decode("ascii"),
+                "signatures": [{"sig": base64.b64encode(sign_bytes(duplicate_pae)).decode("ascii")}],
+            }
+            rejected_duplicate_key = _loom.verify_action_result_attestation_v0(
+                duplicate_envelope, semantics_manifest, attestation_observation,
+                semantics_src, semantics_wasm, running_surface,
+                compiler_components, compiler_components, test_key, test_key,
+            )
+
+            noncanonical_payload = json.dumps(
+                prepared_attestation["statement"], indent=2, sort_keys=True,
+            ).encode("utf-8")
+            noncanonical_pae = _loom._action_attestation_pae(
+                "application/vnd.in-toto+json", noncanonical_payload,
+            )
+            noncanonical_envelope = {
+                "payloadType": "application/vnd.in-toto+json",
+                "payload": base64.b64encode(noncanonical_payload).decode("ascii"),
+                "signatures": [{"sig": base64.b64encode(sign_bytes(noncanonical_pae)).decode("ascii")}],
+            }
+            rejected_noncanonical = _loom.verify_action_result_attestation_v0(
+                noncanonical_envelope, semantics_manifest, attestation_observation,
+                semantics_src, semantics_wasm, running_surface,
+                compiler_components, compiler_components, test_key, test_key,
+            )
+
+            nan_payload = b'{"_type":NaN,"subject":[],"predicateType":"x","predicate":{}}'
+            nan_pae = _loom._action_attestation_pae(
+                "application/vnd.in-toto+json", nan_payload,
+            )
+            nan_envelope = {
+                "payloadType": "application/vnd.in-toto+json",
+                "payload": base64.b64encode(nan_payload).decode("ascii"),
+                "signatures": [{"sig": base64.b64encode(sign_bytes(nan_pae)).decode("ascii")}],
+            }
+            rejected_nan = _loom.verify_action_result_attestation_v0(
+                nan_envelope, semantics_manifest, attestation_observation,
+                semantics_src, semantics_wasm, running_surface,
+                compiler_components, compiler_components, test_key, test_key,
+            )
+
+            deep_value = {}
+            for _ in range(66):
+                deep_value = {"nested": deep_value}
+            deep_payload = canonical(deep_value).encode("utf-8")
+            deep_pae = _loom._action_attestation_pae(
+                "application/vnd.in-toto+json", deep_payload,
+            )
+            deep_envelope = {
+                "payloadType": "application/vnd.in-toto+json",
+                "payload": base64.b64encode(deep_payload).decode("ascii"),
+                "signatures": [{"sig": base64.b64encode(sign_bytes(deep_pae)).decode("ascii")}],
+            }
+            rejected_deep = _loom.verify_action_result_attestation_v0(
+                deep_envelope, semantics_manifest, attestation_observation,
+                semantics_src, semantics_wasm, running_surface,
+                compiler_components, compiler_components, test_key, test_key,
+            )
+
+            oversized_signature_envelope = json.loads(json.dumps(action_attestation["envelope"]))
+            oversized_signature_envelope["signatures"] = [{
+                "sig": base64.b64encode(b"\x00" * 8193).decode("ascii"),
+            }]
+            rejected_oversized_signature = _loom.verify_action_result_attestation_v0(
+                oversized_signature_envelope, semantics_manifest, attestation_observation,
+                semantics_src, semantics_wasm, running_surface,
+                compiler_components, compiler_components, test_key, test_key,
+            )
+
+            urlsafe_envelope = json.loads(json.dumps(action_attestation["envelope"]))
+            urlsafe_envelope["payload"] = base64.urlsafe_b64encode(
+                base64.b64decode(urlsafe_envelope["payload"]),
+            ).decode("ascii")
+            urlsafe_envelope["signatures"][0]["sig"] = base64.urlsafe_b64encode(
+                base64.b64decode(urlsafe_envelope["signatures"][0]["sig"]),
+            ).decode("ascii")
+            urlsafe_envelope["signatures"][0]["keyid"] = "wrong-untrusted-hint"
+            urlsafe_envelope["extension"] = "ignored-by-dsse"
+            verified_urlsafe = _loom.verify_action_result_attestation_v0(
+                urlsafe_envelope, semantics_manifest, attestation_observation,
+                semantics_src, semantics_wasm, running_surface,
+                compiler_components, compiler_components, test_key, test_key,
+            )
+
+            multisig_envelope = json.loads(json.dumps(action_attestation["envelope"]))
+            multisig_envelope["signatures"].insert(0, {"keyid": "bad", "sig": "AA=="})
+            verified_multisig = _loom.verify_action_result_attestation_v0(
+                multisig_envelope, semantics_manifest, attestation_observation,
+                semantics_src, semantics_wasm, running_surface,
+                compiler_components, compiler_components, test_key, test_key,
+            )
+            wrong_key = dict(test_key)
+            wrong_key["n"] = test_key["n"][:-1] + ("5" if test_key["n"][-1] != "5" else "7")
+            rejected_wrong_attester = _loom.verify_action_result_attestation_v0(
+                action_attestation["envelope"], semantics_manifest,
+                attestation_observation, semantics_src, semantics_wasm,
+                running_surface, compiler_components, compiler_components,
+                test_key, wrong_key,
+            )
+            rejected_early_attestation = _loom.prepare_action_result_attestation_v0(
+                action_result["result"], attestation_receipt, semantics_manifest,
+                attestation_observation, semantics_src, semantics_wasm,
+                running_surface, compiler_components, compiler_components,
+                test_key, test_key, action_result["result"]["finalized_at_unix_ms"] - 1,
+            )
+            failed_observation = json.loads(json.dumps(attestation_observation))
+            failed_observation["result"] = "failed"
+            failed_receipt = _loom.build_wasm_compiler_receipt_v4(
+                semantics_manifest, failed_observation, semantics_src,
+                semantics_wasm, compiler_components,
+            )["receipt"]
+            rejected_status_rebind = _loom.prepare_action_result_attestation_v0(
+                action_result["result"], failed_receipt, semantics_manifest,
+                failed_observation, semantics_src, semantics_wasm,
+                running_surface, compiler_components, compiler_components,
+                test_key, test_key, attested_at,
+            )
+
+            statement = prepared_attestation["statement"]
+            predicate = statement["predicate"]
+            action_attestation_v0_ok = (
+                attestation_receipt_result["valid"]
+                and prepared_attestation["valid"]
+                and prepared_attestation["authorization"] == "none"
+                and signing_bytes.startswith(b"DSSEv1 28 application/vnd.in-toto+json ")
+                and action_attestation["valid"] and action_attestation["authorization"] == "none"
+                and verified_attestation["valid"] and verified_attestation["authorization"] == "none"
+                and statement["_type"] == "https://in-toto.io/Statement/v1"
+                and statement["predicateType"] == "https://umbraaeternaa.github.io/loom/attestation/action-result/v0"
+                and [item["name"] for item in statement["subject"]] == [
+                    "loom-action-result.json", "loom-gate-receipt-v4.json", "loom-program.wasm",
+                ]
+                and predicate["action_result_sha256"] == action_result["result_sha256"]
+                and predicate["gate_receipt_sha256"] == attestation_receipt["receipt_sha256"]
+                and predicate["lifecycle"] == {
+                    "schema": "loom-action-result-attestation-lifecycle/v0",
+                    "terminal": True, "evidence": "signed-post-execution",
+                    "authorization": "none", "execution_repeated": False,
+                }
+                and not rejected_unsigned_tamper["valid"]
+                and any(item["code"] == "invalid-attestation-signature" for item in rejected_unsigned_tamper["findings"])
+                and not rejected_signed_bad_result["valid"]
+                and any(item["code"] == "outcome-mismatch" for item in rejected_signed_bad_result["findings"])
+                and not rejected_duplicate_key["valid"]
+                and any(item["code"] == "invalid-statement-json" for item in rejected_duplicate_key["findings"])
+                and not rejected_noncanonical["valid"]
+                and any(item["code"] == "non-canonical-statement" for item in rejected_noncanonical["findings"])
+                and not rejected_nan["valid"]
+                and any(item["code"] == "invalid-statement-json" for item in rejected_nan["findings"])
+                and not rejected_deep["valid"]
+                and any(item["code"] == "statement-too-deep" for item in rejected_deep["findings"])
+                and not rejected_oversized_signature["valid"]
+                and any(item["code"] == "invalid-attestation-signature" for item in rejected_oversized_signature["findings"])
+                and verified_urlsafe["valid"] and verified_multisig["valid"]
+                and not rejected_wrong_attester["valid"]
+                and any(item["code"] == "invalid-attestation-signature" for item in rejected_wrong_attester["findings"])
+                and not rejected_early_attestation["valid"]
+                and any(item["code"] == "attestation-before-result" for item in rejected_early_attestation["findings"])
+                and not rejected_status_rebind["valid"]
+                and any(item["code"] == "attestation-result-status-mismatch" for item in rejected_status_rebind["findings"])
+            )
+            action_attestation_diagnostics = {
+                "receipt": attestation_receipt_result,
+                "prepared": prepared_attestation,
+                "built": action_attestation,
+                "verified": verified_attestation,
+                "unsigned_tamper": rejected_unsigned_tamper,
+                "signed_bad_result": rejected_signed_bad_result,
+                "duplicate_key": rejected_duplicate_key,
+                "noncanonical": rejected_noncanonical,
+                "nan": rejected_nan,
+                "deep": rejected_deep,
+                "oversized_signature": rejected_oversized_signature,
+                "urlsafe": verified_urlsafe,
+                "multisig": verified_multisig,
+                "wrong_attester": rejected_wrong_attester,
+                "early": rejected_early_attestation,
+                "status_rebind": rejected_status_rebind,
+            }
+        if not action_attestation_v0_ok:
+            print("       action-attestation diagnostics:", json.dumps(action_attestation_diagnostics, sort_keys=True))
+        ok += action_attestation_v0_ok
+        print(f"  {'ok  ' if action_attestation_v0_ok else 'FAIL'} gate: Action Result Attestation v0")
         integrated_observation = {
             "schema": "loom-gate-observation/v1", "result": "completed",
             "repositories": [{"root": "/Users/macbook/Projects/loom", "before_head": "4281c7b", "after_head": "f" * 40}],
@@ -5210,7 +5478,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 496
+            and about_json["citadel_checks"] == 497
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
@@ -5439,7 +5707,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 496/496 citadel checks" in quick
+            and "PASS -- 497/497 citadel checks" in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
             and "loom examples" in quick
@@ -5549,7 +5817,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "496-action-result-v0")' in play
+            and 'bundleUrl.searchParams.set("v", "497-action-attestation-v0")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -6166,7 +6434,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 496/496 citadel checks" in rdoc
+            and "PASS -- 497/497 citadel checks" in rdoc
             and "loom examples --format json" in rdoc
             and "loom doctor --dry-run --format json" in rdoc
             and "python3 verify_docs_parity.py" in rdoc
@@ -6176,6 +6444,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "Compiler Receipt v4" in stable_words
             and "Experimental or bounded" in rdoc
             and "Action Capsule Result v0 closes the one-use host lifecycle" in stable_words
+            and "Action Result Attestation v0 composes that terminal Result" in stable_words
             and "terminal Action Capsule Result v0 remain future contracts" not in rdoc_words
             and "Receipt v4 remain future contracts" not in rdoc_words
             and "does not magically confine arbitrary external tools" in rdoc_words
@@ -6228,7 +6497,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 143   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 144   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

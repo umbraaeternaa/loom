@@ -6,7 +6,7 @@ experimental, and what LOOM does not claim yet.
 
 ## Current public baseline
 
-- Canonical self-verification: `PASS -- 496/496 citadel checks`.
+- Canonical self-verification: `PASS -- 497/497 citadel checks`.
 - Published browser bundle parity is required before release:
   `python3 verify_docs_parity.py`.
 - The public compatibility surface is `loom.py`; module boundaries are pinned in
@@ -106,6 +106,10 @@ experimental, and what LOOM does not claim yet.
   embedded request, operator signature, Claim, Mediation, and Bounded Execution;
   emits one redacted content-addressed terminal artifact; and atomically moves
   the private Claim to `completed` or `failed`. It authorizes no further action.
+- Action Result Attestation v0 composes that terminal Result with the exact
+  Compiler Receipt v4 and WASM artifact in a canonical in-toto Statement v1,
+  then verifies an externally produced DSSE signature before parsing. It is
+  post-execution evidence, not authorization, execution, or private-key custody.
 - Deterministic property fuzz smoke is part of the citadel.
 
 ## Experimental or bounded
@@ -172,10 +176,10 @@ python3 loom.py about --format json
 
 Expected public markers:
 
-- `run_tests.py` prints `PASS -- 496/496 citadel checks`.
+- `run_tests.py` prints `PASS -- 497/497 citadel checks`.
 - `verify_docs_parity.py` prints that the published bundle is standalone and
   citadel-green.
-- `loom.py about --format json` reports `citadel_checks: 496`, the current
+- `loom.py about --format json` reports `citadel_checks: 497`, the current
   WASM ABI version, and the supported backend list.
 - An installed checkout exposes `loom` as the same CLI surface as
   `python3 loom.py`.
