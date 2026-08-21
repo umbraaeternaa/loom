@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import loom as _loom
 from loom_frontend import ASM_INTRINSICS
 import loom_provenance as _loom_provenance
-from loom import parse, parse_spans, tokenize, tokenize_spans, check, run_call, compile_py, run_compiled, run_js, compile_js, compile_wasm, verify_wasm_trust_receipt, verify_wasm_trust_receipt_v2, verify_wasm_source_equivalence, build_wit_component_boundary_v0, verify_wit_component_boundary_v0, run_wasm, emit_wat, LoomError, _WASM_ABI_VERSION
+from loom import parse, parse_spans, tokenize, tokenize_spans, check, run_call, compile_py, run_compiled, run_js, compile_js, compile_wasm, verify_wasm_trust_receipt, verify_wasm_trust_receipt_v2, verify_wasm_source_equivalence, verify_wasm_component_bridge_v0, build_wit_component_boundary_v0, verify_wit_component_boundary_v0, run_wasm, emit_wat, LoomError, _WASM_ABI_VERSION
 
 def _context_chain_source(depth=65):
     parts = [
@@ -1719,6 +1719,154 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         print(f"  {'ok  ' if trust_receipt_ok else 'FAIL'} backend(WASM): trust/provenance receipt v1 + role-policy v2 sections")
     except Exception as e:
         print(f"  FAIL backend(WASM) trust/provenance receipt: {e}")
+    try:                                               # Component Bridge v0 safely constructs the complete bounded heap-value ingress
+        bridge_source = (
+            '(defx identity () (fn (x) x)) '
+            '(defx sample () (fn () (record (alpha 1)))) '
+            '(defx tagged () (fn () (variant Some 2)))'
+        )
+        bridge_wasm = compile_wasm(bridge_source)
+        bridge_verify = verify_wasm_component_bridge_v0(bridge_source, bridge_wasm)
+        bridge = bridge_verify["bridge"] or {}
+        field_ids = {item["name"]: item["id"] for item in bridge.get("field_ids", [])}
+        tag_ids = {item["name"]: item["id"] for item in bridge.get("tag_ids", [])}
+
+        def _read_bridge_uleb(data, offset):
+            value = 0; shift = 0
+            while True:
+                byte = data[offset]; offset += 1; value |= (byte & 0x7f) << shift
+                if not byte & 0x80: return value, offset
+                shift += 7
+
+        def _write_bridge_uleb(value):
+            out = bytearray()
+            while True:
+                byte = value & 0x7f; value >>= 7; out.append(byte | (0x80 if value else 0))
+                if not value: return bytes(out)
+
+        pos = 8; bridge_section = None; bridge_bounds = None; bridge_payload = None
+        while pos < len(bridge_wasm):
+            start = pos; section = bridge_wasm[pos]; size, body = _read_bridge_uleb(bridge_wasm, pos + 1); end = body + size
+            if section == 0:
+                name_len, name_start = _read_bridge_uleb(bridge_wasm, body)
+                if bridge_wasm[name_start:name_start + name_len] == b"loom.component-bridge.v0":
+                    bridge_section = bridge_wasm[start:end]
+                    bridge_bounds = (start, end)
+                    bridge_payload = bridge_wasm[name_start + name_len:end]
+            pos = end
+        duplicate_verify = verify_wasm_component_bridge_v0(
+            bridge_source, bridge_wasm + (bridge_section or b""),
+        )
+        renamed_verify = verify_wasm_component_bridge_v0(
+            bridge_source, bridge_wasm.replace(b"loom_component_cons", b"loom_component_xons", 1),
+        )
+        source_mismatch_bridge = verify_wasm_component_bridge_v0(
+            bridge_source.replace("(fn (x) x)", "(fn (x) (+ x 0))"), bridge_wasm,
+        )
+        duplicate_key_payload = b'{"schema":"loom-component-bridge/v0",' + (bridge_payload or b"{}")[1:]
+        duplicate_key_body = (_write_bridge_uleb(len(b"loom.component-bridge.v0"))
+                              + b"loom.component-bridge.v0" + duplicate_key_payload)
+        duplicate_key_section = b"\x00" + _write_bridge_uleb(len(duplicate_key_body)) + duplicate_key_body
+        malformed_json_wasm = (bridge_wasm[:bridge_bounds[0]] + duplicate_key_section + bridge_wasm[bridge_bounds[1]:])
+        malformed_json_verify = verify_wasm_component_bridge_v0(bridge_source, malformed_json_wasm)
+        try:
+            compile_wasm('(defx loom_component_cons () (fn (x y) x))')
+            reserved_refused = False
+        except LoomError:
+            reserved_refused = True
+
+        runtime_ok = True
+        if shutil.which("node"):
+            bridge_js = r'''
+const bytes=Buffer.from(process.argv[1],"base64"), fields=JSON.parse(process.argv[2]), tags=JSON.parse(process.argv[3]);
+let calls=0; const denied=()=>{calls++;return 0};
+const env={push_handler:denied,pop_handler:denied,current_handler:denied,host_print:denied,push_caps:denied,pop_caps:denied,has_cap:denied,host_ffi:denied};
+(async()=>{
+  const {instance:{exports:e}}=await WebAssembly.instantiate(bytes,{env});
+  const mem=new Uint8Array(e.memory.buffer), view=new DataView(e.memory.buffer);
+  const p=e.loom_component_alloc_bytes(4); mem.set([0xf0,0x9f,0x98,0x80],p);
+  const str=e.loom_component_make_string(p,4), list=e.loom_component_cons(str,3);
+  const rec=e.loom_component_record(fields.alpha,14,0), vari=e.loom_component_variant(tags.Some,18);
+  const raw=v=>v&-2; let malformedTail=false,unknownField=false,unknownTag=false,repeatedRange=false;
+  try{e.loom_component_cons(2,5)}catch(_){malformedTail=true}
+  try{e.loom_component_record(0x7fffffff,2,0)}catch(_){unknownField=true}
+  try{e.loom_component_variant(0x7fffffff,2)}catch(_){unknownTag=true}
+  const q=e.loom_component_alloc_bytes(1); try{e.loom_component_alloc_bytes(1)}catch(_){repeatedRange=true}; mem[q]=0x61;
+  const {instance:{exports:x}}=await WebAssembly.instantiate(bytes,{env}); const xm=new Uint8Array(x.memory.buffer);
+  const bad=x.loom_component_alloc_bytes(3); xm.set([0xed,0xa0,0x80],bad); let invalidUtf8=false;
+  try{x.loom_component_make_string(bad,3)}catch(_){invalidUtf8=true}
+  const {instance:{exports:y}}=await WebAssembly.instantiate(bytes,{env}); const yv=new DataView(y.memory.buffer);
+  const cyclicList=y.loom_component_cons(2,3), cyclicRecord=y.loom_component_record(fields.alpha,2,0);
+  yv.setInt32(raw(cyclicList)+8,cyclicList,true); yv.setInt32(raw(cyclicRecord)+12,cyclicRecord,true);
+  let cyclicListRefused=false,cyclicRecordRefused=false;
+  try{y.loom_component_cons(2,cyclicList)}catch(_){cyclicListRefused=true}
+  try{y.loom_component_record(fields.alpha,2,cyclicRecord)}catch(_){cyclicRecordRefused=true}
+  const {instance:{exports:z}}=await WebAssembly.instantiate(bytes,{env}); let oversizeRefused=false;
+  try{z.loom_component_alloc_bytes(65517)}catch(_){oversizeRefused=true}
+  const maxp=z.loom_component_alloc_bytes(65516), maxs=z.loom_component_make_string(maxp,65516);
+  let utf8Corpus=true;
+  for(const [hex,expected] of [["",true],["7f",true],["c280",true],["dfbf",true],["e0a080",true],["ed9fbf",true],["f0908080",true],["f48fbfbf",true],["80",false],["c080",false],["e08080",false],["eda080",false],["f0808080",false],["f4908080",false],["f5808080",false],["c2",false]]){
+    const {instance:{exports:u}}=await WebAssembly.instantiate(bytes,{env}), ub=Buffer.from(hex,"hex");
+    const up=u.loom_component_alloc_bytes(ub.length); new Uint8Array(u.memory.buffer).set(ub,up); let accepted=true;
+    try{u.loom_component_make_string(up,ub.length)}catch(_){accepted=false} if(accepted!==expected)utf8Corpus=false;
+  }
+  console.log(JSON.stringify({calls,malformedTail,unknownField,unknownTag,repeatedRange,invalidUtf8,
+    invalidUtf8Unpublished:x.loom_heap_strings.value===0 && x.loom_heap_used.value===4,
+    cyclicListRefused,cyclicRecordRefused,oversizeRefused,utf8Corpus,
+    maxString:[new DataView(z.memory.buffer).getInt32(raw(maxs),true),z.loom_heap_strings.value,z.loom_heap_used.value],
+    string:[view.getInt32(raw(str),true),view.getInt32(raw(str)+4,true),view.getInt32(raw(str)+8,true)],
+    list:[view.getInt32(raw(list),true),view.getInt32(raw(list)+8,true)],
+    record:[view.getInt32(raw(rec),true),view.getInt32(raw(rec)+4,true),view.getInt32(raw(rec)+12,true)],
+    variant:[view.getInt32(raw(vari),true),view.getInt32(raw(vari)+4,true)],
+    counters:[e.loom_heap_strings.value,e.loom_heap_lists.value,e.loom_heap_records.value,e.loom_heap_variants.value]}));
+})().catch(error=>{console.error(error);process.exit(1)});
+'''
+            node_result = subprocess.run(
+                ["node", "-e", bridge_js, base64.b64encode(bridge_wasm).decode(), json.dumps(field_ids), json.dumps(tag_ids)],
+                capture_output=True, text=True,
+            )
+            runtime = json.loads(node_result.stdout) if node_result.returncode == 0 else {}
+            runtime_ok = (
+                node_result.returncode == 0 and runtime.get("calls") == 0
+                and runtime.get("malformedTail") is True and runtime.get("unknownField") is True
+                and runtime.get("unknownTag") is True and runtime.get("repeatedRange") is True
+                and runtime.get("invalidUtf8") is True
+                and runtime.get("invalidUtf8Unpublished") is True
+                and runtime.get("cyclicListRefused") is True and runtime.get("cyclicRecordRefused") is True
+                and runtime.get("oversizeRefused") is True
+                and runtime.get("utf8Corpus") is True
+                and runtime.get("maxString") == [6, 1, 65528]
+                and runtime.get("string", [])[:2] == [6, 4]
+                and runtime.get("list", [None, None])[0] == 1 and runtime.get("list", [None, None])[1] == 3
+                and runtime.get("record") == [2, field_ids.get("alpha"), 0]
+                and runtime.get("variant") == [3, tag_ids.get("Some")]
+                and runtime.get("counters") == [1, 1, 1, 1]
+            )
+        bridge_ok = (
+            bridge_verify["schema"] == "loom-component-bridge-validation/v0"
+            and bridge_verify["valid"] is True
+            and bridge.get("schema") == "loom-component-bridge/v0"
+            and bridge.get("abi_version") == 1
+            and bridge.get("limits", {}).get("max_chain_cells") == 2048
+            and bridge.get("core_without_bridge_sha256")
+            and [item["name"] for item in bridge.get("field_ids", [])] == sorted(field_ids)
+            and [item["name"] for item in bridge.get("tag_ids", [])] == sorted(tag_ids)
+            and len(bridge.get("exports", [])) == 5
+            and "custom section loom.component-bridge.v0" in emit_wat(bridge_source)
+            and 'export "loom_heap_strings"' in emit_wat(bridge_source)
+            and compile_wasm(bridge_source) == bridge_wasm
+            and duplicate_verify["valid"] is False
+            and any("duplicate" in finding for finding in duplicate_verify["findings"])
+            and renamed_verify["valid"] is False
+            and source_mismatch_bridge["valid"] is False
+            and malformed_json_verify["valid"] is False
+            and any("duplicate JSON key" in finding for finding in malformed_json_verify["findings"])
+            and reserved_refused and runtime_ok
+        )
+        ok += bridge_ok
+        print(f"  {'ok  ' if bridge_ok else 'FAIL'} backend(WASM): Component Bridge v0 exact metadata + bounded constructors + adversarial refusal")
+    except Exception as e:
+        print(f"  FAIL backend(WASM) Component Bridge v0: {e}")
     try:                                               # WIT v0 binds exact Pure core-WASM without pretending an adapter exists
         import copy
         component_source = (
@@ -2214,7 +2362,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             "actions_observed": ["read", "write", "test", "git-commit"],
             "evidence": [
                 {"kind": "syntax", "status": "pass", "detail": "PASS syntax"},
-                {"kind": "citadel", "status": "pass", "detail": "498/498"},
+                {"kind": "citadel", "status": "pass", "detail": "499/499"},
                 {"kind": "docs-parity", "status": "pass", "detail": "PASS docs parity"},
                 {"kind": "git-clean", "status": "pass", "detail": "clean"},
                 {"kind": "git-sync", "status": "pass", "detail": "HEAD == origin/main"},
@@ -5572,7 +5720,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 498
+            and about_json["citadel_checks"] == 499
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
@@ -5801,7 +5949,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 498/498 citadel checks" in quick
+            and "PASS -- 499/499 citadel checks" in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
             and "loom examples" in quick
@@ -5911,7 +6059,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "498-wit-component-boundary-v0")' in play
+            and 'bundleUrl.searchParams.set("v", "499-component-bridge-v0")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -6528,7 +6676,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 498/498 citadel checks" in rdoc
+            and "PASS -- 499/499 citadel checks" in rdoc
             and "loom examples --format json" in rdoc
             and "loom doctor --dry-run --format json" in rdoc
             and "python3 verify_docs_parity.py" in rdoc
@@ -6592,7 +6740,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 145   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, evidence-carrying WIT component boundary v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 146   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

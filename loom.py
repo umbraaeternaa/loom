@@ -187,6 +187,9 @@ def verify_wasm_trust_receipt_v2(program_src, wasm_bytes):
 def verify_wasm_source_equivalence(program_src, wasm_bytes):
     return _loom_wasm.verify_source_equivalence(program_src, wasm_bytes, _WASM_FRONTEND)
 
+def verify_wasm_component_bridge_v0(program_src, wasm_bytes):
+    return _loom_wasm.verify_component_bridge_v0(program_src, wasm_bytes, _WASM_FRONTEND)
+
 def build_wasm_compiler_profile(surface, components):
     return _loom_provenance.build_compiler_profile(surface, components, _WASM_ABI_VERSION)
 
@@ -816,7 +819,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
     emit_wat,
     LoomError,
     metadata={
-        "citadel_checks": 498,
+        "citadel_checks": 499,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "i31_bits": INT_BITS,
         "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],

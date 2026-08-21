@@ -2141,6 +2141,17 @@ _WASM_K_RESOURCE = 5
 _WASM_K_STRING = 6
 _TRUST_SECTION_NAME = b"loom.trust.v1"
 _TRUST_V2_SECTION_NAME = b"loom.trust.v2"
+_COMPONENT_BRIDGE_SECTION_NAME = b"loom.component-bridge.v0"
+_COMPONENT_BRIDGE_SCHEMA = "loom-component-bridge/v0"
+_COMPONENT_BRIDGE_VALIDATION_SCHEMA = "loom-component-bridge-validation/v0"
+_COMPONENT_BRIDGE_MAX_PAYLOAD = 1 << 20
+_COMPONENT_BRIDGE_EXPORTS = (
+    ("loom_component_alloc_bytes", ("raw-length",), "raw-pointer"),
+    ("loom_component_make_string", ("raw-pointer", "raw-length"), "tagged-value"),
+    ("loom_component_cons", ("tagged-value", "tagged-list-tail"), "tagged-value"),
+    ("loom_component_record", ("raw-field-id", "tagged-value", "tagged-record-tail"), "tagged-value"),
+    ("loom_component_variant", ("raw-tag-id", "tagged-value"), "tagged-value"),
+)
 _TRUST_FORM_KINDS = frozenset(("trust", "prov", "by", "declassify", "seam", "seam1", "seamN", "vouch", "recall", "repro", "ffi"))
 _TRUST_V2_FORM_KINDS = _TRUST_FORM_KINDS | frozenset(("roles", "sub", "needs"))
 
@@ -2908,6 +2919,234 @@ def verify_wasm_source_equivalence(program_src, wasm_bytes):
     }
 
 
+def _component_bridge_payload(program_src, ctx, core_without_bridge):
+    payload = {
+        "abi_version": _WASM_ABI_VERSION,
+        "compiler_profile": {
+            "backend": "python-direct-wasm",
+            "bridge_extension": "v0",
+            "deterministic": True,
+        },
+        "core_without_bridge_sha256": hashlib.sha256(core_without_bridge).hexdigest(),
+        "exports": [
+            {"name": name, "params": list(params), "result": result}
+            for name, params, result in _COMPONENT_BRIDGE_EXPORTS
+        ],
+        "field_ids": [
+            {"id": field_id, "name": str(name)}
+            for name, field_id in sorted(ctx.fields.items(), key=lambda item: str(item[0]))
+        ],
+        "limits": {
+            "linear_memory_bytes": 65536,
+            "max_chain_cells": 2048,
+            "max_single_string_bytes": 65516,
+        },
+        "schema": _COMPONENT_BRIDGE_SCHEMA,
+        "source_sha256": hashlib.sha256(program_src.encode("utf-8")).hexdigest(),
+        "tag_ids": [
+            {"id": tag_id, "name": str(name)}
+            for name, tag_id in sorted(ctx.tags.items(), key=lambda item: str(item[0]))
+        ],
+    }
+    return json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _scan_component_bridge(wasm_bytes):
+    findings = []
+    if not isinstance(wasm_bytes, (bytes, bytearray)) or bytes(wasm_bytes[:8]) != b"\x00asm\x01\x00\x00\x00":
+        return None, None, None, ["invalid WebAssembly magic or version"]
+    data = bytes(wasm_bytes)
+    stripped = bytearray(data[:8])
+    payload = None
+    bridge = None
+    pos = 8
+    while pos < len(data):
+        section_start = pos
+        section = data[pos]
+        try:
+            size, body = _read_uleb(data, pos + 1)
+        except ValueError as exc:
+            return None, None, None, [str(exc)]
+        if data[pos + 1:body] != _leb_u(size):
+            findings.append("non-canonical WebAssembly section length")
+        end = body + size
+        if end > len(data):
+            return None, None, None, ["truncated WebAssembly section"]
+        is_bridge = False
+        if section == 0:
+            try:
+                name_len, name_start = _read_uleb(data, body)
+            except ValueError as exc:
+                return None, None, None, [str(exc)]
+            if data[body:name_start] != _leb_u(name_len):
+                findings.append("non-canonical WebAssembly custom-section name length")
+            name_end = name_start + name_len
+            if name_end > end:
+                return None, None, None, ["truncated WebAssembly custom-section name"]
+            is_bridge = data[name_start:name_end] == _COMPONENT_BRIDGE_SECTION_NAME
+            if is_bridge:
+                if payload is not None:
+                    findings.append("duplicate loom.component-bridge.v0 custom section")
+                payload = data[name_end:end]
+                if len(payload) > _COMPONENT_BRIDGE_MAX_PAYLOAD:
+                    findings.append("loom.component-bridge.v0 payload exceeds the size limit")
+                try:
+                    def _closed_object(pairs):
+                        value = {}
+                        for key, item in pairs:
+                            if key in value:
+                                raise ValueError("duplicate JSON key: " + str(key))
+                            value[key] = item
+                        return value
+                    bridge = json.loads(
+                        payload.decode("utf-8"), object_pairs_hook=_closed_object,
+                        parse_constant=lambda value: (_ for _ in ()).throw(ValueError("non-finite JSON number: " + value)),
+                    )
+                except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+                    bridge = None
+                    findings.append("loom.component-bridge.v0 payload is not strict UTF-8 JSON: " + str(exc))
+                if bridge is not None and not isinstance(bridge, dict):
+                    findings.append("loom.component-bridge.v0 payload must be a JSON object")
+                elif bridge is not None:
+                    canonical = json.dumps(bridge, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                    if canonical != payload:
+                        findings.append("loom.component-bridge.v0 payload is not canonical JSON")
+        if not is_bridge:
+            stripped.extend(data[section_start:end])
+        pos = end
+    if payload is None:
+        findings.append("missing loom.component-bridge.v0 custom section")
+    return bridge, payload, bytes(stripped), findings
+
+
+def verify_wasm_component_bridge_v0(program_src, wasm_bytes):
+    """Verify exact source/core/bridge binding without executing or authorizing the module."""
+    bridge, payload, stripped, findings = _scan_component_bridge(wasm_bytes)
+    findings = list(findings)
+    if not isinstance(program_src, str):
+        findings.append("source must be a string")
+    else:
+        try:
+            program_src.encode("utf-8")
+        except UnicodeEncodeError:
+            findings.append("source must be valid UTF-8")
+    if isinstance(program_src, str):
+        try:
+            _, source_errors = check(parse(program_src))
+        except (LoomError, UnicodeError) as exc:
+            source_errors = [str(exc)]
+        findings.extend("source checker: " + error for error in source_errors)
+        if not source_errors and bridge is not None and stripped is not None:
+            ctx = _WasmContext(program_src)
+            expected_payload = _component_bridge_payload(program_src, ctx, stripped)
+            if payload != expected_payload:
+                findings.append("loom.component-bridge.v0 does not match the supplied source or core module")
+            expected_keys = {
+                "abi_version", "compiler_profile", "core_without_bridge_sha256", "exports",
+                "field_ids", "limits", "schema", "source_sha256", "tag_ids",
+            }
+            if set(bridge) != expected_keys:
+                findings.append("loom.component-bridge.v0 has unknown or missing top-level keys")
+            try:
+                expected_wasm = compile_wasm(program_src)
+            except LoomError as exc:
+                findings.append("source compiler: " + str(exc))
+            else:
+                if not isinstance(wasm_bytes, (bytes, bytearray)) or bytes(wasm_bytes) != expected_wasm:
+                    findings.append("WASM bytes do not match deterministic bridge compilation of the supplied source")
+    return {
+        "schema": _COMPONENT_BRIDGE_VALIDATION_SCHEMA,
+        "valid": not findings,
+        "bridge": bridge,
+        "findings": findings,
+    }
+
+
+def _bridge_trap_if(condition):
+    return condition + b"\x04\x40\x00\x0b"
+
+
+def _bridge_return_zero_if(condition):
+    return condition + b"\x04\x40" + _wasm_const(0) + b"\x0f\x0b"
+
+
+def _bridge_load_byte(offset=0):
+    code = b"\x20\x00\x20\x02\x6a"
+    if offset:
+        code += _wasm_const(offset) + b"\x6a"
+    return code + b"\x2d\x00\x00"
+
+
+def _bridge_byte_range(offset, lower, upper):
+    return (_bridge_load_byte(offset) + _wasm_const(lower) + b"\x4f"
+            + _bridge_load_byte(offset) + _wasm_const(upper) + b"\x4d\x71")
+
+
+def _bridge_chain_validation(value_local, cursor_local, count_local, terminator, kind, size, next_offset, kind_func):
+    """Validate a complete list/record tail, bounding malformed cycles to 2048 cells."""
+    get = lambda index: b"\x20" + _leb_u(index)
+    set_ = lambda index: b"\x21" + _leb_u(index)
+    code = get(value_local) + set_(cursor_local) + _wasm_const(0) + set_(count_local)
+    code += b"\x02\x40\x03\x40"
+    code += get(cursor_local) + _wasm_const(terminator) + b"\x46\x0d\x01"
+    code += _bridge_trap_if(
+        get(cursor_local) + _wasm_const(kind) + _wasm_const(size)
+        + b"\x10" + _leb_u(kind_func + _WASM_IMPORTS) + b"\x45"
+    )
+    code += _bridge_trap_if(get(count_local) + _wasm_const(2048) + b"\x4f")
+    code += (get(cursor_local) + _wasm_unptr() + b"\x28\x02" + _leb_u(next_offset)
+             + set_(cursor_local))
+    code += get(count_local) + _wasm_const(1) + b"\x6a" + set_(count_local)
+    return code + b"\x0c\x00\x0b\x0b"
+
+
+def _bridge_utf8_validator_code():
+    """Return a strict RFC 3629 UTF-8 validator body for (ptr, length) -> raw bool."""
+    code = _wasm_const(0) + b"\x21\x02"
+    code += b"\x02\x40\x03\x40"
+    code += b"\x20\x02\x20\x01\x4f\x0d\x01"
+    code += _bridge_load_byte() + b"\x21\x03"
+    code += b"\x20\x03" + _wasm_const(0x80) + b"\x49\x04\x40"
+    code += b"\x20\x02" + _wasm_const(1) + b"\x6a\x21\x02\x0c\x01\x0b"
+    two = (b"\x20\x03" + _wasm_const(0xC2) + b"\x4f"
+           + b"\x20\x03" + _wasm_const(0xDF) + b"\x4d\x71")
+    code += two + b"\x04\x40"
+    code += _bridge_return_zero_if(b"\x20\x02" + _wasm_const(2) + b"\x6a\x20\x01\x4b")
+    code += _bridge_return_zero_if(_bridge_byte_range(1, 0x80, 0xBF) + b"\x45")
+    code += b"\x20\x02" + _wasm_const(2) + b"\x6a\x21\x02\x0c\x01\x0b"
+    three = (b"\x20\x03" + _wasm_const(0xE0) + b"\x4f"
+             + b"\x20\x03" + _wasm_const(0xEF) + b"\x4d\x71")
+    code += three + b"\x04\x40"
+    code += _bridge_return_zero_if(b"\x20\x02" + _wasm_const(3) + b"\x6a\x20\x01\x4b")
+    second_three = (
+        b"\x20\x03" + _wasm_const(0xE0) + b"\x46" + _bridge_byte_range(1, 0xA0, 0xBF) + b"\x71"
+        + b"\x20\x03" + _wasm_const(0xED) + b"\x46" + _bridge_byte_range(1, 0x80, 0x9F) + b"\x71\x72"
+        + b"\x20\x03" + _wasm_const(0xE1) + b"\x4f" + b"\x20\x03" + _wasm_const(0xEC) + b"\x4d\x71"
+        + b"\x20\x03" + _wasm_const(0xEE) + b"\x4f" + b"\x20\x03" + _wasm_const(0xEF) + b"\x4d\x71\x72"
+        + _bridge_byte_range(1, 0x80, 0xBF) + b"\x71\x72"
+    )
+    code += _bridge_return_zero_if(second_three + b"\x45")
+    code += _bridge_return_zero_if(_bridge_byte_range(2, 0x80, 0xBF) + b"\x45")
+    code += b"\x20\x02" + _wasm_const(3) + b"\x6a\x21\x02\x0c\x01\x0b"
+    four = (b"\x20\x03" + _wasm_const(0xF0) + b"\x4f"
+            + b"\x20\x03" + _wasm_const(0xF4) + b"\x4d\x71")
+    code += four + b"\x04\x40"
+    code += _bridge_return_zero_if(b"\x20\x02" + _wasm_const(4) + b"\x6a\x20\x01\x4b")
+    second_four = (
+        b"\x20\x03" + _wasm_const(0xF0) + b"\x46" + _bridge_byte_range(1, 0x90, 0xBF) + b"\x71"
+        + b"\x20\x03" + _wasm_const(0xF4) + b"\x46" + _bridge_byte_range(1, 0x80, 0x8F) + b"\x71\x72"
+        + b"\x20\x03" + _wasm_const(0xF1) + b"\x4f" + b"\x20\x03" + _wasm_const(0xF3) + b"\x4d\x71"
+        + _bridge_byte_range(1, 0x80, 0xBF) + b"\x71\x72"
+    )
+    code += _bridge_return_zero_if(second_four + b"\x45")
+    code += _bridge_return_zero_if(_bridge_byte_range(2, 0x80, 0xBF) + b"\x45")
+    code += _bridge_return_zero_if(_bridge_byte_range(3, 0x80, 0xBF) + b"\x45")
+    code += b"\x20\x02" + _wasm_const(4) + b"\x6a\x21\x02\x0c\x01\x0b"
+    code += _wasm_const(0) + b"\x0f"
+    code += b"\x0b\x0b" + _wasm_const(1) + b"\x0b"
+    return code
+
+
 _COMPILER_PROFILE_SCHEMA = "loom-wasm-compiler-profile/v1"
 _COMPILER_PROFILE_VALIDATION_SCHEMA = "loom-wasm-compiler-profile-validation/v1"
 _COMPILER_PACKAGE_VERSION = "0.1.0"
@@ -3648,6 +3887,10 @@ def compile_wasm(program_src):
     if ctx.hp_init > 65536:
         raise LoomError("wasm heap: static data exceeds the fixed 64 KiB memory page")
     ds, order = ctx.defs, ctx.order
+    reserved_exports = {name for name, _, _ in _COMPONENT_BRIDGE_EXPORTS}
+    collision = next((t[1] for t in ds if t[1] in reserved_exports), None)
+    if collision is not None:
+        raise LoomError("wasm component bridge: reserved export name: " + collision)
     helper_base, apply_arities = ctx.helper_base, ctx.apply_arities
     fmap = {t[1]: i for i, t in enumerate(ds)}; rec_i = helper_base; get_i = helper_base + 1; cons_i = helper_base + 2
     reserve_i = helper_base + 7
@@ -3739,9 +3982,14 @@ def compile_wasm(program_src):
     ar = sorted(set(apply_arities) | {a for _, a, _, _, _ in funcs} | {a for _, a, _, _, _, _ in lambda_funcs} | {1, 2, 3})  # add helper arities
     ti = {a: i for i, a in enumerate(ar)}   # arity-2 type covers $cons/get; arity-3 covers $rec
     tc = _leb_u(len(ar)) + b"".join(b"\x60" + _leb_u(a) + b"\x7f" * a + b"\x01\x7f" for a in ar)   # type: (i32*)->i32
-    fc = _leb_u(len(funcs) + len(lambda_funcs) + 12 + len(apply_arities)) + b"".join(_leb_u(ti[a]) for _, a, _, _, _ in funcs) + b"".join(_leb_u(ti[a]) for _, a, _, _, _, _ in lambda_funcs) + _leb_u(ti[3]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[1]) + _leb_u(ti[1]) + _leb_u(ti[3]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[1]) + b"".join(_leb_u(ti[arity + 1]) for arity in apply_arities)
+    bridge_base = helper_base + 12 + len(apply_arities)
+    bridge_kind_i, bridge_value_i, bridge_utf8_i = bridge_base, bridge_base + 1, bridge_base + 2
+    bridge_alloc_i, bridge_string_i = bridge_base + 3, bridge_base + 4
+    bridge_cons_i, bridge_record_i, bridge_variant_i = bridge_base + 5, bridge_base + 6, bridge_base + 7
+    bridge_types = (3, 1, 2, 1, 2, 2, 3, 2)
+    fc = _leb_u(len(funcs) + len(lambda_funcs) + 20 + len(apply_arities)) + b"".join(_leb_u(ti[a]) for _, a, _, _, _ in funcs) + b"".join(_leb_u(ti[a]) for _, a, _, _, _, _ in lambda_funcs) + _leb_u(ti[3]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[1]) + _leb_u(ti[1]) + _leb_u(ti[3]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[1]) + b"".join(_leb_u(ti[arity + 1]) for arity in apply_arities) + b"".join(_leb_u(ti[arity]) for arity in bridge_types)
     mc = _leb_u(1) + b"\x00" + _leb_u(1)                    # 1 memory, min 1 page (64 KiB heap)
-    gc = (_leb_u(12)
+    gc = (_leb_u(16)
           + b"\x7f\x01" + _wasm_const(ctx.hp_init) + b"\x0b"                       # mutable i32 $hp = static-data end
           + b"\x7f\x00" + _wasm_const(_WASM_ABI_VERSION) + b"\x0b"                  # immutable raw ABI version
           + b"\x7f\x00" + _wasm_const(65536) + b"\x0b"                              # immutable raw heap limit
@@ -3753,7 +4001,11 @@ def compile_wasm(program_src):
           + b"\x7f\x01" + _wasm_const(0) + b"\x0b"                                  # mutable effect-box object count
           + b"\x7f\x01" + _wasm_const(0) + b"\x0b"
           + b"\x7f\x01" + _wasm_const(0) + b"\x0b"
-          + b"\x7f\x01" + _wasm_const(0) + b"\x0b")                                 # private meter/depth frame pointers
+          + b"\x7f\x01" + _wasm_const(0) + b"\x0b"
+          + b"\x7f\x01" + _wasm_const(0) + b"\x0b"                                  # mutable runtime string object count
+          + b"\x7f\x01" + _wasm_const(0) + b"\x0b"                                  # private pending bridge byte pointer
+          + b"\x7f\x01" + _wasm_const(0) + b"\x0b"                                  # private pending bridge byte length
+          + b"\x7f\x01" + _wasm_const(0) + b"\x0b")                                 # private pending bridge allocation flag
     ic = (_leb_u(8)
           + _leb_u(len("env")) + b"env" + _leb_u(len("push_handler")) + b"push_handler" + b"\x00" + _leb_u(ti[2])
           + _leb_u(len("env")) + b"env" + _leb_u(len("pop_handler")) + b"pop_handler" + b"\x00" + _leb_u(ti[1])
@@ -3763,7 +4015,7 @@ def compile_wasm(program_src):
           + _leb_u(len("env")) + b"env" + _leb_u(len("pop_caps")) + b"pop_caps" + b"\x00" + _leb_u(ti[0])
           + _leb_u(len("env")) + b"env" + _leb_u(len("has_cap")) + b"has_cap" + b"\x00" + _leb_u(ti[1])
           + _leb_u(len("env")) + b"env" + _leb_u(len("host_ffi")) + b"host_ffi" + b"\x00" + _leb_u(ti[3]))
-    ec = _leb_u(len(funcs) + 10)
+    ec = _leb_u(len(funcs) + 16)
     ec += _leb_u(len("memory")) + b"memory" + b"\x02" + _leb_u(0)                  # export linear memory for the heap-backed runtime
     abi_name = b"loom_abi_version"
     ec += _leb_u(len(abi_name)) + abi_name + b"\x03" + _leb_u(1)                    # export immutable global 1
@@ -3778,11 +4030,20 @@ def compile_wasm(program_src):
         (b"loom_heap_variants", heap_variant_g),
         (b"loom_heap_effects", heap_effect_g),
         (b"loom_heap_resources", heap_resource_g),
+        (b"loom_heap_strings", 12),
     ):
         ec += _leb_u(len(name)) + name + b"\x03" + _leb_u(index)
+    for name, index in (
+        (b"loom_component_alloc_bytes", bridge_alloc_i),
+        (b"loom_component_make_string", bridge_string_i),
+        (b"loom_component_cons", bridge_cons_i),
+        (b"loom_component_record", bridge_record_i),
+        (b"loom_component_variant", bridge_variant_i),
+    ):
+        ec += _leb_u(len(name)) + name + b"\x00" + _leb_u(index + _WASM_IMPORTS)
     for i, t in enumerate(ds):
         nb = t[1].encode(); ec += _leb_u(len(nb)) + nb + b"\x00" + _leb_u(i + _WASM_IMPORTS)         # export func
-    cc = _leb_u(len(funcs) + len(lambda_funcs) + 12 + len(apply_arities))
+    cc = _leb_u(len(funcs) + len(lambda_funcs) + 20 + len(apply_arities))
     for _, _, nloc, code, _ in funcs:
         loc = (_leb_u(1) + _leb_u(nloc) + b"\x7f") if nloc else _leb_u(0)                           # let-locals (i32)
         e = loc + code; cc += _leb_u(len(e)) + e
@@ -3855,6 +4116,70 @@ def compile_wasm(program_src):
         )
         e = _leb_u(0) + apply_code + b"\x0b"
         cc += _leb_u(len(e)) + e
+
+    kind_valid_code = (
+        _bridge_return_zero_if(b"\x20\x00" + _wasm_const(1) + b"\x71\x45")
+        + b"\x20\x00" + _wasm_const(-2) + b"\x71\x21\x03"
+        + _bridge_return_zero_if(b"\x20\x03" + _wasm_const(8) + b"\x49")
+        + _bridge_return_zero_if(b"\x20\x03" + _wasm_const(3) + b"\x71")
+        + _bridge_return_zero_if(b"\x20\x03\x23\x00\x4b")
+        + _bridge_return_zero_if(b"\x20\x02\x23\x00\x20\x03\x6b\x4b")
+        + b"\x20\x03\x28\x02\x00\x20\x01\x46\x0b"
+    )
+    e = (_leb_u(1) + _leb_u(1) + b"\x7f") + kind_valid_code; cc += _leb_u(len(e)) + e
+    value_valid_code = (
+        b"\x20\x00" + _wasm_const(1) + b"\x71\x45\x04\x40" + _wasm_const(1) + b"\x0f\x0b"
+        + b"\x20\x00" + _wasm_const(_WASM_NIL) + b"\x46\x04\x40" + _wasm_const(1) + b"\x0f\x0b"
+        + b"\x20\x00" + _wasm_const(_WASM_K_LIST) + _wasm_const(12) + b"\x10" + _leb_u(bridge_kind_i + _WASM_IMPORTS)
+        + b"\x20\x00" + _wasm_const(_WASM_K_RECORD) + _wasm_const(16) + b"\x10" + _leb_u(bridge_kind_i + _WASM_IMPORTS) + b"\x72"
+        + b"\x20\x00" + _wasm_const(_WASM_K_VARIANT) + _wasm_const(12) + b"\x10" + _leb_u(bridge_kind_i + _WASM_IMPORTS) + b"\x72"
+        + b"\x20\x00" + _wasm_const(_WASM_K_STRING) + _wasm_const(12) + b"\x10" + _leb_u(bridge_kind_i + _WASM_IMPORTS) + b"\x72\x0b"
+    )
+    e = _leb_u(0) + value_valid_code; cc += _leb_u(len(e)) + e
+    utf8_code = _bridge_utf8_validator_code()
+    e = (_leb_u(1) + _leb_u(2) + b"\x7f") + utf8_code; cc += _leb_u(len(e)) + e
+    alloc_bytes_code = (
+        _bridge_trap_if(b"\x20\x00" + _wasm_const(0) + b"\x48")
+        + _bridge_trap_if(b"\x20\x00" + _wasm_const(65516) + b"\x4b")
+        + _bridge_trap_if(b"\x23" + _leb_u(15))
+        + b"\x20\x00" + _wasm_const(3) + b"\x6a" + _wasm_const(-4) + b"\x71\x21\x02"
+        + b"\x20\x02\x10" + _leb_u(reserve_i + _WASM_IMPORTS) + b"\x21\x01"
+        + b"\x20\x01\x24" + _leb_u(13) + b"\x20\x00\x24" + _leb_u(14)
+        + _wasm_const(1) + b"\x24" + _leb_u(15) + b"\x20\x01\x0b"
+    )
+    e = (_leb_u(1) + _leb_u(2) + b"\x7f") + alloc_bytes_code; cc += _leb_u(len(e)) + e
+    make_string_code = (
+        _bridge_trap_if(b"\x23" + _leb_u(15) + b"\x45")
+        + _bridge_trap_if(b"\x20\x00\x23" + _leb_u(13) + b"\x47")
+        + _bridge_trap_if(b"\x20\x01\x23" + _leb_u(14) + b"\x47")
+        + _bridge_trap_if(b"\x20\x00\x20\x01\x10" + _leb_u(bridge_utf8_i + _WASM_IMPORTS) + b"\x45")
+        + _wasm_const(12) + b"\x10" + _leb_u(reserve_i + _WASM_IMPORTS) + b"\x21\x02"
+        + _bump_global(12)
+        + b"\x20\x02" + _wasm_const(_WASM_K_STRING) + b"\x36\x02\x00"
+        + b"\x20\x02\x20\x01\x36\x02\x04" + b"\x20\x02\x20\x00\x36\x02\x08"
+        + _wasm_const(0) + b"\x24" + _leb_u(15)
+        + b"\x20\x02" + _wasm_const(1) + b"\x72\x0b"
+    )
+    e = (_leb_u(1) + _leb_u(1) + b"\x7f") + make_string_code; cc += _leb_u(len(e)) + e
+    bridge_cons_code = (
+        _bridge_trap_if(b"\x20\x00\x10" + _leb_u(bridge_value_i + _WASM_IMPORTS) + b"\x45")
+        + _bridge_chain_validation(1, 2, 3, _WASM_NIL, _WASM_K_LIST, 12, 8, bridge_kind_i)
+        + b"\x20\x00\x20\x01\x10" + _leb_u(cons_i + _WASM_IMPORTS) + b"\x0b"
+    )
+    e = (_leb_u(1) + _leb_u(2) + b"\x7f") + bridge_cons_code; cc += _leb_u(len(e)) + e
+    bridge_record_code = (
+        _bridge_trap_if(b"\x20\x00" + _wasm_const(len(fields)) + b"\x4f")
+        + _bridge_trap_if(b"\x20\x01\x10" + _leb_u(bridge_value_i + _WASM_IMPORTS) + b"\x45")
+        + _bridge_chain_validation(2, 3, 4, 0, _WASM_K_RECORD, 16, 12, bridge_kind_i)
+        + b"\x20\x02\x20\x00\x20\x01\x10" + _leb_u(rec_i + _WASM_IMPORTS) + b"\x0b"
+    )
+    e = (_leb_u(1) + _leb_u(2) + b"\x7f") + bridge_record_code; cc += _leb_u(len(e)) + e
+    bridge_variant_code = (
+        _bridge_trap_if(b"\x20\x00" + _wasm_const(len(tags)) + b"\x4f")
+        + _bridge_trap_if(b"\x20\x01\x10" + _leb_u(bridge_value_i + _WASM_IMPORTS) + b"\x45")
+        + b"\x20\x00\x20\x01\x10" + _leb_u(ctx.variant_id + _WASM_IMPORTS) + b"\x0b"
+    )
+    e = _leb_u(0) + bridge_variant_code; cc += _leb_u(len(e)) + e
     dc = None
     if ctx.string_layout:
         def _seg(addr, payload):
@@ -3867,8 +4192,15 @@ def compile_wasm(program_src):
         dc = _leb_u(len(segs)) + b"".join(segs)
     trust_custom = _leb_u(len(_TRUST_SECTION_NAME)) + _TRUST_SECTION_NAME + ctx.trust_receipt
     trust_v2_custom = _leb_u(len(_TRUST_V2_SECTION_NAME)) + _TRUST_V2_SECTION_NAME + ctx.trust_receipt_v2
-    return (b"\x00asm\x01\x00\x00\x00" + _sec(1, tc) + _sec(2, ic) + _sec(3, fc) + _sec(5, mc)
-            + _sec(6, gc) + _sec(7, ec) + _sec(0, trust_custom) + _sec(0, trust_v2_custom) + _sec(10, cc) + (_sec(11, dc) if dc is not None else b""))
+    prefix = (b"\x00asm\x01\x00\x00\x00" + _sec(1, tc) + _sec(2, ic) + _sec(3, fc) + _sec(5, mc)
+              + _sec(6, gc) + _sec(7, ec) + _sec(0, trust_custom) + _sec(0, trust_v2_custom))
+    suffix = _sec(10, cc) + (_sec(11, dc) if dc is not None else b"")
+    core_without_bridge = prefix + suffix
+    bridge_payload = _component_bridge_payload(program_src, ctx, core_without_bridge)
+    if len(bridge_payload) > _COMPONENT_BRIDGE_MAX_PAYLOAD:
+        raise LoomError("wasm component bridge: metadata payload exceeds 1 MiB")
+    bridge_custom = _leb_u(len(_COMPONENT_BRIDGE_SECTION_NAME)) + _COMPONENT_BRIDGE_SECTION_NAME + bridge_payload
+    return prefix + _sec(0, bridge_custom) + suffix
 
 def emit_wat(program_src):
     """Human-readable WebAssembly Text (the 'assembler') for what compile_wasm encodes to bytes:
@@ -4122,6 +4454,8 @@ def emit_wat(program_src):
              "  ;; custom section loom.trust.v2: checked role-policy evidence receipt",
              "  ;; role_policy=roles/sub/needs receipt_bytes=" + str(len(ctx.trust_receipt_v2)),
              "  ;; receipt_v2=" + receipt_v2_json,
+             "  ;; custom section loom.component-bridge.v0: exact bounded heap-ingress evidence",
+             "  ;; bridge exports are emitted by the binary backend; see docs/component_bridge_v0.md",
              "  (global $loom_abi_version i32 (i32.const " + str(_WASM_ABI_VERSION) + "))",
              "  (global $loom_heap_limit i32 (i32.const 65536))",
              "  (global $loom_heap_used (mut i32) (i32.const 0))",
@@ -4131,6 +4465,7 @@ def emit_wat(program_src):
              "  (global $loom_heap_variants (mut i32) (i32.const 0))",
              "  (global $loom_heap_effects (mut i32) (i32.const 0))",
              "  (global $loom_heap_resources (mut i32) (i32.const 0))",
+             "  (global $loom_heap_strings (mut i32) (i32.const 0))",
              "  (global $__loom_meter_frame (mut i32) (i32.const 0))",
              "  (global $__loom_depth_frame (mut i32) (i32.const 0))",
              '  (export "loom_abi_version" (global $loom_abi_version))',
@@ -4141,7 +4476,8 @@ def emit_wat(program_src):
              '  (export "loom_heap_lists" (global $loom_heap_lists))',
              '  (export "loom_heap_variants" (global $loom_heap_variants))',
              '  (export "loom_heap_effects" (global $loom_heap_effects))',
-             '  (export "loom_heap_resources" (global $loom_heap_resources))']
+             '  (export "loom_heap_resources" (global $loom_heap_resources))',
+             '  (export "loom_heap_strings" (global $loom_heap_strings))']
     if uses_heap[0]:
         lines += ["  (memory 1)", '  (export "memory" (memory 0))', "  (global $hp (mut i32) (i32.const " + str(ctx.hp_init) + "))",
                   "  (func $reserve (param $size i32) (result i32) (local $t i32) (local $new i32)",
@@ -9386,7 +9722,7 @@ def build_about():
     return {
         "schema": "loom-about/v1",
         "language": "LOOM",
-        "citadel_checks": 498,
+        "citadel_checks": 499,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "i31_bits": INT_BITS,
         "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],

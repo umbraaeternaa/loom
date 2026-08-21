@@ -427,7 +427,7 @@ async function boot(){
     pyodide = await loadPyodide();
     setStatus("loading LOOM…");
     const bundleUrl = new URL("./loom.py", location.href);
-  bundleUrl.searchParams.set("v", "498-wit-component-boundary-v0");
+  bundleUrl.searchParams.set("v", "499-component-bridge-v0");
     const response = await fetch(bundleUrl, {cache: "no-store"});
     if (!response.ok) throw new Error("LOOM bundle HTTP " + response.status);
     const code = await response.text();
@@ -662,7 +662,8 @@ _r
       ["lists", globalValue("loom_heap_lists")],
       ["variants", globalValue("loom_heap_variants")],
       ["effects", globalValue("loom_heap_effects")],
-      ["resources", globalValue("loom_heap_resources")]
+      ["resources", globalValue("loom_heap_resources")],
+      ["strings", globalValue("loom_heap_strings")]
     ].filter(([, v]) => Number.isFinite(v));
     let s = "";
     if (out.length) s += out.map(esc).join("\n") + "\n";

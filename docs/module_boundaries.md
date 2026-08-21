@@ -77,6 +77,13 @@ an earlier program.
 
 ## Component boundary rule
 
+`loom_wasm.py` owns Component Bridge Extension v0 because its five reserved
+constructors share the backend's private `$reserve` allocator, object layouts,
+module-local field/tag IDs, and diagnostic counters. Every compile emits one
+exact `loom.component-bridge.v0` section. The public verifier is exposed only
+through the stable `loom.py` facade; modular and standalone compilers and
+verifiers must remain byte-identical.
+
 `loom_component.py` may consume the public parser/checker and deterministic WASM
 facades, but it must not modify core-WASM bytes or ABI v1. WIT Component Boundary
 v0 is a content-addressed description of Pure exports, exact WIT, transport, and

@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 498 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 499 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 498/498 citadel checks
+PASS — 499/499 citadel checks
 ```
 
 ## The idea in one screen
@@ -190,6 +190,12 @@ Canonical ABI. It deterministically projects checked Pure entrypoints into a
 WIT world, binds exact source/WASM/WIT bytes, and carries an explicit
 `component_binary: absent`, `adapter: required`, `authorization: none`
 lifecycle until a real independently verified adapter exists.
+Newly compiled core modules now also carry
+[`Component Bridge Extension v0`](docs/component_bridge_v0.md): five bounded,
+non-authorizing constructors let that future adapter build strict UTF-8
+strings, lists, records, and variants through LOOM's own checked heap allocator
+instead of writing private heap state directly. This is the safe ingress layer,
+not yet a Component binary or Canonical ABI adapter.
 
 Certified recursion can also use [`Proven Value Bounds v1`](docs/proven_value_bounds_v1.md):
 the checker derives conservative i31 and list-length upper bounds through
@@ -205,6 +211,7 @@ contract; higher-order and effectful arguments remain fail-closed.
 - [`loom_codegen.py`](loom_codegen.py) — isolated portable Python/JavaScript generators.
 - [`loom_wasm.py`](loom_wasm.py) — isolated WebAssembly/WAT compiler and ABI runtime.
 - [`loom_component.py`](loom_component.py) — evidence-carrying WIT component-boundary builder and verifier.
+- [`docs/component_bridge_v0.md`](docs/component_bridge_v0.md) — exact bridge metadata and bounded heap-ingress contract.
 - [`loom_provenance.py`](loom_provenance.py) — host-built modular/standalone compiler profiles.
 - [`run_tests.py`](run_tests.py) — the self-verifying suite: it accepts honest programs,
   rejects every flavor of lie, and runs real programs.

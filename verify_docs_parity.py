@@ -25,6 +25,7 @@ WASM_TRUST_DOC = ROOT / "docs" / "wasm_trust_provenance_v1.md"
 WASM_TRUST_V2_DOC = ROOT / "docs" / "wasm_trust_provenance_v2.md"
 WASM_EQUIVALENCE_DOC = ROOT / "docs" / "wasm_source_equivalence_v1.md"
 WIT_COMPONENT_DOC = ROOT / "docs" / "wit_component_boundary_v0.md"
+COMPONENT_BRIDGE_DOC = ROOT / "docs" / "component_bridge_v0.md"
 COMPILER_PROVENANCE_DOC = ROOT / "docs" / "compiler_provenance_v1.md"
 COMPILER_EVIDENCE_DOC = ROOT / "docs" / "gate_compiler_evidence_v1.md"
 COMPILER_EVIDENCE_V2_DOC = ROOT / "docs" / "gate_compiler_evidence_v2.md"
@@ -48,7 +49,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "498-wit-component-boundary-v0")',
+        'bundleUrl.searchParams.set("v", "499-component-bridge-v0")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -77,6 +78,7 @@ def _check_playground_loader() -> None:
         'globalValue("loom_heap_variants")',
         'globalValue("loom_heap_effects")',
         'globalValue("loom_heap_resources")',
+        'globalValue("loom_heap_strings")',
         "heap objects:",
         "function watSourceMap(wat)",
         "function renderWatSourceMap(wat, src)",
@@ -149,10 +151,12 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "498 self-verifying checks",
-        ">498</div>",
+        "499 self-verifying checks",
+        ">499</div>",
     )
     forbidden = (
+        "498 self-verifying checks",
+        ">498</div>",
         "496 self-verifying checks",
         ">496</div>",
         "494 self-verifying checks",
@@ -215,7 +219,7 @@ def _check_landing_page_count() -> None:
 def _check_wasm_abi_doc() -> None:
     text = WASM_ABI_DOC.read_text()
     required = (
-        "Static string, kind 6",
+        "String, kind 6",
         "Raw kind `6`",
         "UTF-8",
         "one 64 KiB page",
@@ -244,12 +248,13 @@ def _check_wasm_abi_doc() -> None:
         "`loom_heap_variants`",
         "`loom_heap_effects`",
         "`loom_heap_resources`",
+        "`loom_heap_strings`",
         "hp + size <= loom_heap_limit",
         "object-family diagnostic counter",
         "memory.size() << 16",
         "Direct `host_ffi` calls receive a tagged argument list",
         "foreign result remains an opaque\n  boundary for trust/provenance",
-        "General runtime string allocation and string operations",
+        "general source-level string allocation and string",
         "are not part of ABI v1.",
         "Compiler state isolation",
         "per-module products of a single compilation",
@@ -547,6 +552,49 @@ def _check_wit_component_boundary() -> None:
     )
     if not modular_verify["valid"] or modular_verify != standalone_verify:
         raise SystemExit("docs parity: modular and standalone WIT component verifiers diverged")
+
+
+def _check_component_bridge() -> None:
+    text = COMPONENT_BRIDGE_DOC.read_text()
+    words = " ".join(text.split())
+    required = (
+        "LOOM Component Bridge Extension v0",
+        "loom.component-bridge.v0",
+        "loom-component-bridge/v0",
+        "loom.verify_wasm_component_bridge_v0(source, wasm_bytes)",
+        "loom-component-bridge-validation/v0",
+        "strict RFC 3629 UTF-8",
+        "loom_component_alloc_bytes",
+        "loom_component_make_string",
+        "loom_component_cons",
+        "loom_component_record",
+        "loom_component_variant",
+        "does not produce a WebAssembly Component",
+        "does not approve execution",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: Component Bridge v0 contract drift: missing " + ", ".join(missing))
+
+    import loom as modular
+    spec = importlib.util.spec_from_file_location("loom_bridge_standalone", DOCS_LOOM)
+    if spec is None or spec.loader is None:
+        raise SystemExit("docs parity: could not load standalone Component Bridge surface")
+    standalone = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(standalone)
+    source = (
+        '(defx identity () (fn (x) x)) '
+        '(defx sample () (fn () (record (alpha 1)))) '
+        '(defx tagged () (fn () (variant Some 2)))'
+    )
+    modular_wasm = modular.compile_wasm(source)
+    standalone_wasm = standalone.compile_wasm(source)
+    if modular_wasm != standalone_wasm:
+        raise SystemExit("docs parity: modular and standalone Component Bridge bytes diverged")
+    modular_verify = modular.verify_wasm_component_bridge_v0(source, modular_wasm)
+    standalone_verify = standalone.verify_wasm_component_bridge_v0(source, standalone_wasm)
+    if not modular_verify["valid"] or modular_verify != standalone_verify:
+        raise SystemExit("docs parity: modular and standalone Component Bridge verifiers diverged")
 
 
 def _check_compiler_provenance_doc() -> None:
@@ -1643,6 +1691,7 @@ def main() -> int:
     _check_wasm_trust_v2_doc()
     _check_wasm_equivalence_doc()
     _check_wit_component_boundary()
+    _check_component_bridge()
     _check_compiler_provenance_doc()
     _check_compiler_evidence_doc()
     _check_compiler_evidence_v2_doc()

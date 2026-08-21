@@ -6,7 +6,7 @@ experimental, and what LOOM does not claim yet.
 
 ## Current public baseline
 
-- Canonical self-verification: `PASS -- 498/498 citadel checks`.
+- Canonical self-verification: `PASS -- 499/499 citadel checks`.
 - Published browser bundle parity is required before release:
   `python3 verify_docs_parity.py`.
 - The public compatibility surface is `loom.py`; module boundaries are pinned in
@@ -47,6 +47,9 @@ experimental, and what LOOM does not claim yet.
   exact source/core-WASM/WIT bytes, canonical JSON transport, and an explicit
   non-executable lifecycle. It does not claim a component adapter, component
   binary, WASI authority, or Canonical ABI lift/lower execution.
+- Component Bridge Extension v0 adds exact custom-section evidence and bounded
+  heap constructors for strict UTF-8 strings, lists, records, and variants.
+  It grants no authority and is not yet a Component Model adapter.
 - LOOM Gate advisory contracts: manifest validation, policy decision,
   redacted diagnostics, observation, CI evidence, signed operator approval,
   claim/plan/attempt/finish lifecycle, secret-lane receipts, native issuer
@@ -180,10 +183,10 @@ python3 loom.py about --format json
 
 Expected public markers:
 
-- `run_tests.py` prints `PASS -- 498/498 citadel checks`.
+- `run_tests.py` prints `PASS -- 499/499 citadel checks`.
 - `verify_docs_parity.py` prints that the published bundle is standalone and
   citadel-green.
-- `loom.py about --format json` reports `citadel_checks: 498`, the current
+- `loom.py about --format json` reports `citadel_checks: 499`, the current
   WASM ABI version, and the supported backend list.
 - An installed checkout exposes `loom` as the same CLI surface as
   `python3 loom.py`.

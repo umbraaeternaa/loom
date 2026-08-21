@@ -44,6 +44,13 @@ Every binary module exports:
   `loom_heap_effects`, `loom_heap_resources`: mutable raw `i32` diagnostic
   counters incremented when the corresponding runtime heap object family is
   successfully reserved.
+- `loom_heap_strings`: mutable raw `i32` diagnostic counter for runtime string
+  objects constructed through Component Bridge Extension v0. Static string
+  literals remain accounted by `loom_heap_static_used`.
+- Five reserved `loom_component_*` functions defined by
+  [`component_bridge_v0.md`](component_bridge_v0.md). They are an additive,
+  non-authorizing ABI v1 extension for a future internal component adapter;
+  top-level `defx` declarations cannot use those reserved names.
 - One function for each top-level `defx`, with signature `(i32*) -> i32`.
 
 Arguments and results of exported LOOM functions are tagged values. The
@@ -141,10 +148,11 @@ separate compilations.
 | 4 | Stable raw effect ID |
 | 8 | Tagged payload |
 
-### Static string, kind 6, 12 bytes plus immutable bytes
+### String, kind 6, 12 bytes plus UTF-8 bytes
 
-String literals are emitted as immutable static data, not allocated at
-runtime. The string object has kind `6`:
+String literals are emitted as immutable static data. Component Bridge v0 can
+also construct a runtime string after reserving and validating an exact byte
+range. Both forms use kind `6`:
 
 | Offset | Word |
 | ---: | --- |
@@ -152,12 +160,14 @@ runtime. The string object has kind `6`:
 | 4 | Raw byte length |
 | 8 | Raw byte address |
 
-The byte payload is UTF-8 data stored in a separate passive-at-load data
-segment. Source-level string values cross the WASM boundary by returning a
-tagged pointer to this object. Hosts decode kind `6` by reading exactly the
-declared byte length from the raw byte address and interpreting those bytes
-as UTF-8. The bytes are immutable for LOOM code; v1 exposes no string
-mutation or concatenation operation.
+The byte payload is strict UTF-8. Static payloads live in data segments;
+bridge payloads live in a range obtained from the same private `$reserve`
+allocator and are published only after strict UTF-8 validation. Source-level
+string values cross the WASM boundary by returning a tagged pointer to this
+object. Hosts decode kind `6` by reading exactly the declared byte length from
+the raw byte address and interpreting those bytes as UTF-8. The bytes are
+immutable for LOOM code; v1 exposes no string mutation or concatenation
+operation.
 
 ## Closure convention
 
@@ -230,8 +240,9 @@ builds, with no closure/layout state inherited across modules.
   that host boundary as tagged values, but the foreign result remains an opaque
   boundary for trust/provenance unless it is re-vouched above the call.
 - String literals are supported at the value boundary as immutable static
-  kind-6 heap objects. General runtime string allocation and string operations
-  are not part of ABI v1.
+  kind-6 heap objects. Component Bridge v0 adds bounded runtime construction
+  for adapter ingress only; general source-level string allocation and string
+  operations are not part of ABI v1.
 
 ## Compatibility policy
 
