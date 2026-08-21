@@ -60,7 +60,7 @@ python3 loom.py about --format json
 The expected public baseline is:
 
 ```console
-PASS -- 497/497 citadel checks
+PASS -- 498/498 citadel checks
 ```
 
 The CLI help is also pinned:

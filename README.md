@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 497 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 498 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 497/497 citadel checks
+PASS — 498/498 citadel checks
 ```
 
 ## The idea in one screen
@@ -184,6 +184,13 @@ canonical in-toto Statement v1. An external issuer signs DSSE PAE bytes; LOOM
 holds no private key, verifies the signature before parsing, and grants no new
 execution authority.
 
+[`WIT Component Boundary v0`](docs/wit_component_boundary_v0.md) begins the
+Component Model path without relabeling LOOM's tagged core-WASM ABI as a
+Canonical ABI. It deterministically projects checked Pure entrypoints into a
+WIT world, binds exact source/WASM/WIT bytes, and carries an explicit
+`component_binary: absent`, `adapter: required`, `authorization: none`
+lifecycle until a real independently verified adapter exists.
+
 Certified recursion can also use [`Proven Value Bounds v1`](docs/proven_value_bounds_v1.md):
 the checker derives conservative i31 and list-length upper bounds through
 lexical `let`, safe pure expressions, and guarded paths. Unknown values and
@@ -197,6 +204,7 @@ contract; higher-order and effectful arguments remain fail-closed.
   Module-boundary policy is pinned in [`docs/module_boundaries.md`](docs/module_boundaries.md).
 - [`loom_codegen.py`](loom_codegen.py) — isolated portable Python/JavaScript generators.
 - [`loom_wasm.py`](loom_wasm.py) — isolated WebAssembly/WAT compiler and ABI runtime.
+- [`loom_component.py`](loom_component.py) — evidence-carrying WIT component-boundary builder and verifier.
 - [`loom_provenance.py`](loom_provenance.py) — host-built modular/standalone compiler profiles.
 - [`run_tests.py`](run_tests.py) — the self-verifying suite: it accepts honest programs,
   rejects every flavor of lie, and runs real programs.

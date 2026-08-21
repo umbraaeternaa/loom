@@ -23,6 +23,7 @@ Current stable boundaries:
 | `loom_runtime.py` | interpreter runtime and capability contexts |
 | `loom_codegen.py` | portable Python and JavaScript backends |
 | `loom_wasm.py` | WebAssembly/WAT backend and ABI runtime |
+| `loom_component.py` | deterministic WIT component-boundary projection and verification |
 | `loom_recursion.py` | shared named-call graph, recursive-SCC edges, static descent certificates, and quantitative recurrence metadata |
 | `loom_provenance.py` | host-built content-addressed compiler profiles and closed surface collection |
 | `loom_cli.py` | CLI and machine-readable verdict surface |
@@ -73,6 +74,17 @@ but it must preserve the same per-compilation isolation rule.
 This boundary is part of production-readiness: separate builds, parallel builds,
 and repeated browser playground runs must not inherit closure/layout state from
 an earlier program.
+
+## Component boundary rule
+
+`loom_component.py` may consume the public parser/checker and deterministic WASM
+facades, but it must not modify core-WASM bytes or ABI v1. WIT Component Boundary
+v0 is a content-addressed description of Pure exports, exact WIT, transport, and
+lifecycle state. It is not a component binary and grants no WASI capability.
+
+The standalone browser bundle may inline the same implementation, but modular
+and standalone builders/verifiers must produce byte-identical boundary objects
+for identical source, WASM, package, world, and export inputs.
 
 ## Citadel pin
 

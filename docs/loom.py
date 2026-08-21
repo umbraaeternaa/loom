@@ -4376,6 +4376,298 @@ def run_wasm(program_src, call_src):
     return val, out
 
 
+# ---- WIT COMPONENT BOUNDARY v0: standalone mirror, with no development-module imports. ----
+_COMPONENT_SCHEMA = "loom-wit-component-boundary/v0"
+_COMPONENT_VALIDATION_SCHEMA = "loom-wit-component-boundary-validation/v0"
+_COMPONENT_TRANSPORT_SCHEMA = "loom-canonical-json-utf8/v0"
+_COMPONENT_MAX_SOURCE_BYTES = 1 << 20
+_COMPONENT_MAX_WASM_BYTES = 16 << 20
+_COMPONENT_MAX_EXPORTS = 128
+_COMPONENT_MAX_ARITY = 32
+_COMPONENT_MAX_ENVELOPE_BYTES = 1 << 20
+_COMPONENT_PACKAGE = re.compile(
+    r"^[a-z][a-z0-9-]{0,62}:[a-z][a-z0-9-]{0,62}@[0-9]+\.[0-9]+\.[0-9]+"
+    r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+)
+_COMPONENT_WIT_ID = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
+_COMPONENT_WIT_RESERVED = {
+    "as", "constructor", "enum", "export", "flags", "from", "func", "future",
+    "import", "include", "interface", "list", "option", "package", "record",
+    "resource", "result", "static", "stream", "tuple", "type", "use", "variant",
+    "with", "world",
+}
+_COMPONENT_CORE_IMPORTS = (
+    "env.push_handler", "env.pop_handler", "env.current_handler", "env.host_print",
+    "env.push_caps", "env.pop_caps", "env.has_cap", "env.host_ffi",
+)
+
+
+def _component_finding(path, code, message):
+    return {"path": path, "code": code, "message": message}
+
+
+def _component_validation(boundary, findings):
+    return {
+        "schema": _COMPONENT_VALIDATION_SCHEMA,
+        "valid": not findings,
+        "boundary": boundary if not findings else None,
+        "findings": findings,
+    }
+
+
+def _component_json_bytes(value):
+    return json.dumps(
+        value, ensure_ascii=True, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")
+
+
+def _component_sha256(value):
+    return hashlib.sha256(value).hexdigest()
+
+
+def _component_wit_name(name):
+    candidate = name.replace("_", "-")
+    if not _COMPONENT_WIT_ID.fullmatch(candidate) or candidate in _COMPONENT_WIT_RESERVED:
+        return None
+    return candidate
+
+
+def _component_checked_program(program_src, findings):
+    if not isinstance(program_src, str):
+        findings.append(_component_finding("source", "expected-string", "source must be a string"))
+        return None, None
+    try:
+        source_bytes = program_src.encode("utf-8")
+    except UnicodeEncodeError:
+        findings.append(_component_finding("source", "invalid-utf8", "source must encode as valid UTF-8"))
+        return None, None
+    if len(source_bytes) > _COMPONENT_MAX_SOURCE_BYTES:
+        findings.append(_component_finding("source", "source-too-large", "source exceeds the 1 MiB v0 limit"))
+        return None, None
+    try:
+        program = parse(program_src)
+        functions, errors = check(program)
+    except LoomError as exc:
+        findings.append(_component_finding("source", "parse-rejected", str(exc)))
+        return None, None
+    if errors:
+        findings.append(_component_finding("source", "checker-rejected", "; ".join(errors)))
+        return None, None
+    return program, functions
+
+
+def _component_checked_wasm(program_src, wasm_bytes, findings):
+    if not isinstance(wasm_bytes, (bytes, bytearray)):
+        findings.append(_component_finding("core_module", "expected-bytes", "core WebAssembly must be bytes"))
+        return None
+    wasm = bytes(wasm_bytes)
+    if len(wasm) > _COMPONENT_MAX_WASM_BYTES:
+        findings.append(_component_finding("core_module", "wasm-too-large", "core WebAssembly exceeds the 16 MiB v0 limit"))
+        return None
+    try:
+        expected = compile_wasm(program_src)
+    except LoomError as exc:
+        findings.append(_component_finding("core_module", "compile-rejected", str(exc)))
+        return None
+    if wasm != expected:
+        findings.append(_component_finding(
+            "core_module", "source-wasm-mismatch",
+            "core WebAssembly is not byte-identical to deterministic compilation of the supplied source",
+        ))
+        return None
+    for path, verify in (
+        ("core_module.trust.v1", verify_wasm_trust_receipt),
+        ("core_module.trust.v2", verify_wasm_trust_receipt_v2),
+    ):
+        result = verify(program_src, wasm)
+        if not result.get("valid"):
+            findings.append(_component_finding(path, "trust-receipt-rejected", "; ".join(result.get("findings", ()))))
+    return wasm
+
+
+def _component_selected_exports(program, functions, exports, findings):
+    ordered = [
+        str(node[1]) for node in program
+        if isinstance(node, list) and len(node) >= 4 and str(node[0]) == "defx"
+    ]
+    if exports is None:
+        selected = ordered
+    elif not isinstance(exports, (list, tuple)):
+        findings.append(_component_finding("exports", "expected-list", "exports must be a list of LOOM function names"))
+        return []
+    else:
+        selected = list(exports)
+    if len(selected) > _COMPONENT_MAX_EXPORTS:
+        findings.append(_component_finding("exports", "too-many-exports", "v0 permits at most 128 exports"))
+        return []
+    if any(not isinstance(name, str) for name in selected):
+        findings.append(_component_finding("exports", "expected-name", "every export must be a string"))
+        return []
+    if len(set(selected)) != len(selected):
+        findings.append(_component_finding("exports", "duplicate-export", "exports must not contain duplicates"))
+        return []
+
+    result = []
+    seen_wit = set()
+    for name in selected:
+        if name not in functions:
+            findings.append(_component_finding(f"exports.{name}", "unknown-export", "export does not name a checked top-level defx"))
+            continue
+        info = functions[name]
+        effects = sorted((set(info.get("decl", ())) | set(info.get("eff", ())) | set(info.get("req", ()))) - {"Pure"})
+        if effects:
+            findings.append(_component_finding(
+                f"exports.{name}.effects", "effectful-export-denied",
+                "WIT boundary v0 exports Pure entrypoints only; effectful imports require a future explicit capability projection",
+            ))
+            continue
+        fn = info.get("fn")
+        params = fn[1] if isinstance(fn, list) and len(fn) >= 2 and isinstance(fn[1], list) else None
+        if params is None or any(isinstance(param, list) for param in params):
+            findings.append(_component_finding(
+                f"exports.{name}.params", "non-value-parameter-denied",
+                "v0 does not transport higher-order or linear parameters across the component boundary",
+            ))
+            continue
+        if len(params) > _COMPONENT_MAX_ARITY:
+            findings.append(_component_finding(f"exports.{name}.params", "arity-too-large", "v0 permits at most 32 arguments"))
+            continue
+        wit_name = _component_wit_name(name)
+        if wit_name is None:
+            findings.append(_component_finding(
+                f"exports.{name}.wit_name", "invalid-wit-identifier",
+                "export name must map uniquely to a lowercase WIT kebab identifier",
+            ))
+            continue
+        if wit_name in seen_wit:
+            findings.append(_component_finding(f"exports.{name}.wit_name", "wit-name-collision", "two LOOM exports map to one WIT name"))
+            continue
+        seen_wit.add(wit_name)
+        result.append({
+            "loom_name": name,
+            "wit_name": wit_name,
+            "arity": len(params),
+            "effects": [],
+            "request": "list<u8>:loom-canonical-json-utf8/v0",
+            "result": "result<list<u8>,list<u8>>:loom-canonical-json-utf8/v0",
+        })
+    if not result and not findings:
+        findings.append(_component_finding("exports", "empty-boundary", "component boundary must export at least one Pure entrypoint"))
+    return sorted(result, key=lambda item: item["wit_name"])
+
+
+def _component_validate_identity(package, world, findings):
+    if not isinstance(package, str) or not _COMPONENT_PACKAGE.fullmatch(package):
+        findings.append(_component_finding(
+            "package", "invalid-wit-package",
+            "package must be lowercase namespace:name@major.minor.patch WIT identity",
+        ))
+    if not isinstance(world, str) or not _COMPONENT_WIT_ID.fullmatch(world) or world in _COMPONENT_WIT_RESERVED:
+        findings.append(_component_finding("world", "invalid-wit-world", "world must be a lowercase WIT kebab identifier"))
+
+
+def _component_emit_wit(package, world, exports):
+    lines = [f"package {package};", "", f"world {world} {{"]
+    for item in exports:
+        lines.append(
+            f"  export {item['wit_name']}: func(request: list<u8>) -> result<list<u8>, list<u8>>;"
+        )
+    lines += ["}", ""]
+    return "\n".join(lines)
+
+
+def build_wit_component_boundary_v0(program_src, wasm_bytes, package, world, exports=None):
+    """Bind checked Pure LOOM exports to deterministic WIT without claiming an adapter exists."""
+    findings = []
+    _component_validate_identity(package, world, findings)
+    program, functions = _component_checked_program(program_src, findings)
+    wasm = _component_checked_wasm(program_src, wasm_bytes, findings) if program is not None else None
+    selected = _component_selected_exports(program, functions, exports, findings) if program is not None else []
+    if findings:
+        return _component_validation(None, findings)
+
+    wit_source = _component_emit_wit(package, world, selected)
+    body = {
+        "schema": _COMPONENT_SCHEMA,
+        "advisory": False,
+        "source": {
+            "sha256": _component_sha256(program_src.encode("utf-8")),
+            "checker": "accepted",
+        },
+        "core_module": {
+            "format": "core-webassembly/v1",
+            "sha256": _component_sha256(wasm),
+            "loom_abi_version": _WASM_ABI_VERSION,
+            "required_adapter_imports": list(_COMPONENT_CORE_IMPORTS),
+        },
+        "wit": {
+            "package": package,
+            "world": world,
+            "source": wit_source,
+            "sha256": _component_sha256(wit_source.encode("utf-8")),
+        },
+        "exports": selected,
+        "capability_projection": {
+            "mode": "pure-only",
+            "wasi_release": "0.2",
+            "imports": [],
+        },
+        "transport": {
+            "schema": _COMPONENT_TRANSPORT_SCHEMA,
+            "encoding": "canonical-json",
+            "character_encoding": "utf-8",
+            "request_shape": {"args": "array"},
+            "success_shape": {"ok": "loom-value"},
+            "error_shape": {"error": {"code": "string", "message": "string"}},
+            "value_domain": ["i31", "boolean", "string", "list", "record", "variant"],
+            "variant_shape": {"$variant": ["tag", "value"]},
+            "forbidden_values": ["closure", "resource", "effect-box", "float", "null"],
+            "canonicalization": {
+                "object_keys": "unicode-codepoint-order",
+                "whitespace": "none",
+                "non_ascii": "escaped",
+                "numbers": "signed-i31-only",
+            },
+            "max_envelope_bytes": _COMPONENT_MAX_ENVELOPE_BYTES,
+        },
+        "lifecycle": {
+            "component_binary": "absent",
+            "adapter": "required",
+            "executable": False,
+            "authorization": "none",
+        },
+    }
+    body["boundary_sha256"] = _component_sha256(_component_json_bytes(body))
+    return _component_validation(body, [])
+
+
+def verify_wit_component_boundary_v0(boundary, program_src, wasm_bytes, package, world, exports=None):
+    """Rebuild the closed boundary from exact inputs and reject every mismatch."""
+    if not isinstance(boundary, dict):
+        return _component_validation(None, [_component_finding("boundary", "expected-object", "boundary must be an object")])
+    expected_result = build_wit_component_boundary_v0(
+        program_src, wasm_bytes, package, world, exports,
+    )
+    if not expected_result["valid"]:
+        return expected_result
+    expected = expected_result["boundary"]
+    supplied_body = dict(boundary)
+    supplied_hash = supplied_body.pop("boundary_sha256", None)
+    findings = []
+    try:
+        actual_hash = _component_sha256(_component_json_bytes(supplied_body))
+    except (TypeError, ValueError):
+        actual_hash = None
+    if supplied_hash != actual_hash:
+        findings.append(_component_finding("boundary_sha256", "boundary-hash-mismatch", "boundary hash does not match canonical boundary bytes"))
+    if boundary != expected:
+        findings.append(_component_finding(
+            "boundary", "boundary-mismatch",
+            "boundary does not match the exact source, core module, WIT identity, exports, or v0 policy",
+        ))
+    return _component_validation(boundary if not findings else None, findings)
+
+
 # ---- LOOM Gate phase 1: deterministic advisory manifests (standalone bundle mirror). ----
 GATE_MANIFEST_SCHEMA = "loom-gate-manifest/v1"
 GATE_MANIFEST_SCHEMA_V2 = "loom-gate-manifest/v2"
@@ -9094,7 +9386,7 @@ def build_about():
     return {
         "schema": "loom-about/v1",
         "language": "LOOM",
-        "citadel_checks": 497,
+        "citadel_checks": 498,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "i31_bits": INT_BITS,
         "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],

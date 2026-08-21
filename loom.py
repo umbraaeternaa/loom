@@ -779,6 +779,33 @@ def run_wasm(program_src, call_src):
     return _loom_wasm.run_wasm(program_src, call_src, _WASM_FRONTEND)
 
 
+# ---- COMPONENT MODEL FRONTIER: bind exact checked core-WASM bytes to WIT without changing ABI v1. ----
+import loom_component as _loom_component
+
+_COMPONENT_FRONTEND = _loom_component.Frontend(
+    parse,
+    check,
+    pname,
+    compile_wasm,
+    verify_wasm_trust_receipt,
+    verify_wasm_trust_receipt_v2,
+    _WASM_ABI_VERSION,
+    LoomError,
+)
+
+
+def build_wit_component_boundary_v0(program_src, wasm_bytes, package, world, exports=None):
+    return _loom_component.build_wit_component_boundary_v0(
+        _COMPONENT_FRONTEND, program_src, wasm_bytes, package, world, exports,
+    )
+
+
+def verify_wit_component_boundary_v0(boundary, program_src, wasm_bytes, package, world, exports=None):
+    return _loom_component.verify_wit_component_boundary_v0(
+        _COMPONENT_FRONTEND, boundary, program_src, wasm_bytes, package, world, exports,
+    )
+
+
 # ---- CLI: turn the kernel into a usable TOOL. `python3 loom.py <check|run|build|audit> file.loom [call] [--target py|js|wat]` ----
 _CLI_FRONTEND = _loom_cli.Frontend(
     parse,
@@ -789,7 +816,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
     emit_wat,
     LoomError,
     metadata={
-        "citadel_checks": 497,
+        "citadel_checks": 498,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "i31_bits": INT_BITS,
         "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],

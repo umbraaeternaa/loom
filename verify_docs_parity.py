@@ -24,6 +24,7 @@ CONTEXTUAL_BOUNDS_DOC = ROOT / "docs" / "contextual_value_bounds_v2.md"
 WASM_TRUST_DOC = ROOT / "docs" / "wasm_trust_provenance_v1.md"
 WASM_TRUST_V2_DOC = ROOT / "docs" / "wasm_trust_provenance_v2.md"
 WASM_EQUIVALENCE_DOC = ROOT / "docs" / "wasm_source_equivalence_v1.md"
+WIT_COMPONENT_DOC = ROOT / "docs" / "wit_component_boundary_v0.md"
 COMPILER_PROVENANCE_DOC = ROOT / "docs" / "compiler_provenance_v1.md"
 COMPILER_EVIDENCE_DOC = ROOT / "docs" / "gate_compiler_evidence_v1.md"
 COMPILER_EVIDENCE_V2_DOC = ROOT / "docs" / "gate_compiler_evidence_v2.md"
@@ -47,7 +48,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "497-action-attestation-v0")',
+        'bundleUrl.searchParams.set("v", "498-wit-component-boundary-v0")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -148,8 +149,8 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "497 self-verifying checks",
-        ">497</div>",
+        "498 self-verifying checks",
+        ">498</div>",
     )
     forbidden = (
         "496 self-verifying checks",
@@ -495,6 +496,57 @@ def _check_wasm_equivalence_doc() -> None:
     missing = [needle for needle in required if needle not in words]
     if missing:
         raise SystemExit("docs parity: WASM source equivalence contract drift: missing " + ", ".join(missing))
+
+
+def _check_wit_component_boundary() -> None:
+    text = WIT_COMPONENT_DOC.read_text()
+    words = " ".join(text.split())
+    required = (
+        "LOOM WIT Component Boundary v0",
+        "loom.build_wit_component_boundary_v0(",
+        "loom.verify_wit_component_boundary_v0(",
+        "loom-wit-component-boundary/v0",
+        "loom-wit-component-boundary-validation/v0",
+        "loom-canonical-json-utf8/v0",
+        "effectful-export-denied",
+        "supplied WASM bytes are byte-identical",
+        "component_binary",
+        '"absent"',
+        '"authorization": "none"',
+        "does not yet implement the adapter",
+        "Effect-to-WASI projection remains a later explicit gate",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: WIT component-boundary contract drift: missing " + ", ".join(missing))
+
+    import loom as modular
+    spec = importlib.util.spec_from_file_location("loom_component_standalone", DOCS_LOOM)
+    if spec is None or spec.loader is None:
+        raise SystemExit("docs parity: could not load standalone WIT component boundary")
+    standalone = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(standalone)
+    source = '(defx square () (fn (x) (* x x))) (defx inc_value () (fn (x) (+ x 1)))'
+    wasm = modular.compile_wasm(source)
+    if standalone.compile_wasm(source) != wasm:
+        raise SystemExit("docs parity: WIT component fixture WASM diverged")
+    modular_result = modular.build_wit_component_boundary_v0(
+        source, wasm, "umbra:loom@0.1.0", "verified-kernel", ["square", "inc_value"],
+    )
+    standalone_result = standalone.build_wit_component_boundary_v0(
+        source, wasm, "umbra:loom@0.1.0", "verified-kernel", ["inc_value", "square"],
+    )
+    if not modular_result["valid"] or modular_result != standalone_result:
+        raise SystemExit("docs parity: modular and standalone WIT component boundaries diverged")
+    boundary = modular_result["boundary"]
+    modular_verify = modular.verify_wit_component_boundary_v0(
+        boundary, source, wasm, "umbra:loom@0.1.0", "verified-kernel", ["inc_value", "square"],
+    )
+    standalone_verify = standalone.verify_wit_component_boundary_v0(
+        boundary, source, wasm, "umbra:loom@0.1.0", "verified-kernel", ["square", "inc_value"],
+    )
+    if not modular_verify["valid"] or modular_verify != standalone_verify:
+        raise SystemExit("docs parity: modular and standalone WIT component verifiers diverged")
 
 
 def _check_compiler_provenance_doc() -> None:
@@ -1590,6 +1642,7 @@ def main() -> int:
     _check_wasm_trust_doc()
     _check_wasm_trust_v2_doc()
     _check_wasm_equivalence_doc()
+    _check_wit_component_boundary()
     _check_compiler_provenance_doc()
     _check_compiler_evidence_doc()
     _check_compiler_evidence_v2_doc()

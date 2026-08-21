@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import loom as _loom
 from loom_frontend import ASM_INTRINSICS
 import loom_provenance as _loom_provenance
-from loom import parse, parse_spans, tokenize, tokenize_spans, check, run_call, compile_py, run_compiled, run_js, compile_js, compile_wasm, verify_wasm_trust_receipt, verify_wasm_trust_receipt_v2, verify_wasm_source_equivalence, run_wasm, emit_wat, LoomError, _WASM_ABI_VERSION
+from loom import parse, parse_spans, tokenize, tokenize_spans, check, run_call, compile_py, run_compiled, run_js, compile_js, compile_wasm, verify_wasm_trust_receipt, verify_wasm_trust_receipt_v2, verify_wasm_source_equivalence, build_wit_component_boundary_v0, verify_wit_component_boundary_v0, run_wasm, emit_wat, LoomError, _WASM_ABI_VERSION
 
 def _context_chain_source(depth=65):
     parts = [
@@ -1719,6 +1719,100 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         print(f"  {'ok  ' if trust_receipt_ok else 'FAIL'} backend(WASM): trust/provenance receipt v1 + role-policy v2 sections")
     except Exception as e:
         print(f"  FAIL backend(WASM) trust/provenance receipt: {e}")
+    try:                                               # WIT v0 binds exact Pure core-WASM without pretending an adapter exists
+        import copy
+        component_source = (
+            '(defx square () (fn (x) (* x x))) '
+            '(defx inc_value () (fn (x) (+ x 1)))'
+        )
+        component_wasm = compile_wasm(component_source)
+        component_result = build_wit_component_boundary_v0(
+            component_source, component_wasm, "umbra:loom@0.1.0", "verified-kernel",
+            ["square", "inc_value"],
+        )
+        component = component_result["boundary"]
+        component_verify = verify_wit_component_boundary_v0(
+            component, component_source, component_wasm, "umbra:loom@0.1.0", "verified-kernel",
+            ["inc_value", "square"],
+        )
+        tampered_component = copy.deepcopy(component)
+        tampered_component["lifecycle"]["authorization"] = "execute"
+        tampered_verify = verify_wit_component_boundary_v0(
+            tampered_component, component_source, component_wasm,
+            "umbra:loom@0.1.0", "verified-kernel", ["square", "inc_value"],
+        )
+        source_mismatch = verify_wit_component_boundary_v0(
+            component, component_source.replace("(+ x 1)", "(+ x 2)"), component_wasm,
+            "umbra:loom@0.1.0", "verified-kernel", ["square", "inc_value"],
+        )
+        wasm_mismatch = build_wit_component_boundary_v0(
+            component_source, component_wasm[:-1] + bytes([component_wasm[-1] ^ 1]),
+            "umbra:loom@0.1.0", "verified-kernel", ["square"],
+        )
+        effect_source = '(defx greet (IO) (fn (x) (print x)))'
+        effect_denied = build_wit_component_boundary_v0(
+            effect_source, compile_wasm(effect_source), "umbra:loom@0.1.0", "verified-kernel",
+        )
+        hof_source = '(defx apply () (fn ((f) x) (f x)))'
+        hof_denied = build_wit_component_boundary_v0(
+            hof_source, compile_wasm(hof_source), "umbra:loom@0.1.0", "verified-kernel",
+        )
+        invalid_identity = build_wit_component_boundary_v0(
+            component_source, component_wasm, "Umbra:Loom", "world", ["square"],
+        )
+        invalid_utf8 = build_wit_component_boundary_v0(
+            "\ud800", b"", "umbra:loom@0.1.0", "verified-kernel",
+        )
+        expected_wit = (
+            "package umbra:loom@0.1.0;\n\n"
+            "world verified-kernel {\n"
+            "  export inc-value: func(request: list<u8>) -> result<list<u8>, list<u8>>;\n"
+            "  export square: func(request: list<u8>) -> result<list<u8>, list<u8>>;\n"
+            "}\n"
+        )
+        component_ok = (
+            component_result["valid"] is True
+            and component["schema"] == "loom-wit-component-boundary/v0"
+            and component["wit"]["source"] == expected_wit
+            and component["wit"]["sha256"] == hashlib.sha256(expected_wit.encode()).hexdigest()
+            and component["source"]["sha256"] == hashlib.sha256(component_source.encode()).hexdigest()
+            and component["core_module"]["sha256"] == hashlib.sha256(component_wasm).hexdigest()
+            and component["core_module"]["loom_abi_version"] == 1
+            and component["capability_projection"] == {
+                "mode": "pure-only", "wasi_release": "0.2", "imports": [],
+            }
+            and component["transport"]["value_domain"] == [
+                "i31", "boolean", "string", "list", "record", "variant",
+            ]
+            and component["transport"]["forbidden_values"] == [
+                "closure", "resource", "effect-box", "float", "null",
+            ]
+            and component["lifecycle"] == {
+                "component_binary": "absent", "adapter": "required",
+                "executable": False, "authorization": "none",
+            }
+            and component_verify["valid"] is True
+            and tampered_verify["valid"] is False
+            and [item["code"] for item in tampered_verify["findings"]] == [
+                "boundary-hash-mismatch", "boundary-mismatch",
+            ]
+            and source_mismatch["valid"] is False
+            and any(item["code"] == "source-wasm-mismatch" for item in source_mismatch["findings"])
+            and wasm_mismatch["valid"] is False
+            and any(item["code"] == "source-wasm-mismatch" for item in wasm_mismatch["findings"])
+            and effect_denied["valid"] is False
+            and any(item["code"] == "effectful-export-denied" for item in effect_denied["findings"])
+            and hof_denied["valid"] is False
+            and any(item["code"] == "non-value-parameter-denied" for item in hof_denied["findings"])
+            and invalid_identity["valid"] is False
+            and any(item["code"] == "invalid-wit-package" for item in invalid_identity["findings"])
+            and invalid_utf8["valid"] is False
+            and [item["code"] for item in invalid_utf8["findings"]] == ["invalid-utf8"]
+        )
+        ok += component_ok
+        print(f"  {'ok  ' if component_ok else 'FAIL'} backend(Component): evidence-carrying Pure WIT boundary v0")
+    except Exception as e:
+        print(f"  FAIL backend(Component) boundary v0: {e}")
     try:                                               # effect frontier: IO `with` reinterprets print through a handler closure
         prog = '(defx h () (fn (x) (* x 2))) (defx t () (fn () (with IO h (print 5))))'
         v33, o33 = run_wasm(prog, "(t)")
@@ -2120,7 +2214,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             "actions_observed": ["read", "write", "test", "git-commit"],
             "evidence": [
                 {"kind": "syntax", "status": "pass", "detail": "PASS syntax"},
-                {"kind": "citadel", "status": "pass", "detail": "497/497"},
+                {"kind": "citadel", "status": "pass", "detail": "498/498"},
                 {"kind": "docs-parity", "status": "pass", "detail": "PASS docs parity"},
                 {"kind": "git-clean", "status": "pass", "detail": "clean"},
                 {"kind": "git-sync", "status": "pass", "detail": "HEAD == origin/main"},
@@ -5478,7 +5572,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 497
+            and about_json["citadel_checks"] == 498
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
@@ -5707,7 +5801,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 497/497 citadel checks" in quick
+            and "PASS -- 498/498 citadel checks" in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
             and "loom examples" in quick
@@ -5817,7 +5911,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "497-action-attestation-v0")' in play
+            and 'bundleUrl.searchParams.set("v", "498-wit-component-boundary-v0")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -6434,10 +6528,11 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 497/497 citadel checks" in rdoc
+            and "PASS -- 498/498 citadel checks" in rdoc
             and "loom examples --format json" in rdoc
             and "loom doctor --dry-run --format json" in rdoc
             and "python3 verify_docs_parity.py" in rdoc
+            and "WIT Component Boundary v0" in rdoc
             and "Parser, checker, interpreter, and CLI facade." in rdoc
             and "WebAssembly/WAT backend for the published supported surface" in rdoc
             and "LOOM Gate advisory contracts" in rdoc
@@ -6497,7 +6592,7 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 144   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 145   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, evidence-carrying WIT component boundary v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 
