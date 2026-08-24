@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 500 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 501 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 500/500 citadel checks
+PASS — 501/501 citadel checks
 ```
 
 ## The idea in one screen
@@ -189,13 +189,18 @@ Component Model path without relabeling LOOM's tagged core-WASM ABI as a
 Canonical ABI. It deterministically projects checked Pure entrypoints into a
 WIT world, binds exact source/WASM/WIT bytes, and carries an explicit
 `component_binary: absent`, `adapter: required`, `authorization: none`
-lifecycle until a real independently verified adapter exists.
+lifecycle. That description remains immutable even though the next additive
+artifact now exists.
 Newly compiled core modules now also carry
 [`Component Bridge Extension v0`](docs/component_bridge_v0.md): five bounded,
 non-authorizing constructors let that future adapter build strict UTF-8
 strings, lists, records, and variants through LOOM's own checked heap allocator
-instead of writing private heap state directly. This is the safe ingress layer,
-not yet a Component binary or Canonical ABI adapter.
+instead of writing private heap state directly.
+[`Exact Component Adapter Artifact v0`](docs/component_adapter_v0.md) now wraps
+an exact ABI v2 core, deny-by-trap environment, and generated adapter into a
+real zero-import WebAssembly Component. Its one-shot canonical JSON transport
+is independently unbundled, rehashed, WIT-checked, and invoked with pinned
+Wasmtime; verification remains evidence, never execution authorization.
 
 Certified recursion can also use [`Proven Value Bounds v1`](docs/proven_value_bounds_v1.md):
 the checker derives conservative i31 and list-length upper bounds through

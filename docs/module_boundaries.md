@@ -96,6 +96,14 @@ The standalone browser bundle may inline the same implementation, but modular
 and standalone builders/verifiers must produce byte-identical boundary objects
 for identical source, WASM, package, world, and export inputs.
 
+`loom_component_adapter.py` owns Exact Component Adapter Artifact v0. It may
+invoke only explicitly supplied, hash-pinned builder, wasm-tools, and Wasmtime
+executables. It generates a separate Canonical ABI memory, embeds the exact ABI
+v2 core unchanged, and independently re-extracts all embedded modules and WIT.
+It must expose no WASI/component import, mutate no Boundary v0 artifact, infer
+no authority, or silently fall back when its external oracle is absent. This
+host-only module is deliberately excluded from the standalone browser bundle.
+
 ## Citadel pin
 
 The citadel pins this contract by checking that development `loom.py` is backed

@@ -2,9 +2,11 @@
 # ARGUS/plt CITADEL test suite — the growing, self-verifying proof that LOOM's design holds.
 # The organism appends new CASES here every cycle; the language only grows if ALL stay green.
 import sys
+import copy
 import base64
 import json
 import hashlib
+import os
 import subprocess
 import tempfile
 import shutil
@@ -2070,6 +2072,257 @@ const env={push_handler:()=>0,pop_handler:()=>0,current_handler:()=>0,host_print
         pass
     except Exception as e:
         print(f"  FAIL backend(WASM) Tagged Value ABI v2: {e}")
+    try:                                               # real Component Model artifact: exact core + closed JSON + no WASI
+        if not hasattr(_loom, "compile_wasm_v2"):
+            adapter_ok = (
+                Path(_loom.__file__).parent.name == "docs"
+                and not hasattr(_loom, "build_component_adapter_artifact_v0")
+                and not hasattr(_loom, "verify_component_adapter_artifact_v0")
+            )
+            ok += adapter_ok
+            print(f"  {'ok  ' if adapter_ok else 'FAIL'} backend(Component): published standalone excludes host-only Adapter Artifact v0")
+            raise _PublishedAbiV1Only
+        adapter_source = (
+            '(defx ident () (fn (x) x)) '
+            '(defx mkrec () (fn () (record (a 1) (b (= 1 1))))) '
+            '(defx mkvar () (fn () (variant Some "hi")))'
+        )
+        adapter_core = _loom.compile_wasm_v2(adapter_source)
+        adapter_package, adapter_world, adapter_exports = "umbra:loom@0.3.0", "adapter-test", ["ident"]
+        adapter_boundary = _loom.build_wit_component_boundary_v0(
+            adapter_source, adapter_core, adapter_package, adapter_world, adapter_exports, abi_version=2,
+        )["boundary"]
+        component_root = Path(__file__).parent
+        wasm_tools = Path(os.environ.get(
+            "LOOM_WASM_TOOLS",
+            "/Users/macbook/codex/toolchains/loom-component/installed/wasm-tools-1.257.1-aarch64-macos/wasm-tools",
+        ))
+        wasmtime = Path(os.environ.get(
+            "LOOM_WASMTIME",
+            "/Users/macbook/codex/toolchains/loom-component/installed/wasmtime-v48.0.0-aarch64-macos/wasmtime",
+        ))
+        component_builder = Path(os.environ.get(
+            "LOOM_COMPONENT_BUILDER", "/private/tmp/loom-component-builder-target/release/loom-component-builder",
+        ))
+        if not all(path.is_file() for path in (wasm_tools, wasmtime, component_builder)):
+            closed = _loom.build_component_adapter_artifact_v0(
+                adapter_boundary, adapter_source, adapter_core, adapter_package, adapter_world, adapter_exports,
+                builder_executable=component_root / "missing-component-builder",
+                wasm_tools_executable=component_root / "missing-wasm-tools",
+            )
+            adapter_ok = (
+                closed["valid"] is False
+                and closed["artifact"] is None and closed["component"] is None
+                and [item["code"] for item in closed["findings"]] == ["component-build-rejected"]
+            )
+            ok += adapter_ok
+            print(f"  {'ok  ' if adapter_ok else 'FAIL'} backend(Component): Adapter Artifact v0 toolchain absence fails closed")
+        else:
+            build_args = dict(
+                builder_executable=str(component_builder), wasm_tools_executable=str(wasm_tools),
+            )
+            adapter_bridge = _loom.verify_wasm_component_bridge_v0_abi_v2(
+                adapter_source, adapter_core,
+            )["bridge"]
+            over_arity_boundary = copy.deepcopy(adapter_boundary)
+            over_arity_boundary["exports"][0]["arity"] = 33
+            try:
+                _loom._loom_component_adapter._adapter_wat(over_arity_boundary, adapter_bridge)
+                over_arity_refused = False
+            except ValueError as exc:
+                over_arity_refused = "export arity must be 0..32" in str(exc)
+            built_a = _loom.build_component_adapter_artifact_v0(
+                adapter_boundary, adapter_source, adapter_core, adapter_package, adapter_world,
+                adapter_exports, **build_args,
+            )
+            built_b = _loom.build_component_adapter_artifact_v0(
+                adapter_boundary, adapter_source, adapter_core, adapter_package, adapter_world,
+                adapter_exports, **build_args,
+            )
+            verified = _loom.verify_component_adapter_artifact_v0(
+                built_a["artifact"], built_a["component"], adapter_boundary, adapter_source,
+                adapter_core, adapter_package, adapter_world, adapter_exports,
+                wasm_tools_executable=str(wasm_tools), wasmtime_executable=str(wasmtime),
+            )
+            def rehash_adapter_artifact(value):
+                body = copy.deepcopy(value)
+                body.pop("artifact_sha256", None)
+                value["artifact_sha256"] = hashlib.sha256(json.dumps(
+                    body, ensure_ascii=True, sort_keys=True, separators=(",", ":"), allow_nan=False,
+                ).encode()).hexdigest()
+
+            tampered_artifact = copy.deepcopy(built_a["artifact"])
+            tampered_artifact["lifecycle"]["authorization"] = "execute"
+            rehash_adapter_artifact(tampered_artifact)
+            rejected_artifact = _loom.verify_component_adapter_artifact_v0(
+                tampered_artifact, built_a["component"], adapter_boundary, adapter_source,
+                adapter_core, adapter_package, adapter_world, adapter_exports,
+                wasm_tools_executable=str(wasm_tools), wasmtime_executable=str(wasmtime),
+            )
+            portable_artifact = copy.deepcopy(built_a["artifact"])
+            portable_artifact["toolchain"]["wasm_tools"]["sha256"] = next(
+                digest for digest in _loom._loom_component_adapter.WASM_TOOLS_SHA256
+                if digest != built_a["artifact"]["toolchain"]["wasm_tools"]["sha256"]
+            )
+            rehash_adapter_artifact(portable_artifact)
+            portable_verified = _loom.verify_component_adapter_artifact_v0(
+                portable_artifact, built_a["component"], adapter_boundary, adapter_source,
+                adapter_core, adapter_package, adapter_world, adapter_exports,
+                wasm_tools_executable=str(wasm_tools), wasmtime_executable=str(wasmtime),
+            )
+            unpinned_build_tool = copy.deepcopy(built_a["artifact"])
+            unpinned_build_tool["toolchain"]["wasm_tools"]["sha256"] = "0" * 64
+            rehash_adapter_artifact(unpinned_build_tool)
+            unpinned_build_tool_rejected = _loom.verify_component_adapter_artifact_v0(
+                unpinned_build_tool, built_a["component"], adapter_boundary, adapter_source,
+                adapter_core, adapter_package, adapter_world, adapter_exports,
+                wasm_tools_executable=str(wasm_tools), wasmtime_executable=str(wasmtime),
+            )
+            tampered_component = built_a["component"][:-1] + bytes([built_a["component"][-1] ^ 1])
+            rejected_component = _loom.verify_component_adapter_artifact_v0(
+                built_a["artifact"], tampered_component, adapter_boundary, adapter_source,
+                adapter_core, adapter_package, adapter_world, adapter_exports,
+                wasm_tools_executable=str(wasm_tools), wasmtime_executable=str(wasmtime),
+            )
+            wrong_tool = _loom.verify_component_adapter_artifact_v0(
+                built_a["artifact"], built_a["component"], adapter_boundary, adapter_source,
+                adapter_core, adapter_package, adapter_world, adapter_exports,
+                wasm_tools_executable="/usr/bin/true", wasmtime_executable=str(wasmtime),
+            )
+            with tempfile.TemporaryDirectory(prefix="loom-component-citadel-") as raw_tmp:
+                tmp_path = Path(raw_tmp)
+                component_path = tmp_path / "component.wasm"
+                component_path.write_bytes(built_a["component"])
+                values = [
+                    -1073741824, 1073741823, False, True, "hi", "😀", [1, True, "x"],
+                    {"a": 1, "b": True}, {"$variant": ["Some", "😀"]},
+                ]
+                runtime_ok = True
+                for value in values:
+                    request = json.dumps(
+                        {"args": [value]}, ensure_ascii=True, sort_keys=True, separators=(",", ":"),
+                    ).encode()
+                    wave = "[" + ",".join(str(byte) for byte in request) + "]"
+                    invocation = subprocess.run(
+                        [str(wasmtime), "run", "--invoke", f"ident({wave})", str(component_path)],
+                        capture_output=True, text=True,
+                    )
+                    expected = json.dumps(
+                        {"ok": value}, ensure_ascii=True, sort_keys=True, separators=(",", ":"),
+                    ).encode()
+                    expected_wave = "ok([" + ", ".join(str(byte) for byte in expected) + "])"
+                    runtime_ok &= invocation.returncode == 0 and invocation.stdout.strip() == expected_wave
+                for request in (
+                    b'{ "args":[1]}', b'{"args":[01]}', b'{"args":[-0]}', b'{"args":[1.0]}',
+                    b'{"args":[null]}', b'{"args":[NaN]}', b'{"args":[{"b":1,"a":2}]}',
+                    b'{"args":[{"ghost":1}]}', b'{"args":[{"$variant":["Ghost",1]}]}',
+                ):
+                    wave = "[" + ",".join(str(byte) for byte in request) + "]"
+                    invocation = subprocess.run(
+                        [str(wasmtime), "run", "--invoke", f"ident({wave})", str(component_path)],
+                        capture_output=True, text=True,
+                    )
+                    runtime_ok &= invocation.returncode == 0 and invocation.stdout.startswith("err([")
+                deny_path = tmp_path / "deny.wasm"
+                adapter_path = tmp_path / "adapter.wasm"
+                _loom._loom_component_adapter._parse_wat(
+                    str(wasm_tools), _loom._loom_component_adapter._deny_env_wat(), deny_path,
+                )
+                _loom._loom_component_adapter._parse_wat(
+                    str(wasm_tools),
+                    _loom._loom_component_adapter._adapter_wat(
+                        adapter_boundary, adapter_bridge,
+                    ),
+                    adapter_path,
+                )
+                core_path = tmp_path / "loom.wasm"
+                core_path.write_bytes(adapter_core)
+                lifecycle_script = tmp_path / "adapter_lifecycle.mjs"
+                lifecycle_script.write_text(r'''
+import fs from "node:fs";
+
+const denyBytes = fs.readFileSync(process.argv[2]);
+const coreBytes = fs.readFileSync(process.argv[3]);
+const adapterBytes = fs.readFileSync(process.argv[4]);
+const deny = await WebAssembly.instantiate(denyBytes, {});
+const core = await WebAssembly.instantiate(coreBytes, {env: deny.instance.exports});
+const instantiateAdapter = async () =>
+  (await WebAssembly.instantiate(adapterBytes, {loom: core.instance.exports})).instance;
+
+const replayInstance = await instantiateAdapter();
+const request = new TextEncoder().encode('{"args":[7]}');
+const requestPtr = replayInstance.exports.cm32p2_realloc(0, 0, 1, request.length);
+new Uint8Array(replayInstance.exports.cm32p2_memory.buffer).set(request, requestPtr);
+replayInstance.exports["cm32p2||ident"](requestPtr, request.length);
+let replayTrapped = false;
+try {
+  replayInstance.exports["cm32p2||ident"](requestPtr, request.length);
+} catch (error) {
+  replayTrapped = error instanceof WebAssembly.RuntimeError;
+}
+
+const exactLimitInstance = await instantiateAdapter();
+const exactLimitPtr = exactLimitInstance.exports.cm32p2_realloc(0, 0, 1, 1048576);
+
+const oversizedInstance = await instantiateAdapter();
+oversizedInstance.exports["cm32p2||ident"](65536, 1048577);
+const oversizedView = new DataView(oversizedInstance.exports.cm32p2_memory.buffer);
+
+let denyTrapped = false;
+try {
+  deny.instance.exports.push_handler(0, 0);
+} catch (error) {
+  denyTrapped = error instanceof WebAssembly.RuntimeError;
+}
+
+if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true) !== 1 || !denyTrapped) {
+  process.exit(1);
+}
+''', encoding="utf-8")
+                lifecycle = subprocess.run(
+                    ["node", str(lifecycle_script), str(deny_path), str(core_path), str(adapter_path)],
+                    capture_output=True, text=True,
+                )
+                runtime_ok &= lifecycle.returncode == 0
+            builder_root = component_root / "tools" / "loom-component-builder"
+            builder_sources = {
+                name: hashlib.sha256((builder_root / name).read_bytes()).hexdigest()
+                for name in ("Cargo.toml", "src/main.rs")
+            }
+            builder_tree_hash = hashlib.sha256(json.dumps(
+                builder_sources, ensure_ascii=True, sort_keys=True, separators=(",", ":"),
+            ).encode()).hexdigest()
+            builder_lock_hash = hashlib.sha256((builder_root / "Cargo.lock").read_bytes()).hexdigest()
+            adapter_ok = (
+                built_a["valid"] is True and built_b["valid"] is True
+                and built_a["component"] == built_b["component"]
+                and built_a["artifact"] == built_b["artifact"]
+                and built_a["artifact"]["schema"] == "loom-component-adapter-artifact/v0"
+                and built_a["artifact"]["component"]["imports"] == []
+                and built_a["artifact"]["component"]["wasi_imports"] == []
+                and built_a["artifact"]["transport"]["max_args"] == 32
+                and built_a["artifact"]["lifecycle"] == {
+                    "one_shot": True, "instantiable": "requires-runtime-verification", "authorization": "none",
+                }
+                and verified["valid"] is True
+                and verified["evidence"]["embedded_core_modules"] == 3
+                and verified["evidence"]["runtime"]["no_wasi_linker"] is True
+                and portable_verified["valid"] is True
+                and unpinned_build_tool_rejected["valid"] is False
+                and rejected_artifact["valid"] is False
+                and rejected_component["valid"] is False
+                and wrong_tool["valid"] is False
+                and over_arity_refused
+                and builder_tree_hash == _loom._loom_component_adapter.BUILDER_SOURCE_TREE_SHA256
+                and builder_lock_hash == _loom._loom_component_adapter.BUILDER_LOCKFILE_SHA256
+                and runtime_ok
+            )
+            ok += adapter_ok
+            print(f"  {'ok  ' if adapter_ok else 'FAIL'} backend(Component): exact Adapter Artifact v0 + canonical JSON + independent Wasmtime verifier")
+    except _PublishedAbiV1Only:
+        pass
+    except Exception as e:
+        print(f"  FAIL backend(Component) Adapter Artifact v0: {e}")
     try:                                               # effect frontier: IO `with` reinterprets print through a handler closure
         prog = '(defx h () (fn (x) (* x 2))) (defx t () (fn () (with IO h (print 5))))'
         v33, o33 = run_wasm(prog, "(t)")
@@ -2471,7 +2724,7 @@ const env={push_handler:()=>0,pop_handler:()=>0,current_handler:()=>0,host_print
             "actions_observed": ["read", "write", "test", "git-commit"],
             "evidence": [
                 {"kind": "syntax", "status": "pass", "detail": "PASS syntax"},
-                {"kind": "citadel", "status": "pass", "detail": "500/500"},
+                {"kind": "citadel", "status": "pass", "detail": "501/501"},
                 {"kind": "docs-parity", "status": "pass", "detail": "PASS docs parity"},
                 {"kind": "git-clean", "status": "pass", "detail": "clean"},
                 {"kind": "git-sync", "status": "pass", "detail": "HEAD == origin/main"},
@@ -5829,7 +6082,7 @@ const env={push_handler:()=>0,pop_handler:()=>0,current_handler:()=>0,host_print
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 500
+            and about_json["citadel_checks"] == (500 if is_browser_bundle else 501)
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["wasm_abi_versions"] == ([1] if is_browser_bundle else [1, 2])
             and about_json["i31_bits"] == 31
@@ -5953,7 +6206,7 @@ const env={push_handler:()=>0,pop_handler:()=>0,current_handler:()=>0,host_print
         readme = root.joinpath("README.md").read_text()
         rdoc = root.joinpath("docs", "release_readiness.md").read_text()
         modules = pyproject["tool"]["setuptools"]["py-modules"]
-        required_compiler_modules = {"loom", "loom_parse", "loom_checker", "loom_bounds", "loom_recursion", "loom_frontend", "loom_wasm", "loom_provenance"}
+        required_compiler_modules = {"loom", "loom_parse", "loom_checker", "loom_bounds", "loom_recursion", "loom_frontend", "loom_wasm", "loom_component", "loom_component_adapter", "loom_provenance"}
         modular_components = _loom_provenance.collect_compiler_components(root, "modular-python")
         standalone_components = _loom_provenance.collect_compiler_components(root, "standalone-python")
         modular_profile = _loom.build_wasm_compiler_profile("modular-python", modular_components)
@@ -5994,7 +6247,7 @@ const env={push_handler:()=>0,pop_handler:()=>0,current_handler:()=>0,host_print
                     wheel_names = set(archive.namelist())
                 wheel_code = (
                     "import sys;sys.path.insert(0," + repr(str(wheel_paths[0])) + ");"
-                    "import loom,loom_bounds,loom_recursion,loom_provenance;"
+                    "import loom,loom_bounds,loom_recursion,loom_component,loom_component_adapter,loom_provenance;"
                     "w=loom.compile_wasm('(defx main () (fn () 42))');"
                     "assert w[:4]==b'\\x00asm'"
                 )
@@ -6059,7 +6312,7 @@ const env={push_handler:()=>0,pop_handler:()=>0,current_handler:()=>0,host_print
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 500/500 citadel checks" in quick
+            and "PASS -- 501/501 citadel checks" in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
             and "loom examples" in quick
@@ -6169,7 +6422,7 @@ const env={push_handler:()=>0,pop_handler:()=>0,current_handler:()=>0,host_print
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "500-tagged-value-abi-v2")' in play
+            and 'bundleUrl.searchParams.set("v", "501-component-adapter-v0")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -6789,7 +7042,7 @@ const env={push_handler:()=>0,pop_handler:()=>0,current_handler:()=>0,host_print
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 500/500 citadel checks" in rdoc
+            and "PASS -- 501/501 citadel checks" in rdoc
             and "loom examples --format json" in rdoc
             and "loom doctor --dry-run --format json" in rdoc
             and "python3 verify_docs_parity.py" in rdoc
@@ -6853,7 +7106,7 @@ const env={push_handler:()=>0,pop_handler:()=>0,current_handler:()=>0,host_print
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 147   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Tagged Value ABI v2 collision/migration proof, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 148   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

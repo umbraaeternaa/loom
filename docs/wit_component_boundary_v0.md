@@ -134,11 +134,13 @@ LOOM bytes. It does not prove that a component can already be instantiated,
 that WIT was packaged into a component binary, that WASI capabilities were
 granted, that Canonical ABI lifting succeeded, or that any code executed.
 
-## Next boundary
+## Additive executable boundary
 
-The next additive contract is an independently verifiable adapter artifact:
-it must implement the bounded JSON transport, bridge collision-free LOOM
-Tagged Value ABI v2 to Canonical
-ABI memory, package a real component binary, and bind its bytes back to this
-boundary. Effect-to-WASI projection remains a later explicit gate. Neither
-step may mutate this v0 schema or infer authority from a valid boundary.
+[`Exact Component Adapter Artifact v0`](component_adapter_v0.md) now implements
+the bounded JSON transport, bridges collision-free LOOM Tagged Value ABI v2 to
+separate Canonical ABI memory, packages a real zero-import component binary,
+and binds its bytes back to this boundary. Boundary v0 itself deliberately
+continues to say `component_binary: absent`: it describes an exact requested
+surface, while the additive artifact proves one implementation. Effect-to-WASI
+projection remains a later explicit gate. Neither layer may mutate this v0
+schema or infer authority from valid evidence.

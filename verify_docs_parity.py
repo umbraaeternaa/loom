@@ -27,6 +27,7 @@ WASM_TRUST_V2_DOC = ROOT / "docs" / "wasm_trust_provenance_v2.md"
 WASM_EQUIVALENCE_DOC = ROOT / "docs" / "wasm_source_equivalence_v1.md"
 WIT_COMPONENT_DOC = ROOT / "docs" / "wit_component_boundary_v0.md"
 COMPONENT_BRIDGE_DOC = ROOT / "docs" / "component_bridge_v0.md"
+COMPONENT_ADAPTER_DOC = ROOT / "docs" / "component_adapter_v0.md"
 COMPILER_PROVENANCE_DOC = ROOT / "docs" / "compiler_provenance_v1.md"
 COMPILER_EVIDENCE_DOC = ROOT / "docs" / "gate_compiler_evidence_v1.md"
 COMPILER_EVIDENCE_V2_DOC = ROOT / "docs" / "gate_compiler_evidence_v2.md"
@@ -50,7 +51,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "500-tagged-value-abi-v2")',
+        'bundleUrl.searchParams.set("v", "501-component-adapter-v0")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -152,8 +153,8 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "500 self-verifying checks",
-        ">500</div>",
+        "501 self-verifying checks",
+        ">501</div>",
     )
     forbidden = (
         "499 self-verifying checks",
@@ -630,6 +631,46 @@ def _check_component_bridge() -> None:
     standalone_verify = standalone.verify_wasm_component_bridge_v0(source, standalone_wasm)
     if not modular_verify["valid"] or modular_verify != standalone_verify:
         raise SystemExit("docs parity: modular and standalone Component Bridge verifiers diverged")
+
+
+def _check_component_adapter() -> None:
+    words = " ".join(COMPONENT_ADAPTER_DOC.read_text().split())
+    required = (
+        "LOOM Exact Component Adapter Artifact v0",
+        "loom.build_component_adapter_artifact_v0(",
+        "loom.verify_component_adapter_artifact_v0(",
+        "loom-component-adapter-artifact/v0",
+        "loom.component-adapter.v0",
+        "exactly three independently recoverable core modules",
+        "public component import set and WASI import set are both empty",
+        "loom-canonical-json-utf8/v0",
+        "Each adapter instance is one-shot",
+        "authorization` is always `none",
+        "host-only and modular-only",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: Component Adapter v0 contract drift: missing " + ", ".join(missing))
+    import loom as modular
+    spec = importlib.util.spec_from_file_location("loom_adapter_standalone", DOCS_LOOM)
+    if spec is None or spec.loader is None:
+        raise SystemExit("docs parity: could not load standalone Component Adapter boundary")
+    standalone = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(standalone)
+    if not hasattr(modular, "build_component_adapter_artifact_v0"):
+        raise SystemExit("docs parity: modular Component Adapter builder is absent")
+    if not hasattr(modular, "verify_component_adapter_artifact_v0"):
+        raise SystemExit("docs parity: modular Component Adapter verifier is absent")
+    if hasattr(standalone, "build_component_adapter_artifact_v0") or hasattr(standalone, "verify_component_adapter_artifact_v0"):
+        raise SystemExit("docs parity: host-only Component Adapter leaked into standalone browser bundle")
+    for path in (
+        ROOT / "loom_component_adapter.py",
+        ROOT / "tools" / "loom-component-builder" / "Cargo.toml",
+        ROOT / "tools" / "loom-component-builder" / "Cargo.lock",
+        ROOT / "tools" / "loom-component-builder" / "src" / "main.rs",
+    ):
+        if not path.is_file():
+            raise SystemExit("docs parity: Component Adapter implementation input is absent: " + str(path))
 
 
 def _check_compiler_provenance_doc() -> None:
@@ -1728,6 +1769,7 @@ def main() -> int:
     _check_wasm_equivalence_doc()
     _check_wit_component_boundary()
     _check_component_bridge()
+    _check_component_adapter()
     _check_compiler_provenance_doc()
     _check_compiler_evidence_doc()
     _check_compiler_evidence_v2_doc()

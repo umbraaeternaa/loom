@@ -41,6 +41,7 @@ py-modules = [
   "loom_cli",
   "loom_codegen",
   "loom_component",
+  "loom_component_adapter",
   "loom_evidence",
   "loom_executor",
   "loom_frontend",

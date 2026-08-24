@@ -19,10 +19,28 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.93.0"
+      - name: Install pinned Component Model oracles
+        run: |
+          mkdir -p .component-tools/wasm-tools .component-tools/wasmtime
+          curl -fsSL -o .component-tools/wasm-tools.tar.gz https://github.com/bytecodealliance/wasm-tools/releases/download/v1.257.1/wasm-tools-1.257.1-x86_64-linux.tar.gz
+          echo "acea0a6f71b15f3b2d394f97453398f29099cec52df93bb25741a22561639b24  .component-tools/wasm-tools.tar.gz" | sha256sum -c -
+          tar -xzf .component-tools/wasm-tools.tar.gz -C .component-tools/wasm-tools
+          curl -fsSL -o .component-tools/wasmtime.tar.xz https://github.com/bytecodealliance/wasmtime/releases/download/v48.0.0/wasmtime-v48.0.0-x86_64-linux.tar.xz
+          echo "1d23a692da51a4f825698f3f999da71f28bad19a96df5395fadc8d07f162dac3  .component-tools/wasmtime.tar.xz" | sha256sum -c -
+          tar -xJf .component-tools/wasmtime.tar.xz -C .component-tools/wasmtime
+          echo "ff4dcf239ce09315e531394c63c7f0e2cbe9856dfbbd1f5b2b4d267b4f09df95  .component-tools/wasm-tools/wasm-tools-1.257.1-x86_64-linux/wasm-tools" | sha256sum -c -
+          echo "4fcabfd0e346761d32f250d4ce55706acef526495aaefb1eb8e6afe3bb0890c5  .component-tools/wasmtime/wasmtime-v48.0.0-x86_64-linux/wasmtime" | sha256sum -c -
+          cargo build --locked --release --manifest-path tools/loom-component-builder/Cargo.toml
+          echo "LOOM_WASM_TOOLS=${GITHUB_WORKSPACE}/.component-tools/wasm-tools/wasm-tools-1.257.1-x86_64-linux/wasm-tools" >> "$GITHUB_ENV"
+          echo "LOOM_WASMTIME=${GITHUB_WORKSPACE}/.component-tools/wasmtime/wasmtime-v48.0.0-x86_64-linux/wasmtime" >> "$GITHUB_ENV"
+          echo "LOOM_COMPONENT_BUILDER=${GITHUB_WORKSPACE}/tools/loom-component-builder/target/release/loom-component-builder" >> "$GITHUB_ENV"
       - name: Install package build tooling
         run: python -m pip install "setuptools>=61" wheel
       - name: Compile Python sources
-        run: python -m py_compile loom.py loom_parse.py loom_checker.py loom_bounds.py loom_frontend.py loom_recursion.py loom_runtime.py loom_cli.py loom_gate.py loom_observer.py loom_evidence.py loom_approval.py loom_codegen.py loom_wasm.py loom_provenance.py verify_docs_parity.py docs/loom.py run_tests.py fuzz_tests.py
+        run: python -m py_compile loom.py loom_parse.py loom_checker.py loom_bounds.py loom_frontend.py loom_recursion.py loom_runtime.py loom_cli.py loom_gate.py loom_observer.py loom_evidence.py loom_approval.py loom_codegen.py loom_wasm.py loom_component.py loom_component_adapter.py loom_provenance.py verify_docs_parity.py docs/loom.py run_tests.py fuzz_tests.py
       - name: Run citadel
         run: python run_tests.py
       - name: Verify published docs parity

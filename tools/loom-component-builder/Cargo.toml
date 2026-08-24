@@ -1,0 +1,10 @@
+[package]
+name = "loom-component-builder"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+wasm-encoder = "=0.257.1"
+wasmparser = "=0.257.1"
+
