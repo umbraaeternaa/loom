@@ -37,8 +37,8 @@ jobs:
           echo "LOOM_WASM_TOOLS=${GITHUB_WORKSPACE}/.component-tools/wasm-tools/wasm-tools-1.257.1-x86_64-linux/wasm-tools" >> "$GITHUB_ENV"
           echo "LOOM_WASMTIME=${GITHUB_WORKSPACE}/.component-tools/wasmtime/wasmtime-v48.0.0-x86_64-linux/wasmtime" >> "$GITHUB_ENV"
           echo "LOOM_COMPONENT_BUILDER=${GITHUB_WORKSPACE}/tools/loom-component-builder/target/release/loom-component-builder" >> "$GITHUB_ENV"
-          echo "LOOM_CARGO=$(command -v cargo)" >> "$GITHUB_ENV"
-          echo "LOOM_RUSTC=$(command -v rustc)" >> "$GITHUB_ENV"
+          echo "LOOM_CARGO=$(rustup which --toolchain 1.93.0 cargo)" >> "$GITHUB_ENV"
+          echo "LOOM_RUSTC=$(rustup which --toolchain 1.93.0 rustc)" >> "$GITHUB_ENV"
           echo "LOOM_COMPONENT_CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}" >> "$GITHUB_ENV"
       - name: Install package build tooling
         run: python -m pip install "setuptools>=61" wheel
