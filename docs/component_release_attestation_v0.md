@@ -72,9 +72,10 @@ The closed object is `loom-component-release-reproducibility/v0`. It binds:
   supported host triple, and exact `/usr/bin/cc` linker hash/version;
 - exact build and verification wasm-tools identities plus the Wasmtime
   verifier identity;
-- every registry crate SHA-256 from `Cargo.lock`;
-- byte equality between each locked `.crate` archive and the extracted source
-  tree actually consumed by Cargo;
+- every active host dependency selected by structured, offline, locked Cargo
+  metadata, cross-bound to its registry crate SHA-256 in `Cargo.lock`;
+- byte equality between each active locked `.crate` archive and the exact
+  extracted source tree selected by Cargo;
 - two isolated `--offline --frozen --release` observations with
   `CARGO_INCREMENTAL=0` and `SOURCE_DATE_EPOCH=0`;
 - an empty build HOME/TMPDIR, a registry-only isolated `CARGO_HOME`, fixed

@@ -197,7 +197,7 @@ def _lock_packages(lock_text):
     return packages
 
 
-def _dependency_snapshot(source_root, cargo_home):
+def _dependency_snapshot(source_root, cargo_home, cargo, rustc, host):
     source_root = Path(source_root)
     cargo_home = Path(cargo_home).resolve(strict=True)
     registry_root = cargo_home / "registry" / "src"
@@ -206,7 +206,7 @@ def _dependency_snapshot(source_root, cargo_home):
     caches = sorted(path for path in cache_root.iterdir() if path.is_dir())
     if not registries or not caches:
         raise ValueError("Cargo registry source cache is absent")
-    snapshot = []
+    locked = {}
     for package in _lock_packages((source_root / "Cargo.lock").read_text(encoding="utf-8")):
         source = package.get("source")
         if source is None:
@@ -216,47 +216,111 @@ def _dependency_snapshot(source_root, cargo_home):
         required = {"name", "version", "source", "checksum"}
         if set(package) != required:
             raise ValueError("Cargo.lock registry package is missing an exact checksum identity")
-        matches = [
-            registry / f"{package['name']}-{package['version']}"
-            for registry in registries
-            if (registry / f"{package['name']}-{package['version']}").is_dir()
-        ]
-        if not matches:
-            raise ValueError(f"cached source tree is absent for {package['name']} {package['version']}")
+        key = (package["name"], package["version"], package["source"])
+        if key in locked:
+            raise ValueError("Cargo.lock contains a duplicate registry package identity")
+        locked[key] = package
+    with tempfile.TemporaryDirectory(prefix="loom-release-metadata-v0-") as raw_tmp:
+        metadata_env = {
+            "CARGO_HOME": str(cargo_home),
+            "CARGO_NET_OFFLINE": "true",
+            "HOME": raw_tmp,
+            "LANG": "C",
+            "LC_ALL": "C",
+            "PATH": str(Path(rustc).parent) + os.pathsep + "/usr/bin:/bin",
+            "RUSTC": rustc,
+            "TMPDIR": raw_tmp,
+        }
+        metadata_result = _run([
+            cargo, "metadata", "--offline", "--locked", "--format-version", "1",
+            "--filter-platform", host,
+            "--manifest-path", str(source_root / "Cargo.toml"),
+        ], env=metadata_env, cwd=source_root)
+    if metadata_result.returncode:
+        detail = metadata_result.stderr.decode("utf-8", "replace").strip()
+        raise ValueError("locked offline Cargo metadata failed: " + detail)
+    try:
+        metadata = json.loads(metadata_result.stdout.decode("utf-8", "strict"))
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("Cargo metadata is not valid JSON") from exc
+    packages = metadata.get("packages") if isinstance(metadata, dict) else None
+    resolve = metadata.get("resolve") if isinstance(metadata, dict) else None
+    nodes = resolve.get("nodes") if isinstance(resolve, dict) else None
+    if not isinstance(packages, list) or not isinstance(nodes, list):
+        raise ValueError("Cargo metadata has no resolved dependency graph")
+    by_id = {}
+    for package in packages:
+        if not isinstance(package, dict) or not isinstance(package.get("id"), str):
+            raise ValueError("Cargo metadata package identity is malformed")
+        if package["id"] in by_id:
+            raise ValueError("Cargo metadata package identity is duplicated")
+        by_id[package["id"]] = package
+    active_ids = []
+    for node in nodes:
+        package_id = node.get("id") if isinstance(node, dict) else None
+        if not isinstance(package_id, str) or package_id not in by_id:
+            raise ValueError("Cargo metadata resolve node is malformed")
+        active_ids.append(package_id)
+    if len(active_ids) != len(set(active_ids)):
+        raise ValueError("Cargo metadata resolve node is duplicated")
+    snapshot = []
+    root_manifest = (source_root / "Cargo.toml").resolve(strict=True)
+    registry_paths = [path.resolve(strict=True) for path in registries]
+    for package_id in sorted(active_ids):
+        metadata_package = by_id[package_id]
+        source = metadata_package.get("source")
+        if source is None:
+            manifest = Path(metadata_package.get("manifest_path", "")).resolve(strict=True)
+            if manifest != root_manifest:
+                raise ValueError("active local dependency is outside Component release v0")
+            continue
+        if not str(source).startswith("registry+"):
+            raise ValueError("non-registry dependency is outside Component release v0")
+        name = metadata_package.get("name")
+        version = metadata_package.get("version")
+        key = (name, version, source)
+        package = locked.get(key)
+        if package is None:
+            raise ValueError("active Cargo package is not bound by Cargo.lock")
+        package_root = Path(metadata_package.get("manifest_path", "")).resolve(strict=True).parent
+        if not any(
+            package_root == registry or registry in package_root.parents
+            for registry in registry_paths
+        ):
+            raise ValueError(f"active registry source is outside Cargo home for {name}")
         archives = [
-            cache / f"{package['name']}-{package['version']}.crate"
+            cache / f"{name}-{version}.crate"
             for cache in caches
-            if (cache / f"{package['name']}-{package['version']}.crate").is_file()
+            if (cache / f"{name}-{version}.crate").is_file()
         ]
         if not archives or any(
             _sha256(archive.read_bytes()) != package["checksum"] for archive in archives
         ):
-            raise ValueError(f"registry crate checksum mismatch for {package['name']}")
+            raise ValueError(f"registry crate checksum mismatch for {name}")
         archive_files = {}
-        prefix = f"{package['name']}-{package['version']}/"
+        prefix = f"{name}-{version}/"
         with tarfile.open(archives[0], mode="r:gz") as archive:
             for member in archive.getmembers():
                 if member.isdir():
                     continue
                 if not member.isfile() or not member.name.startswith(prefix):
-                    raise ValueError(f"registry crate has an unsafe member for {package['name']}")
+                    raise ValueError(f"registry crate has an unsafe member for {name}")
                 relative = member.name[len(prefix):]
                 stream = archive.extractfile(member)
                 if not relative or stream is None or relative in archive_files:
-                    raise ValueError(f"registry crate has an invalid member for {package['name']}")
+                    raise ValueError(f"registry crate has an invalid member for {name}")
                 archive_files[relative] = _sha256(stream.read())
-        for package_root in matches:
-            source_files = {
-                path.relative_to(package_root).as_posix(): _sha256(path.read_bytes())
-                for path in package_root.rglob("*")
-                if path.is_file() and path.name != ".cargo-ok"
-            }
-            if source_files != archive_files:
-                raise ValueError(f"extracted registry source differs from the locked crate for {package['name']}")
+        source_files = {
+            path.relative_to(package_root).as_posix(): _sha256(path.read_bytes())
+            for path in package_root.rglob("*")
+            if path.is_file() and path.name != ".cargo-ok"
+        }
+        if source_files != archive_files:
+            raise ValueError(f"extracted registry source differs from the locked crate for {name}")
         snapshot.append({
-            "name": package["name"],
-            "version": package["version"],
-            "source": package["source"],
+            "name": name,
+            "version": version,
+            "source": source,
             "crate_sha256": package["checksum"],
             "source_tree_sha256": _sha256(_json_bytes(source_files)),
             "files": len(source_files),
@@ -472,7 +536,9 @@ def build_component_release_reproducibility_v0(
         linker_id, linker = _linker_identity()
         if cargo_id["host"] != rustc_id["host"]:
             raise ValueError("Cargo and rustc host identities differ")
-        dependencies = _dependency_snapshot(source_root, cargo_home)
+        dependencies = _dependency_snapshot(
+            source_root, cargo_home, cargo, rustc, rustc_id["host"],
+        )
         with tempfile.TemporaryDirectory(prefix="loom-release-repro-v0-") as raw_tmp:
             tmp = Path(raw_tmp)
             isolated_cargo = tmp / "cargo-home"

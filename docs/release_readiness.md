@@ -57,8 +57,9 @@ experimental, and what LOOM does not claim yet.
   independent verifier rechecks source/boundary/bridge/WIT/module hashes,
   unbundles all three cores with pinned wasm-tools, and invokes a refusal probe
   through pinned Wasmtime without a WASI linker. It never grants authorization.
-- Signed Reproducible Component Release Attestation v0 performs two clean
-  frozen offline Cargo builds from exact locked crate archives, requires
+- Signed Reproducible Component Release Attestation v0 resolves the active
+  host graph with locked offline Cargo metadata, performs two clean frozen
+  offline builds from exact active locked crate archives, requires
   byte-identical builders/artifacts/Components, independently rebuilds during
   verification, and binds the result into external DSSE/in-toto evidence. It
   grants no authorization and claims neither cross-platform equality nor a
