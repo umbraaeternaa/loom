@@ -172,11 +172,15 @@ import loom_wasm as _loom_wasm
 import loom_provenance as _loom_provenance
 
 _WASM_ABI_VERSION = _loom_wasm.WASM_ABI_VERSION
+_WASM_ABI_V2_VERSION = _loom_wasm.WASM_ABI_V2_VERSION
 _GATE_COMPILER_SURFACE = "modular-python"
 _WASM_FRONTEND = _loom_wasm.Frontend(parse, parse_spans, check, pname, LoomError, OP, _check_call_literals, platent, _roleclauses)
 
 def compile_wasm(program_src):
     return _loom_wasm.compile_wasm(program_src, _WASM_FRONTEND)
+
+def compile_wasm_v2(program_src):
+    return _loom_wasm.compile_wasm(program_src, _WASM_FRONTEND, _WASM_ABI_V2_VERSION)
 
 def verify_wasm_trust_receipt(program_src, wasm_bytes):
     return _loom_wasm.verify_trust_receipt(program_src, wasm_bytes, _WASM_FRONTEND)
@@ -184,11 +188,31 @@ def verify_wasm_trust_receipt(program_src, wasm_bytes):
 def verify_wasm_trust_receipt_v2(program_src, wasm_bytes):
     return _loom_wasm.verify_trust_receipt_v2(program_src, wasm_bytes, _WASM_FRONTEND)
 
+def verify_wasm_trust_receipt_abi_v2(program_src, wasm_bytes):
+    return _loom_wasm.verify_trust_receipt(
+        program_src, wasm_bytes, _WASM_FRONTEND, _WASM_ABI_V2_VERSION,
+    )
+
+def verify_wasm_trust_receipt_v2_abi_v2(program_src, wasm_bytes):
+    return _loom_wasm.verify_trust_receipt_v2(
+        program_src, wasm_bytes, _WASM_FRONTEND, _WASM_ABI_V2_VERSION,
+    )
+
 def verify_wasm_source_equivalence(program_src, wasm_bytes):
     return _loom_wasm.verify_source_equivalence(program_src, wasm_bytes, _WASM_FRONTEND)
 
+def verify_wasm_source_equivalence_abi_v2(program_src, wasm_bytes):
+    return _loom_wasm.verify_source_equivalence(
+        program_src, wasm_bytes, _WASM_FRONTEND, _WASM_ABI_V2_VERSION,
+    )
+
 def verify_wasm_component_bridge_v0(program_src, wasm_bytes):
     return _loom_wasm.verify_component_bridge_v0(program_src, wasm_bytes, _WASM_FRONTEND)
+
+def verify_wasm_component_bridge_v0_abi_v2(program_src, wasm_bytes):
+    return _loom_wasm.verify_component_bridge_v0(
+        program_src, wasm_bytes, _WASM_FRONTEND, _WASM_ABI_V2_VERSION,
+    )
 
 def build_wasm_compiler_profile(surface, components):
     return _loom_provenance.build_compiler_profile(surface, components, _WASM_ABI_VERSION)
@@ -781,6 +805,12 @@ def emit_wat(program_src):
 def run_wasm(program_src, call_src):
     return _loom_wasm.run_wasm(program_src, call_src, _WASM_FRONTEND)
 
+def emit_wat_v2(program_src):
+    return _loom_wasm.emit_wat(program_src, _WASM_FRONTEND, _WASM_ABI_V2_VERSION)
+
+def run_wasm_v2(program_src, call_src):
+    return _loom_wasm.run_wasm(program_src, call_src, _WASM_FRONTEND, _WASM_ABI_V2_VERSION)
+
 
 # ---- COMPONENT MODEL FRONTIER: bind exact checked core-WASM bytes to WIT without changing ABI v1. ----
 import loom_component as _loom_component
@@ -796,16 +826,40 @@ _COMPONENT_FRONTEND = _loom_component.Frontend(
     LoomError,
 )
 
+_COMPONENT_FRONTEND_V2 = _loom_component.Frontend(
+    parse,
+    check,
+    pname,
+    compile_wasm_v2,
+    lambda source, wasm: _loom_wasm.verify_trust_receipt(
+        source, wasm, _WASM_FRONTEND, _WASM_ABI_V2_VERSION,
+    ),
+    lambda source, wasm: _loom_wasm.verify_trust_receipt_v2(
+        source, wasm, _WASM_FRONTEND, _WASM_ABI_V2_VERSION,
+    ),
+    _WASM_ABI_V2_VERSION,
+    LoomError,
+)
 
-def build_wit_component_boundary_v0(program_src, wasm_bytes, package, world, exports=None):
+def _component_frontend_for_abi(abi_version):
+    if abi_version == _WASM_ABI_VERSION:
+        return _COMPONENT_FRONTEND
+    if abi_version == _WASM_ABI_V2_VERSION:
+        return _COMPONENT_FRONTEND_V2
+    raise LoomError("component boundary: unsupported LOOM ABI version " + str(abi_version))
+
+
+def build_wit_component_boundary_v0(program_src, wasm_bytes, package, world, exports=None, *, abi_version=1):
+    component_frontend = _component_frontend_for_abi(abi_version)
     return _loom_component.build_wit_component_boundary_v0(
-        _COMPONENT_FRONTEND, program_src, wasm_bytes, package, world, exports,
+        component_frontend, program_src, wasm_bytes, package, world, exports,
     )
 
 
-def verify_wit_component_boundary_v0(boundary, program_src, wasm_bytes, package, world, exports=None):
+def verify_wit_component_boundary_v0(boundary, program_src, wasm_bytes, package, world, exports=None, *, abi_version=1):
+    component_frontend = _component_frontend_for_abi(abi_version)
     return _loom_component.verify_wit_component_boundary_v0(
-        _COMPONENT_FRONTEND, boundary, program_src, wasm_bytes, package, world, exports,
+        component_frontend, boundary, program_src, wasm_bytes, package, world, exports,
     )
 
 
@@ -819,8 +873,9 @@ _CLI_FRONTEND = _loom_cli.Frontend(
     emit_wat,
     LoomError,
     metadata={
-        "citadel_checks": 499,
+        "citadel_checks": 500,
         "wasm_abi_version": _WASM_ABI_VERSION,
+        "wasm_abi_versions": [_WASM_ABI_VERSION, _WASM_ABI_V2_VERSION],
         "i31_bits": INT_BITS,
         "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],
         "commands": [

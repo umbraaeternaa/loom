@@ -2,7 +2,7 @@
 
 Status: normative for the interpreter, portable Python backend, portable
 JavaScript backend, WAT output, WebAssembly binary backend, checked `asm`
-intrinsics, and ABI v1 host decoding.
+intrinsics, and ABI v1/v2 host decoding.
 
 ## Domain
 
@@ -56,7 +56,9 @@ same signed i31 value observable from the interpreter:
   arithmetic shift-right by one, multiply with `i32.mul`, and return a tagged
   i31 value.
 - comparisons produce LOOM booleans as tagged i31 integers: `0` for false and
-  `1` for true at the decoded language level.
+  `1` for true at the decoded language level. ABI v2 preserves their boolean
+  origin at the host boundary with distinct immediates, then normalizes them
+  back to numeric zero/one when arithmetic or a condition consumes them.
 
 ## ABI v1 boundary
 
@@ -69,6 +71,15 @@ metadata such as `loom_abi_version` is raw `i32`, not a tagged LOOM value.
 
 Changing any of the domain, literal rejection rule, wraparound equation,
 tagged encoding, or host decoding rule requires a new ABI version.
+
+## ABI v2 boundary
+
+Tagged Value ABI v2 keeps the same even `n << 1` integer encoding and i31
+wraparound law. It reserves odd immediates `1` and `5` for false and true. A
+conforming v2 host therefore distinguishes boolean identity from decoded
+integers `0` and `1`, while LOOM numeric operations explicitly normalize those
+booleans before computing. Full v2 encoding is specified in
+[`wasm_abi_v2.md`](wasm_abi_v2.md).
 
 ## Citadel pin
 

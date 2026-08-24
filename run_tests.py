@@ -1961,6 +1961,115 @@ const env={push_handler:denied,pop_handler:denied,current_handler:denied,host_pr
         print(f"  {'ok  ' if component_ok else 'FAIL'} backend(Component): evidence-carrying Pure WIT boundary v0")
     except Exception as e:
         print(f"  FAIL backend(Component) boundary v0: {e}")
+    class _PublishedAbiV1Only(Exception):
+        pass
+    try:                                               # Tagged Value ABI v2 preserves identities erased by ABI v1
+        if not hasattr(_loom, "compile_wasm_v2"):
+            published_profile_ok = (
+                Path(_loom.__file__).parent.name == "docs"
+                and _loom._WASM_ABI_VERSION == 1
+                and _loom.build_about().get("wasm_abi_versions") == [1]
+            )
+            ok += published_profile_ok
+            print(f"  {'ok  ' if published_profile_ok else 'FAIL'} backend(WASM): published standalone remains explicit ABI v1")
+            raise _PublishedAbiV1Only
+        abi2_source = (
+            '(defx bool_false () (fn () (= 1 2))) '
+            '(defx bool_true () (fn () (= 1 1))) '
+            '(defx int_zero () (fn () 0)) '
+            '(defx int_one () (fn () 1)) '
+            '(defx ident () (fn (x) x)) '
+            '(defx add_one () (fn (x) (+ x 1))) '
+            '(defx choose () (fn (x) (if x 9 4))) '
+            '(defx empty_record () (fn () (record))) '
+            '(defx record_code () (fn () (record (code 1)))) '
+            '(defx closure_value () (fn () (fn (x) x)))'
+        )
+        abi2_wasm = _loom.compile_wasm_v2(abi2_source)
+        abi2_bridge_result = _loom.verify_wasm_component_bridge_v0_abi_v2(abi2_source, abi2_wasm)
+        abi2_bridge = abi2_bridge_result.get("bridge") or {}
+        abi2_boundary_result = _loom.build_wit_component_boundary_v0(
+            abi2_source, abi2_wasm, "umbra:loom@0.2.0", "typed-kernel", ["ident"],
+            abi_version=2,
+        )
+        abi2_boundary = abi2_boundary_result.get("boundary") or {}
+        code_field = next(
+            (item["id"] for item in abi2_bridge.get("field_ids", []) if item.get("name") == "code"),
+            None,
+        )
+        abi2_js = r'''
+const bytes=Buffer.from(process.argv[1],"base64");
+const env={push_handler:()=>0,pop_handler:()=>0,current_handler:()=>0,host_print:x=>x,
+  push_caps:()=>0,pop_caps:()=>0,has_cap:()=>0,host_ffi:()=>0};
+(async()=>{const {instance:{exports:e}}=await WebAssembly.instantiate(bytes,{env});
+  const d=new DataView(e.memory.buffer),raw=v=>v&-2,kind=v=>d.getInt32(raw(v),true);
+  const rec=e.record_code(),clos=e.closure_value();
+  const bridgedList=e.loom_component_cons(5,3);
+  const bridgedRecord=e.loom_component_record(Number(process.argv[2]),1,7);
+  console.log(JSON.stringify({abi:e.loom_abi_version.value,
+    falseRaw:e.bool_false(),trueRaw:e.bool_true(),int0:e.int_zero(),int1:e.int_one(),
+    falseIdentity:e.ident(1),trueIdentity:e.ident(5),falseAdd:e.add_one(1),trueAdd:e.add_one(5),
+    falseBranch:e.choose(1),trueBranch:e.choose(5),emptyRecord:e.empty_record(),
+    recordKind:kind(rec),closureKind:kind(clos),bridgeListKind:kind(bridgedList),
+    bridgeRecordKind:kind(bridgedRecord)}));})().catch(e=>{console.error(e);process.exit(1)});
+'''
+        abi2_node = subprocess.run(
+            ["node", "-e", abi2_js, base64.b64encode(abi2_wasm).decode(), str(code_field)],
+            capture_output=True, text=True,
+        )
+        abi2_runtime = json.loads(abi2_node.stdout) if abi2_node.returncode == 0 else {}
+        abi2_wat = _loom.emit_wat_v2(abi2_source)
+        abi2_ok = (
+            _loom._WASM_ABI_VERSION == 1 and _loom._WASM_ABI_V2_VERSION == 2
+            and _loom.compile_wasm(abi2_source) == _loom._loom_wasm.compile_wasm(
+                abi2_source, _loom._WASM_FRONTEND, 1,
+            )
+            and abi2_wasm == _loom.compile_wasm_v2(abi2_source)
+            and abi2_wasm != _loom.compile_wasm(abi2_source)
+            and abi2_bridge_result["valid"] is True
+            and abi2_bridge.get("abi_version") == 2
+            and _loom.verify_wasm_trust_receipt_abi_v2(abi2_source, abi2_wasm)["valid"] is True
+            and _loom.verify_wasm_trust_receipt_v2_abi_v2(abi2_source, abi2_wasm)["valid"] is True
+            and _loom.verify_wasm_source_equivalence_abi_v2(abi2_source, abi2_wasm)["valid"] is True
+            and _loom.verify_wasm_component_bridge_v0(abi2_source, abi2_wasm)["valid"] is False
+            and _loom.verify_wasm_trust_receipt_abi_v2(
+                abi2_source, _loom.compile_wasm(abi2_source),
+            )["valid"] is False
+            and _loom.verify_wasm_source_equivalence_abi_v2(
+                abi2_source, _loom.compile_wasm(abi2_source),
+            )["valid"] is False
+            and _loom.verify_wasm_component_bridge_v0_abi_v2(
+                abi2_source, _loom.compile_wasm(abi2_source),
+            )["valid"] is False
+            and abi2_boundary_result["valid"] is True
+            and abi2_boundary.get("core_module", {}).get("loom_abi_version") == 2
+            and abi2_boundary.get("lifecycle", {}).get("authorization") == "none"
+            and abi2_node.returncode == 0
+            and abi2_runtime == {
+                "abi": 2, "falseRaw": 1, "trueRaw": 5, "int0": 0, "int1": 2,
+                "falseIdentity": 1, "trueIdentity": 5, "falseAdd": 2, "trueAdd": 4,
+                "falseBranch": 8, "trueBranch": 18, "emptyRecord": 7,
+                "recordKind": 2, "closureKind": 7, "bridgeListKind": 1,
+                "bridgeRecordKind": 2,
+            }
+            and _loom.run_wasm_v2(abi2_source, "(bool_false)")[0] is False
+            and _loom.run_wasm_v2(abi2_source, "(bool_true)")[0] is True
+            and type(_loom.run_wasm_v2(abi2_source, "(int_zero)")[0]) is int
+            and _loom.run_wasm_v2(abi2_source, "(empty_record)")[0] == {}
+            and _loom.run_wasm_v2(abi2_source, "(record_code)")[0] == {"code": 1}
+            and _loom.run_wasm_v2(abi2_source, "(closure_value)")[0] == {"$closure": {"code": 10}}
+            and abi2_wat.index('(import "env"') < abi2_wat.index('(global $loom_abi_version')
+            and "i32.const 7  i32.store  ;; closure kind" in abi2_wat
+            and "call $__loom_numeric" in abi2_wat
+        )
+        ok += abi2_ok
+        print(f"  {'ok  ' if abi2_ok else 'FAIL'} backend(WASM): Tagged Value ABI v2 collision freedom + ABI v1 compatibility")
+        if not abi2_ok and abi2_node.returncode != 0:
+            print("       " + abi2_node.stderr.strip()[:500])
+    except _PublishedAbiV1Only:
+        pass
+    except Exception as e:
+        print(f"  FAIL backend(WASM) Tagged Value ABI v2: {e}")
     try:                                               # effect frontier: IO `with` reinterprets print through a handler closure
         prog = '(defx h () (fn (x) (* x 2))) (defx t () (fn () (with IO h (print 5))))'
         v33, o33 = run_wasm(prog, "(t)")
@@ -2362,7 +2471,7 @@ const env={push_handler:denied,pop_handler:denied,current_handler:denied,host_pr
             "actions_observed": ["read", "write", "test", "git-commit"],
             "evidence": [
                 {"kind": "syntax", "status": "pass", "detail": "PASS syntax"},
-                {"kind": "citadel", "status": "pass", "detail": "499/499"},
+                {"kind": "citadel", "status": "pass", "detail": "500/500"},
                 {"kind": "docs-parity", "status": "pass", "detail": "PASS docs parity"},
                 {"kind": "git-clean", "status": "pass", "detail": "clean"},
                 {"kind": "git-sync", "status": "pass", "detail": "HEAD == origin/main"},
@@ -5720,8 +5829,9 @@ const env={push_handler:denied,pop_handler:denied,current_handler:denied,host_pr
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == 499
+            and about_json["citadel_checks"] == 500
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
+            and about_json["wasm_abi_versions"] == ([1] if is_browser_bundle else [1, 2])
             and about_json["i31_bits"] == 31
             and "webassembly" in about_json["backends"]
             and "about" in about_json["commands"]
@@ -5949,7 +6059,7 @@ const env={push_handler:denied,pop_handler:denied,current_handler:denied,host_pr
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 499/499 citadel checks" in quick
+            and "PASS -- 500/500 citadel checks" in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
             and "loom examples" in quick
@@ -6059,7 +6169,7 @@ const env={push_handler:denied,pop_handler:denied,current_handler:denied,host_pr
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "499-component-bridge-v0")' in play
+            and 'bundleUrl.searchParams.set("v", "500-tagged-value-abi-v2")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -6615,6 +6725,8 @@ const env={push_handler:denied,pop_handler:denied,current_handler:denied,host_pr
             and "`1073741823 * 2` becomes `-2`" in i31doc
             and "`1073741823 * 1073741823` becomes `1`" in i31doc
             and "ABI v1 encodes signed i31 integer `n` as the even tagged `i32` value `n << 1`" in i31doc
+            and "Tagged Value ABI v2 keeps the same even `n << 1` integer encoding" in i31doc
+            and "odd immediates `1` and `5` for false and true" in i31doc
             and "Changing any of the domain, literal rejection rule, wraparound equation," in i31doc
             and '{"add": -1073741824, "sub": 1073741823, "mul": -2, "wide": 1}' in i31doc
             and "[`i31_semantics.md`](i31_semantics.md)" in abi_doc
@@ -6656,6 +6768,7 @@ const env={push_handler:denied,pop_handler:denied,current_handler:denied,host_pr
             and "must not own mutable `_WASM_*` compiler tables" in mbdoc
             and "parallel builds" in mbdoc
             and "legacy module-global `_WASM_*` compiler tables do not return" in mbdoc
+            and "Tagged Value ABI v2 is currently an\nexplicit modular-only profile" in mbdoc
             and "`loom_recursion.py` | shared named-call graph, recursive-SCC edges, static descent certificates, and quantitative recurrence metadata" in mbdoc
         )
         ok += module_boundary_doc_ok
@@ -6676,7 +6789,7 @@ const env={push_handler:denied,pop_handler:denied,current_handler:denied,host_pr
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 499/499 citadel checks" in rdoc
+            and "PASS -- 500/500 citadel checks" in rdoc
             and "loom examples --format json" in rdoc
             and "loom doctor --dry-run --format json" in rdoc
             and "python3 verify_docs_parity.py" in rdoc
@@ -6740,7 +6853,7 @@ const env={push_handler:denied,pop_handler:denied,current_handler:denied,host_pr
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 146   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 147   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Tagged Value ABI v2 collision/migration proof, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

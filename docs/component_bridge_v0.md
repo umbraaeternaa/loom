@@ -1,12 +1,14 @@
 # LOOM Component Bridge Extension v0
 
-Status: implemented additive extension for modules emitted by `compile_wasm`.
+Status: implemented additive extension for modules emitted by `compile_wasm`
+or the opt-in `compile_wasm_v2`.
 It is not a Component Model adapter, execution approval, signature, or source
 capability grant.
 
 ## Purpose
 
-LOOM ABI v1 uses tagged `i32` values and a private monotonic heap. A separate
+LOOM ABI v1 and Tagged Value ABI v2 use versioned tagged `i32` values and a
+private monotonic heap. A separate
 component adapter cannot safely construct strings, lists, records, or variants
 by writing that heap directly. Bridge v0 exposes five bounded constructors that
 all use the compiler's existing `$reserve` allocator and object layouts:
@@ -26,6 +28,9 @@ unsupported tagged heap kinds, and unknown module-local field or tag IDs.
 Effect boxes and resource markers are not accepted as component input values.
 List and record tails are traversed completely, reject malformed links, and
 trap after 2048 cells so a forged cycle cannot make validation unbounded.
+Validation is profile-specific: ABI v1 record chains end at raw `0`; ABI v2
+record chains end at empty-record immediate `7`, and its boolean immediates are
+accepted as values. Closures are rejected as input under both profiles.
 
 `alloc_bytes` permits one pending range at a time. `make_string` requires that
 exact pointer and length, validates strict RFC 3629 UTF-8, reserves the kind-6
@@ -51,7 +56,9 @@ must bind the full final core-module hash externally.
 single-section parsing, canonical JSON and closed-key checks, recomputes the
 omitted-section binding, recompiles the source deterministically, and requires
 byte identity. The result schema is
-`loom-component-bridge-validation/v0`.
+`loom-component-bridge-validation/v0`. For ABI v2, the closed facade is
+`loom.verify_wasm_component_bridge_v0_abi_v2(source, wasm_bytes)`. A verifier
+for one profile rejects bytes from the other profile.
 
 ## Non-claims
 

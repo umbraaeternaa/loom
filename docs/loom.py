@@ -9722,8 +9722,9 @@ def build_about():
     return {
         "schema": "loom-about/v1",
         "language": "LOOM",
-        "citadel_checks": 499,
+        "citadel_checks": 500,
         "wasm_abi_version": _WASM_ABI_VERSION,
+        "wasm_abi_versions": [_WASM_ABI_VERSION],
         "i31_bits": INT_BITS,
         "backends": ["interpreter", "python", "javascript", "webassembly", "wat"],
         "commands": ["about", "release-check", "help", "examples", "doctor", "check", "run", "build", "audit", "source-map", "gate", "gate-workflow", "gate-workflow-v3"],

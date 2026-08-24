@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 499 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 500 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 499/499 citadel checks
+PASS — 500/500 citadel checks
 ```
 
 ## The idea in one screen
@@ -481,7 +481,11 @@ bank data.
 The same verified program runs in the interpreter, compiles to **Python** and **JavaScript**,
 and lowers tagged values, closures, structured data, and effects to **WebAssembly** — one checked source, many platforms. LOOM integers have one portable contract on every backend: signed i31 values (`-2^30..2^30-1`) with deterministic modulo-`2^31` wraparound; out-of-range literals are rejected before execution.
 
-The binary boundary is versioned and documented in the normative [LOOM WebAssembly ABI v1](docs/wasm_abi_v1.md); generated modules export `loom_abi_version = 1`, and hosts reject unknown versions.
+The binary boundary is versioned. [LOOM WebAssembly ABI v1](docs/wasm_abi_v1.md)
+remains the byte-compatible default. The opt-in [Tagged Value ABI v2](docs/wasm_abi_v2.md)
+removes the v1 collisions between integers, booleans, empty records, and closures
+so a future Canonical ABI adapter can preserve value identity. Modules export
+their exact `loom_abi_version`, and hosts reject profiles they do not support.
 Portable runtime quantity semantics are defined by [LOOM Portable Meter Frame v1](docs/meter_frame_v1.md); the interpreter, generated Python/JavaScript backends, and WASM enforce them. WASM carries a private linked meter frame through named calls, closures/`applyN`, recursion, handlers, and FFI without adding host ABI obligations. Checker Meter Summary v1 admits finite statically resolved calls, closures, higher-order applications, and handlers by their maximal path count. [Quantitative Recurrence Summary v1](docs/quantitative_recurrence_summary_v1.md) also admits checked single-spine recursion when its certified i31/list entry measure is a source literal; branching, unknown-input, uncertified, and unresolved higher-order recursion remain fail-closed. WASM and heap evolution are tracked separately in the [LOOM WASM Quantity Mediation Roadmap](docs/wasm_quantity_mediation.md), and `memory.grow` stays disabled until growth is explicitly metered.
 
 Named recursion can be bounded dynamically with `(depthN K BODY...)`, specified by [LOOM Call Budget Frame v1](docs/call_budget_frame_v1.md). Each direct or mutual-recursive SCC edge consumes one unit before callee entry across the interpreter, generated Python/JavaScript, and WASM. This is a separate resource from `seamN`: it bounds recursive calls, does not claim to prove termination, and does not weaken the checker's fail-closed rule for recursive effect summaries.

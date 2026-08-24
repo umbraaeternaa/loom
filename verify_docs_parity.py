@@ -15,6 +15,7 @@ DOCS_LOOM = ROOT / "docs" / "loom.py"
 INDEX_HTML = ROOT / "docs" / "index.html"
 PLAY_HTML = ROOT / "docs" / "play.html"
 WASM_ABI_DOC = ROOT / "docs" / "wasm_abi_v1.md"
+WASM_ABI_V2_DOC = ROOT / "docs" / "wasm_abi_v2.md"
 QUANTITY_DOC = ROOT / "docs" / "wasm_quantity_mediation.md"
 METER_FRAME_DOC = ROOT / "docs" / "meter_frame_v1.md"
 CALL_BUDGET_DOC = ROOT / "docs" / "call_budget_frame_v1.md"
@@ -49,7 +50,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "499-component-bridge-v0")',
+        'bundleUrl.searchParams.set("v", "500-tagged-value-abi-v2")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -151,10 +152,12 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "499 self-verifying checks",
-        ">499</div>",
+        "500 self-verifying checks",
+        ">500</div>",
     )
     forbidden = (
+        "499 self-verifying checks",
+        ">499</div>",
         "498 self-verifying checks",
         ">498</div>",
         "496 self-verifying checks",
@@ -279,6 +282,34 @@ def _check_wasm_abi_doc() -> None:
         if stale:
             details.append("stale: " + ", ".join(stale))
         raise SystemExit("docs parity: wasm ABI doc is out of sync with string/fixed-heap contract: " + "; ".join(details))
+
+
+def _check_wasm_abi_v2_doc() -> None:
+    text = WASM_ABI_V2_DOC.read_text()
+    words = " ".join(text.split())
+    required = (
+        "LOOM WebAssembly Tagged Value ABI v2",
+        "implemented, normative, opt-in, and additive",
+        "`loom_abi_version == 2`",
+        "ABI v1 remains the default",
+        "Boolean false | Reserved immediate `1`",
+        "Empty list | Reserved immediate `3`",
+        "Boolean true | Reserved immediate `5`",
+        "Empty record | Reserved immediate `7`",
+        "valid pointers are at least `9`",
+        "kind-2 record chain terminates with the empty-record immediate `7`",
+        "closure uses a distinct kind-7 chain",
+        "`compile_wasm_v2`",
+        "loom.verify_wasm_source_equivalence_abi_v2",
+        "loom.verify_wasm_component_bridge_v0_abi_v2",
+        "`abi_version=2`",
+        "A v1 verifier rejects v2 bytes",
+        "introduces no new host import",
+        "not itself a Component Model binary",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: Tagged Value ABI v2 contract drift: missing " + ", ".join(missing))
 
 
 def _check_quantity_mediation_doc() -> None:
@@ -562,6 +593,7 @@ def _check_component_bridge() -> None:
         "loom.component-bridge.v0",
         "loom-component-bridge/v0",
         "loom.verify_wasm_component_bridge_v0(source, wasm_bytes)",
+        "loom.verify_wasm_component_bridge_v0_abi_v2(source, wasm_bytes)",
         "loom-component-bridge-validation/v0",
         "strict RFC 3629 UTF-8",
         "loom_component_alloc_bytes",
@@ -569,6 +601,9 @@ def _check_component_bridge() -> None:
         "loom_component_cons",
         "loom_component_record",
         "loom_component_variant",
+        "ABI v1 record chains end at raw `0`",
+        "ABI v2 record chains end at empty-record immediate `7`",
+        "A verifier for one profile rejects bytes from the other profile",
         "does not produce a WebAssembly Component",
         "does not approve execution",
     )
@@ -1681,6 +1716,7 @@ def main() -> int:
     _check_playground_loader()
     _check_landing_page_count()
     _check_wasm_abi_doc()
+    _check_wasm_abi_v2_doc()
     _check_quantity_mediation_doc()
     _check_meter_frame_doc()
     _check_call_budget_doc()

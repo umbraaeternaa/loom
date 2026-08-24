@@ -45,6 +45,7 @@ _WASM_I_POP_CAPS = 5
 _WASM_I_HAS_CAP = 6
 _WASM_I_FFI = 7
 WASM_ABI_VERSION = 1
+WASM_ABI_V2_VERSION = 2
 EFFECT_IDS = {"IO": 0, "Net": 1, "Rand": 2, "Alloc": 3, "FFI": 4}
 _WASM_NIL = 3
 _WASM_K_LIST = 1
@@ -53,6 +54,10 @@ _WASM_K_VARIANT = 3
 _WASM_K_EFFECT = 4
 _WASM_K_RESOURCE = 5
 _WASM_K_STRING = 6
+_WASM_K_CLOSURE = 7
+_WASM_V2_FALSE = 1
+_WASM_V2_TRUE = 5
+_WASM_V2_EMPTY_RECORD = 7
 _TRUST_SECTION_NAME = b"loom.trust.v1"
 _TRUST_V2_SECTION_NAME = b"loom.trust.v2"
 _COMPONENT_BRIDGE_SECTION_NAME = b"loom.component-bridge.v0"
@@ -74,6 +79,19 @@ def _wasm_const(n):
 
 def _wasm_int(n):
     return _wasm_const(n << 1)
+
+def _wasm_numeric(ctx, code):
+    if ctx.abi_version == WASM_ABI_V2_VERSION:
+        return code + b"\x10" + _leb_u(ctx.numeric_id + _WASM_IMPORTS)
+    return code
+
+def _wasm_tag_bool(ctx):
+    if ctx.abi_version == WASM_ABI_V2_VERSION:
+        return _wasm_const(2) + b"\x74" + _wasm_const(1) + b"\x6a"
+    return _wasm_const(1) + b"\x74"
+
+def _wasm_empty_record(ctx):
+    return _WASM_V2_EMPTY_RECORD if ctx.abi_version == WASM_ABI_V2_VERSION else 0
 
 def _wasm_i32(n):
     return int(n).to_bytes(4, "little", signed=True)
@@ -150,7 +168,8 @@ def _emit_wasm_node(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, s
         if node in lmap: return b"\x20" + _leb_u(lmap[node])            # local.get (param / let / match-bound)
         if node in ctx.topdefs:
             spec = ctx.topdefs[node]
-            return _emit_wasm(ctx, ["record", ["code", spec["id"]]], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
+            form = "closure-record" if ctx.abi_version == WASM_ABI_V2_VERSION else "record"
+            return _emit_wasm(ctx, [form, ["code", spec["id"]]], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
         raise frontend.error("wasm: free variable " + node)
     if type(node) is str:
         return _wasm_const(ctx.string_layout[node]["tagged"])
@@ -159,13 +178,13 @@ def _emit_wasm_node(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, s
         error = asm_validation_error(node)
         if error: raise frontend.error(error)
         spec = asm_metadata(node)
-        rhs = _emit_wasm(ctx, node[4], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
+        lhs = _wasm_numeric(ctx, _emit_wasm(ctx, node[3], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers))
+        rhs = _wasm_numeric(ctx, _emit_wasm(ctx, node[4], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers))
         if spec["wasm_rhs"] == "unbox_i31":
             rhs += _wasm_const(1) + b"\x75"
-        out = (_emit_wasm(ctx, node[3], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
-               + rhs + bytes([spec["wasm_opcode"]]))
+        out = lhs + rhs + bytes([spec["wasm_opcode"]])
         if spec["wasm_result"] == "tag_i31":
-            out += _wasm_const(1) + b"\x74"
+            out += _wasm_tag_bool(ctx) if spec["result"] == "bool-i31" else _wasm_const(1) + b"\x74"
         return out
     if isinstance(h, list):                                             # ((fn ..) args) — compute head, then apply as a closure
         arity = len(node[1:])
@@ -181,18 +200,19 @@ def _emit_wasm_node(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, s
         if spec is None: raise frontend.error("wasm: missing closure spec")
         caps = spec["captures"]
         rec = [["code", spec["id"]]] + [[f"e{i}", caps[i]] for i in range(len(caps))]
-        return _emit_wasm(ctx, ["record"] + rec, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
+        form = "closure-record" if ctx.abi_version == WASM_ABI_V2_VERSION else "record"
+        return _emit_wasm(ctx, [form] + rec, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
     if h in ("+", "*"):
-        out = _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
+        out = _wasm_numeric(ctx, _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers))
         for a in node[2:]:
-            out += _emit_wasm(ctx, a, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
+            out += _wasm_numeric(ctx, _emit_wasm(ctx, a, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers))
             if h == "*": out += _wasm_const(1) + b"\x75"              # unbox rhs: (2a * b) = 2(ab)
             out += bytes([_WBIN[h]])
         return out
-    if h == "-": return _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + _emit_wasm(ctx, node[2], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x6b"
-    if h in _WCMP: return _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + _emit_wasm(ctx, node[2], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + bytes([_WCMP[h]]) + _wasm_const(1) + b"\x74"
+    if h == "-": return _wasm_numeric(ctx, _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)) + _wasm_numeric(ctx, _emit_wasm(ctx, node[2], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)) + b"\x6b"
+    if h in _WCMP: return _wasm_numeric(ctx, _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)) + _wasm_numeric(ctx, _emit_wasm(ctx, node[2], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)) + bytes([_WCMP[h]]) + _wasm_tag_bool(ctx)
     if h == "if":                                                       # if (result i32) THEN else ELSE end
-        return (_emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers, metered_effs) + b"\x04\x7f" + _emit_wasm(ctx, node[2], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers, metered_effs)
+        return (_wasm_numeric(ctx, _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers, metered_effs)) + b"\x04\x7f" + _emit_wasm(ctx, node[2], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers, metered_effs)
                 + b"\x05" + _emit_wasm(ctx, node[3], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers, metered_effs) + b"\x0b")
     if h == "let":                                                      # (let (name val) body..) -> val; local.set name; body
         out = _emit_wasm(ctx, node[1][1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers, metered_effs) + b"\x21" + _leb_u(lmap[node[1][0]])
@@ -275,7 +295,7 @@ def _emit_wasm_node(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, s
         if len(node) == 1:
             out += _wasm_const(_WASM_NIL)
         else:
-            out += (_emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
+            out += (_wasm_numeric(ctx, _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers))
                     + _wasm_int(0)
                     + b"\x10" + _leb_u(ctx.alloc_id + _WASM_IMPORTS))
         if len(node) == 1:
@@ -296,12 +316,13 @@ def _emit_wasm_node(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, s
                 + b"\x10" + _leb_u(_WASM_I_FFI))
     if h == "use":
         return _wasm_const(ctx.resources[node[1]]) + b"\x10" + _leb_u(ctx.resource_use_id + _WASM_IMPORTS)
-    if h == "record":
-        if len(node) == 1: return b"\x41\x00"
+    if h in ("record", "closure-record"):
+        if len(node) == 1: return _wasm_const(_wasm_empty_record(ctx))
         items = [fld for fld in node[1:] if isinstance(fld, list) and len(fld) >= 2]
-        out = b"\x41\x00"
+        out = _wasm_const(_wasm_empty_record(ctx))
+        record_i = ctx.closure_record_id if h == "closure-record" else rec_i
         for fld in reversed(items):
-            out = out + b"\x41" + _leb_s(fields[fld[0]]) + _emit_wasm(ctx, fld[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(rec_i + _WASM_IMPORTS)
+            out = out + b"\x41" + _leb_s(fields[fld[0]]) + _emit_wasm(ctx, fld[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(record_i + _WASM_IMPORTS)
         return out
     if h == "get":
         return _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x41" + _leb_s(fields[node[2]]) + b"\x10" + _leb_u(get_i + _WASM_IMPORTS)
@@ -312,7 +333,7 @@ def _emit_wasm_node(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, s
     if h == "cons": return _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + _emit_wasm(ctx, node[2], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(cons_i + _WASM_IMPORTS)
     if h == "head": return _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + _wasm_unptr() + b"\x28\x02\x04"
     if h == "tail": return _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + _wasm_unptr() + b"\x28\x02\x08"
-    if h == "empty": return _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + _wasm_const(_WASM_NIL) + b"\x46" + _wasm_const(1) + b"\x74"
+    if h == "empty": return _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + _wasm_const(_WASM_NIL) + b"\x46" + _wasm_tag_bool(ctx)
     if h == "variant":
         return _wasm_const(tags[node[1]]) + _emit_wasm(ctx, node[2], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(ctx.variant_id + _WASM_IMPORTS)
     if h == "match":                                                    # scrut->$s; chain: load tag; ==TAG; if (bind payload) body else .. unreachable
@@ -583,7 +604,7 @@ def _trust_atom(value):
     return None
 
 
-def _trust_receipt(program_src, frontend):
+def _trust_receipt(program_src, frontend, abi_version=WASM_ABI_VERSION):
     """Build deterministic, non-authorizing trust/provenance metadata for a WASM module."""
     forms = []
 
@@ -624,7 +645,7 @@ def _trust_receipt(program_src, frontend):
         walk(root)
     receipt = {
         "schema": "loom-trust-provenance/v1",
-        "abi_version": WASM_ABI_VERSION,
+        "abi_version": abi_version,
         "checked": True,
         "runtime": "transparent-after-static-check",
         "source_sha256": hashlib.sha256(program_src.encode("utf-8")).hexdigest(),
@@ -633,7 +654,7 @@ def _trust_receipt(program_src, frontend):
     return json.dumps(receipt, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def _trust_receipt_v2(program_src, frontend):
+def _trust_receipt_v2(program_src, frontend, abi_version=WASM_ABI_VERSION):
     """Build additive role-policy evidence without changing receipt v1 or ABI v1."""
     forms = []
 
@@ -682,7 +703,7 @@ def _trust_receipt_v2(program_src, frontend):
         walk(root)
     receipt = {
         "schema": "loom-trust-provenance/v2",
-        "abi_version": WASM_ABI_VERSION,
+        "abi_version": abi_version,
         "checked": True,
         "runtime": "transparent-after-static-check",
         "source_sha256": hashlib.sha256(program_src.encode("utf-8")).hexdigest(),
@@ -786,33 +807,33 @@ def _extract_trust_receipt_v2(wasm_bytes):
     return receipt, payload, findings
 
 
-def verify_trust_receipt(program_src, wasm_bytes, frontend):
+def verify_trust_receipt(program_src, wasm_bytes, frontend, abi_version=WASM_ABI_VERSION):
     """Verify receipt/source/checker consistency without executing the WASM module."""
     receipt, payload, findings = _extract_trust_receipt(wasm_bytes)
     _, source_errors = frontend.check(frontend.parse(program_src))
     findings = list(findings)
     findings.extend("source checker: " + error for error in source_errors)
     if receipt is not None and not source_errors:
-        expected = _trust_receipt(program_src, frontend)
+        expected = _trust_receipt(program_src, frontend, abi_version)
         if payload != expected:
             findings.append("loom.trust.v1 does not match the supplied source")
     return {"valid": not findings, "receipt": receipt, "findings": findings}
 
 
-def verify_trust_receipt_v2(program_src, wasm_bytes, frontend):
+def verify_trust_receipt_v2(program_src, wasm_bytes, frontend, abi_version=WASM_ABI_VERSION):
     """Verify additive role-policy receipt/source/checker consistency."""
     receipt, payload, findings = _extract_trust_receipt_v2(wasm_bytes)
     _, source_errors = frontend.check(frontend.parse(program_src))
     findings = list(findings)
     findings.extend("source checker: " + error for error in source_errors)
     if receipt is not None and not source_errors:
-        expected = _trust_receipt_v2(program_src, frontend)
+        expected = _trust_receipt_v2(program_src, frontend, abi_version)
         if payload != expected:
             findings.append("loom.trust.v2 does not match the supplied source")
     return {"valid": not findings, "receipt": receipt, "findings": findings}
 
 
-def verify_source_equivalence(program_src, wasm_bytes, frontend):
+def verify_source_equivalence(program_src, wasm_bytes, frontend, abi_version=WASM_ABI_VERSION):
     """Recompile source and compare the complete deterministic WASM artifact."""
     findings = []
     source_sha256 = hashlib.sha256(program_src.encode("utf-8")).hexdigest() if isinstance(program_src, str) else None
@@ -824,7 +845,7 @@ def verify_source_equivalence(program_src, wasm_bytes, frontend):
     expected = None
     if not findings:
         try:
-            expected = compile_wasm(program_src, frontend)
+            expected = compile_wasm(program_src, frontend, abi_version)
         except frontend.error as exc:
             findings.append("source compiler: " + str(exc))
     if expected is not None and actual != expected:
@@ -841,7 +862,7 @@ def verify_source_equivalence(program_src, wasm_bytes, frontend):
 
 def _component_bridge_payload(program_src, ctx, core_without_bridge):
     payload = {
-        "abi_version": WASM_ABI_VERSION,
+        "abi_version": ctx.abi_version,
         "compiler_profile": {
             "backend": "python-direct-wasm",
             "bridge_extension": "v0",
@@ -939,7 +960,7 @@ def _scan_component_bridge(wasm_bytes):
     return bridge, payload, bytes(stripped), findings
 
 
-def verify_component_bridge_v0(program_src, wasm_bytes, frontend):
+def verify_component_bridge_v0(program_src, wasm_bytes, frontend, abi_version=WASM_ABI_VERSION):
     """Verify exact source/core/bridge binding without executing or authorizing the module."""
     bridge, payload, stripped, findings = _scan_component_bridge(wasm_bytes)
     findings = list(findings)
@@ -957,7 +978,7 @@ def verify_component_bridge_v0(program_src, wasm_bytes, frontend):
             source_errors = [str(exc)]
         findings.extend("source checker: " + error for error in source_errors)
         if not source_errors and bridge is not None and stripped is not None:
-            ctx = _WasmContext(program_src, frontend)
+            ctx = _WasmContext(program_src, frontend, abi_version)
             expected_payload = _component_bridge_payload(program_src, ctx, stripped)
             if payload != expected_payload:
                 findings.append("loom.component-bridge.v0 does not match the supplied source or core module")
@@ -968,7 +989,7 @@ def verify_component_bridge_v0(program_src, wasm_bytes, frontend):
             if set(bridge) != expected_keys:
                 findings.append("loom.component-bridge.v0 has unknown or missing top-level keys")
             try:
-                expected_wasm = compile_wasm(program_src, frontend)
+                expected_wasm = compile_wasm(program_src, frontend, abi_version)
             except frontend.error as exc:
                 findings.append("source compiler: " + str(exc))
             else:
@@ -1103,14 +1124,18 @@ def _wat_at(ctx, path):
 
 class _WasmContext:
     """All program-specific WASM state, isolated per compilation."""
-    __slots__ = ("frontend", "defs", "top", "closures", "closure_by_id", "order", "topdefs",
+    __slots__ = ("frontend", "abi_version", "defs", "top", "closures", "closure_by_id", "order", "topdefs",
                  "helper_base", "apply_arities", "apply_ids", "apply1_id", "meter_push_id", "meter_take_id",
                  "depth_push_id", "depth_take_id", "recursive_edges", "current_fn",
-                 "variant_id", "alloc_id", "resource_use_id", "tags", "fields", "resources", "foreigns",
+                 "variant_id", "alloc_id", "resource_use_id", "numeric_id", "closure_record_id",
+                 "bridge_base", "tags", "fields", "resources", "foreigns",
                  "strings", "string_layout", "hp_init", "node_path_by_id", "span_by_path", "trust_receipt", "trust_receipt_v2", "_metered_effs")
 
-    def __init__(self, program_src, frontend):
+    def __init__(self, program_src, frontend, abi_version=WASM_ABI_VERSION):
+        if abi_version not in (WASM_ABI_VERSION, WASM_ABI_V2_VERSION):
+            raise frontend.error("wasm: unsupported LOOM ABI version " + str(abi_version))
         self.frontend = frontend
+        self.abi_version = abi_version
         self._metered_effs = set()
         self.defs, self.top, self.closures, self.order = _wasm_collect_closures(program_src, frontend)
         self.closure_by_id = {spec["id"]: spec for spec in self.order}
@@ -1133,6 +1158,10 @@ class _WasmContext:
             for i, arity in enumerate(self.apply_arities)
         }
         self.apply1_id = self.apply_ids.get(1, self.helper_base + 12)
+        v2_base = self.helper_base + 12 + len(self.apply_arities)
+        self.numeric_id = v2_base if abi_version == WASM_ABI_V2_VERSION else None
+        self.closure_record_id = v2_base + 1 if abi_version == WASM_ABI_V2_VERSION else None
+        self.bridge_base = v2_base + (2 if abi_version == WASM_ABI_V2_VERSION else 0)
         self.variant_id = self.helper_base + 4
         self.alloc_id = self.helper_base + 5
         self.resource_use_id = self.helper_base + 6
@@ -1144,18 +1173,18 @@ class _WasmContext:
         self.strings = _wasm_strings(program_src, frontend)
         self.string_layout, self.hp_init = _wasm_string_layout(self.strings)
         self.node_path_by_id, self.span_by_path = _wasm_source_maps(program_src, frontend, self.defs)
-        self.trust_receipt = _trust_receipt(program_src, frontend)
-        self.trust_receipt_v2 = _trust_receipt_v2(program_src, frontend)
+        self.trust_receipt = _trust_receipt(program_src, frontend, abi_version)
+        self.trust_receipt_v2 = _trust_receipt_v2(program_src, frontend, abi_version)
         graph_fns = {t[1]: {"fn": t[3]} for t in self.defs}
         self.recursive_edges = recursive_edges(graph_fns)
         self.current_fn = None
 
-def compile_wasm(program_src, frontend):
+def compile_wasm(program_src, frontend, abi_version=WASM_ABI_VERSION):
     """Compile checked LOOM to a real WebAssembly module.
     Integers use even immediates; odd values are typed heap pointers, so host decoding never guesses from pointer shape."""
     _, errs = frontend.check(frontend.parse(program_src))
     if errs: raise frontend.error("; ".join(errs))
-    ctx = _WasmContext(program_src, frontend)
+    ctx = _WasmContext(program_src, frontend, abi_version)
     if ctx.hp_init > 65536:
         raise frontend.error("wasm heap: static data exceeds the fixed 64 KiB memory page")
     ds, order = ctx.defs, ctx.order
@@ -1201,9 +1230,11 @@ def compile_wasm(program_src, frontend):
                 b"\x20\x03\x20\x02\x36\x02\x08"                              # value
                 b"\x20\x03\x20\x00\x36\x02\x0c"                              # next
                 b"\x20\x03" + _wasm_const(1) + b"\x72\x0b")                  # return tagged pointer
-    get_code = (b"\x20\x00"                                                  # if rec == 0 -> 0
-                b"\x45"
-                b"\x04\x7f"                                                  # if (result i32)
+    get_terminator_test = (b"\x45" if abi_version == WASM_ABI_VERSION
+                           else _wasm_const(_WASM_V2_EMPTY_RECORD) + b"\x46")
+    get_code = (b"\x20\x00"                                                  # if rec == terminator -> integer 0
+                + get_terminator_test
+                + b"\x04\x7f"                                                # if (result i32)
                 b"\x41\x00"
                 b"\x05"
                 b"\x20\x00" + _wasm_unptr() + b"\x28\x02\x04"                # load field-id
@@ -1254,16 +1285,17 @@ def compile_wasm(program_src, frontend):
     ar = sorted(set(apply_arities) | {a for _, a, _, _, _ in funcs} | {a for _, a, _, _, _, _ in lambda_funcs} | {1, 2, 3})  # add helper arities
     ti = {a: i for i, a in enumerate(ar)}   # arity-2 type covers $cons/get; arity-3 covers $rec
     tc = _leb_u(len(ar)) + b"".join(b"\x60" + _leb_u(a) + b"\x7f" * a + b"\x01\x7f" for a in ar)   # type: (i32*)->i32
-    bridge_base = helper_base + 12 + len(apply_arities)
+    bridge_base = ctx.bridge_base
     bridge_kind_i, bridge_value_i, bridge_utf8_i = bridge_base, bridge_base + 1, bridge_base + 2
     bridge_alloc_i, bridge_string_i = bridge_base + 3, bridge_base + 4
     bridge_cons_i, bridge_record_i, bridge_variant_i = bridge_base + 5, bridge_base + 6, bridge_base + 7
     bridge_types = (3, 1, 2, 1, 2, 2, 3, 2)
-    fc = _leb_u(len(funcs) + len(lambda_funcs) + 20 + len(apply_arities)) + b"".join(_leb_u(ti[a]) for _, a, _, _, _ in funcs) + b"".join(_leb_u(ti[a]) for _, a, _, _, _, _ in lambda_funcs) + _leb_u(ti[3]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[1]) + _leb_u(ti[1]) + _leb_u(ti[3]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[1]) + b"".join(_leb_u(ti[arity + 1]) for arity in apply_arities) + b"".join(_leb_u(ti[arity]) for arity in bridge_types)
+    v2_helper_types = (_leb_u(ti[1]) + _leb_u(ti[3])) if abi_version == WASM_ABI_V2_VERSION else b""
+    fc = _leb_u(len(funcs) + len(lambda_funcs) + 20 + len(apply_arities) + (2 if abi_version == WASM_ABI_V2_VERSION else 0)) + b"".join(_leb_u(ti[a]) for _, a, _, _, _ in funcs) + b"".join(_leb_u(ti[a]) for _, a, _, _, _, _ in lambda_funcs) + _leb_u(ti[3]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[1]) + _leb_u(ti[1]) + _leb_u(ti[3]) + _leb_u(ti[2]) + _leb_u(ti[2]) + _leb_u(ti[1]) + b"".join(_leb_u(ti[arity + 1]) for arity in apply_arities) + v2_helper_types + b"".join(_leb_u(ti[arity]) for arity in bridge_types)
     mc = _leb_u(1) + b"\x00" + _leb_u(1)                    # 1 memory, min 1 page (64 KiB heap)
     gc = (_leb_u(16)
           + b"\x7f\x01" + _wasm_const(ctx.hp_init) + b"\x0b"                       # mutable i32 $hp = static-data end
-          + b"\x7f\x00" + _wasm_const(WASM_ABI_VERSION) + b"\x0b"                  # immutable raw ABI version
+          + b"\x7f\x00" + _wasm_const(abi_version) + b"\x0b"                       # immutable raw ABI version
           + b"\x7f\x00" + _wasm_const(65536) + b"\x0b"                              # immutable raw heap limit
           + b"\x7f\x01" + _wasm_const(0) + b"\x0b"                                  # mutable raw heap bytes reserved at runtime
           + b"\x7f\x00" + _wasm_const(max(0, ctx.hp_init - 8)) + b"\x0b"             # immutable static string/data bytes
@@ -1315,7 +1347,7 @@ def compile_wasm(program_src, frontend):
         ec += _leb_u(len(name)) + name + b"\x00" + _leb_u(index + _WASM_IMPORTS)
     for i, t in enumerate(ds):
         nb = t[1].encode(); ec += _leb_u(len(nb)) + nb + b"\x00" + _leb_u(i + _WASM_IMPORTS)         # export func
-    cc = _leb_u(len(funcs) + len(lambda_funcs) + 20 + len(apply_arities))
+    cc = _leb_u(len(funcs) + len(lambda_funcs) + 20 + len(apply_arities) + (2 if abi_version == WASM_ABI_V2_VERSION else 0))
     for _, _, nloc, code, _ in funcs:
         loc = (_leb_u(1) + _leb_u(nloc) + b"\x7f") if nloc else _leb_u(0)                           # let-locals (i32)
         e = loc + code; cc += _leb_u(len(e)) + e
@@ -1393,6 +1425,27 @@ def compile_wasm(program_src, frontend):
         e = _leb_u(0) + apply_code + b"\x0b"
         cc += _leb_u(len(e)) + e
 
+    if abi_version == WASM_ABI_V2_VERSION:
+        numeric_code = (
+            b"\x20\x00" + _wasm_const(_WASM_V2_FALSE) + b"\x46\x04\x7f"
+            + _wasm_int(0) + b"\x05"
+            + b"\x20\x00" + _wasm_const(_WASM_V2_TRUE) + b"\x46\x04\x7f"
+            + _wasm_int(1) + b"\x05\x20\x00\x0b\x0b\x0b"
+        )
+        numeric_body = _leb_u(0) + numeric_code
+        cc += _leb_u(len(numeric_body)) + numeric_body
+        closure_record_code = (
+            _wasm_const(16) + b"\x10" + _leb_u(reserve_i + _WASM_IMPORTS) + b"\x21\x03"
+            + _bump_global(heap_record_g)
+            + b"\x20\x03" + _wasm_const(_WASM_K_CLOSURE) + b"\x36\x02\x00"
+            + b"\x20\x03\x20\x01\x36\x02\x04"
+            + b"\x20\x03\x20\x02\x36\x02\x08"
+            + b"\x20\x03\x20\x00\x36\x02\x0c"
+            + b"\x20\x03" + _wasm_const(1) + b"\x72\x0b"
+        )
+        closure_body = (_leb_u(1) + _leb_u(1) + b"\x7f") + closure_record_code
+        cc += _leb_u(len(closure_body)) + closure_body
+
     kind_valid_code = (
         _bridge_return_zero_if(b"\x20\x00" + _wasm_const(1) + b"\x71\x45")
         + b"\x20\x00" + _wasm_const(-2) + b"\x71\x21\x03"
@@ -1408,6 +1461,10 @@ def compile_wasm(program_src, frontend):
     value_valid_code = (
         b"\x20\x00" + _wasm_const(1) + b"\x71\x45\x04\x40" + _wasm_const(1) + b"\x0f\x0b"
         + b"\x20\x00" + _wasm_const(_WASM_NIL) + b"\x46\x04\x40" + _wasm_const(1) + b"\x0f\x0b"
+        + ((b"\x20\x00" + _wasm_const(_WASM_V2_FALSE) + b"\x46\x04\x40" + _wasm_const(1) + b"\x0f\x0b"
+            + b"\x20\x00" + _wasm_const(_WASM_V2_TRUE) + b"\x46\x04\x40" + _wasm_const(1) + b"\x0f\x0b"
+            + b"\x20\x00" + _wasm_const(_WASM_V2_EMPTY_RECORD) + b"\x46\x04\x40" + _wasm_const(1) + b"\x0f\x0b")
+           if abi_version == WASM_ABI_V2_VERSION else b"")
         + b"\x20\x00" + _wasm_const(_WASM_K_LIST) + _wasm_const(12) + b"\x10" + _leb_u(bridge_kind_i + _WASM_IMPORTS)
         + b"\x20\x00" + _wasm_const(_WASM_K_RECORD) + _wasm_const(16) + b"\x10" + _leb_u(bridge_kind_i + _WASM_IMPORTS) + b"\x72"
         + b"\x20\x00" + _wasm_const(_WASM_K_VARIANT) + _wasm_const(12) + b"\x10" + _leb_u(bridge_kind_i + _WASM_IMPORTS) + b"\x72"
@@ -1461,7 +1518,7 @@ def compile_wasm(program_src, frontend):
     bridge_record_code = (
         _bridge_trap_if(b"\x20\x00" + _wasm_const(len(fields)) + b"\x4f")
         + _bridge_trap_if(b"\x20\x01\x10" + _leb_u(bridge_value_i + _WASM_IMPORTS) + b"\x45")
-        + _bridge_chain_validation(2, 3, 4, 0, _WASM_K_RECORD, 16, 12, bridge_kind_i)
+        + _bridge_chain_validation(2, 3, 4, _wasm_empty_record(ctx), _WASM_K_RECORD, 16, 12, bridge_kind_i)
         + b"\x20\x02\x20\x00\x20\x01\x10" + _leb_u(rec_i + _WASM_IMPORTS) + b"\x0b"
     )
     e = (_leb_u(1) + _leb_u(2) + b"\x7f") + bridge_record_code
@@ -1496,12 +1553,12 @@ def compile_wasm(program_src, frontend):
     bridge_custom = _leb_u(len(_COMPONENT_BRIDGE_SECTION_NAME)) + _COMPONENT_BRIDGE_SECTION_NAME + bridge_payload
     return prefix + _sec(0, bridge_custom) + suffix
 
-def emit_wat(program_src, frontend):
+def emit_wat(program_src, frontend, abi_version=WASM_ABI_VERSION):
     """Human-readable WebAssembly Text (the 'assembler') for what compile_wasm encodes to bytes:
     tagged integers plus typed list/record/variant/closure/effect objects on a linear-memory heap."""
     _, errs = frontend.check(frontend.parse(program_src))
     if errs: raise frontend.error("; ".join(errs))
-    ctx = _WasmContext(program_src, frontend)
+    ctx = _WasmContext(program_src, frontend, abi_version)
     if ctx.hp_init > 65536:
         raise frontend.error("wasm heap: static data exceeds the fixed 64 KiB memory page")
     ds, order = ctx.defs, ctx.order
@@ -1530,11 +1587,17 @@ def emit_wat(program_src, frontend):
         def depth_take():
             uses_heap[0] = True
             return [ind + "global.get $__loom_depth_frame", ind + "call $__loom_depth_take", ind + "drop"]
+        def numeric(lines):
+            return lines + ([ind + "call $__loom_numeric"] if abi_version == WASM_ABI_V2_VERSION else [])
+        def tag_bool():
+            return ([ind + "i32.const 2", ind + "i32.shl", ind + "i32.const 1", ind + "i32.add"]
+                    if abi_version == WASM_ABI_V2_VERSION else [ind + "i32.const 1", ind + "i32.shl"])
         if isinstance(node, int): return [ind + "i32.const " + str(node << 1) + "  ;; int " + str(node)]
         if _is_symbol(node):
             if node in ctx.topdefs:
                 spec = ctx.topdefs[node]
-                return w(["record", ["code", spec["id"]]], ind, handled_effs, with_handlers, callable_env)
+                form = "closure-record" if abi_version == WASM_ABI_V2_VERSION else "record"
+                return w([form, ["code", spec["id"]]], ind, handled_effs, with_handlers, callable_env)
             return [ind + "local.get $" + node]
         if type(node) is str:
             uses_heap[0] = True
@@ -1544,31 +1607,32 @@ def emit_wat(program_src, frontend):
             error = asm_validation_error(node)
             if error: raise frontend.error(error)
             spec = asm_metadata(node)
-            rhs = w(node[4], ind, handled_effs, with_handlers, callable_env, child_path(4))
+            lhs = numeric(w(node[3], ind, handled_effs, with_handlers, callable_env, child_path(3)))
+            rhs = numeric(w(node[4], ind, handled_effs, with_handlers, callable_env, child_path(4)))
             if spec["wasm_rhs"] == "unbox_i31":
                 rhs += [ind + "i32.const 1", ind + "i32.shr_s"]
-            out = (w(node[3], ind, handled_effs, with_handlers, callable_env, child_path(3))
-                   + rhs + [ind + spec["wat_opcode"] + "  ;; checked asm " + str(node[1]) + " " + str(node[2])])
+            out = lhs + rhs + [ind + spec["wat_opcode"] + "  ;; checked asm " + str(node[1]) + " " + str(node[2])]
             if spec["wasm_result"] == "tag_i31":
-                out += [ind + "i32.const 1", ind + "i32.shl"]
+                out += tag_bool() if spec["result"] == "bool-i31" else [ind + "i32.const 1", ind + "i32.shl"]
             return out
         if h == "fn":
             spec = ctx.closures.get(id(node))
             if spec is None: raise frontend.error("wat: missing closure spec")
             uses_heap[0] = True
             rec = [["code", spec["id"]]] + [[f"e{i}", cap] for i, cap in enumerate(spec["captures"])]
-            return w(["record"] + rec, ind, handled_effs, with_handlers, callable_env)
+            form = "closure-record" if abi_version == WASM_ABI_V2_VERSION else "record"
+            return w([form] + rec, ind, handled_effs, with_handlers, callable_env)
         if h in ("+", "*"):
-            o = w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1))
+            o = numeric(w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)))
             for i, a in enumerate(node[2:], 2):
-                o += w(a, ind, handled_effs, with_handlers, callable_env, child_path(i))
+                o += numeric(w(a, ind, handled_effs, with_handlers, callable_env, child_path(i)))
                 if h == "*": o += [ind + "i32.const 1", ind + "i32.shr_s"]
                 o += [ind + _OP[h]]
             return o
-        if h == "-": return w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + w(node[2], ind, handled_effs, with_handlers, callable_env, child_path(2)) + [ind + _OP[h]]
-        if h in ("=", "<", ">"): return w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + w(node[2], ind, handled_effs, with_handlers, callable_env, child_path(2)) + [ind + _OP[h], ind + "i32.const 1", ind + "i32.shl"]
+        if h == "-": return numeric(w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1))) + numeric(w(node[2], ind, handled_effs, with_handlers, callable_env, child_path(2))) + [ind + _OP[h]]
+        if h in ("=", "<", ">"): return numeric(w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1))) + numeric(w(node[2], ind, handled_effs, with_handlers, callable_env, child_path(2))) + [ind + _OP[h]] + tag_bool()
         if h == "if":
-            return (w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + [ind + "if (result i32)"] + w(node[2], ind + "  ", handled_effs, with_handlers, callable_env, child_path(2))
+            return (numeric(w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1))) + [ind + "if (result i32)"] + w(node[2], ind + "  ", handled_effs, with_handlers, callable_env, child_path(2))
                     + [ind + "else"] + w(node[3], ind + "  ", handled_effs, with_handlers, callable_env, child_path(3)) + [ind + "end"])
         if h == "let":
             bind_path = child_path(1)
@@ -1644,7 +1708,7 @@ def emit_wat(program_src, frontend):
                 return meter_take("Alloc") + w(with_handlers["Alloc"], ind, handled_effs, with_handlers, callable_env) + w(node[1] if len(node) > 1 else 0, ind, handled_effs, with_handlers, callable_env, child_path(1) if len(node) > 1 else None) + [ind + "call $apply1"]
             if len(node) == 1:
                 return [ind + "i32.const 3  ;; effect Alloc", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end"] + meter_take("Alloc") + [ind + "i32.const " + str(_WASM_NIL)]
-            return [ind + "i32.const 3  ;; effect Alloc", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end"] + meter_take("Alloc") + w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + [ind + "i32.const 0", ind + "call $alloc  ;; alloc list cells from alloc" + _wat_at(ctx, path)]
+            return [ind + "i32.const 3  ;; effect Alloc", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end"] + meter_take("Alloc") + numeric(w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1))) + [ind + "i32.const 0", ind + "call $alloc  ;; alloc list cells from alloc" + _wat_at(ctx, path)]
         transparent_body = _wasm_transparent_body(frontend, node)
         if transparent_body is not None:
             return seq(transparent_body)
@@ -1659,14 +1723,15 @@ def emit_wat(program_src, frontend):
         if h == "use":
             uses_heap[0] = True
             return [ind + "i32.const " + str(ctx.resources[node[1]]) + "  ;; resource " + node[1], ind + "call $resuse  ;; alloc resource-use marker" + _wat_at(ctx, path)]
-        if h == "record":
+        if h in ("record", "closure-record"):
             uses_heap[0] = True
             items = [fld for fld in node[1:] if isinstance(fld, list) and len(fld) >= 2]
-            out = [ind + "i32.const 0"]
+            out = [ind + "i32.const " + str(_wasm_empty_record(ctx))]
+            helper = "$closrec" if h == "closure-record" else "$rec"
             for fld in reversed(items):
                 fld_path = ctx.node_path_by_id.get(id(fld))
                 val_path = fld_path + (1,) if fld_path is not None else None
-                out = out + [ind + "i32.const " + str(fields[fld[0]]) + "  ;; field " + str(fld[0])] + w(fld[1], ind, handled_effs, with_handlers, callable_env, val_path) + [ind + "call $rec  ;; alloc record field " + str(fld[0]) + _wat_at(ctx, fld_path)]
+                out = out + [ind + "i32.const " + str(fields[fld[0]]) + "  ;; field " + str(fld[0])] + w(fld[1], ind, handled_effs, with_handlers, callable_env, val_path) + [ind + "call " + helper + "  ;; alloc record field " + str(fld[0]) + _wat_at(ctx, fld_path)]
             return out
         if h == "get":
             uses_heap[0] = True
@@ -1678,7 +1743,7 @@ def emit_wat(program_src, frontend):
         if h == "cons": uses_heap[0] = True; return w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + w(node[2], ind, handled_effs, with_handlers, callable_env, child_path(2)) + [ind + "call $cons  ;; alloc cons cell" + _wat_at(ctx, path)]
         if h == "head": uses_heap[0] = True; return w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + [ind + "i32.const -2", ind + "i32.and", ind + "i32.load offset=4"]
         if h == "tail": uses_heap[0] = True; return w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + [ind + "i32.const -2", ind + "i32.and", ind + "i32.load offset=8"]
-        if h == "empty": return w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + [ind + "i32.const " + str(_WASM_NIL), ind + "i32.eq", ind + "i32.const 1", ind + "i32.shl"]
+        if h == "empty": return w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + [ind + "i32.const " + str(_WASM_NIL), ind + "i32.eq"] + tag_bool()
         if h == "variant":
             uses_heap[0] = True
             return [ind + "i32.const " + str(tags[node[1]]) + "  ;; tag " + node[1]] + w(node[2], ind, handled_effs, with_handlers, callable_env, child_path(2)) + [ind + "call $variant  ;; alloc variant " + node[1] + _wat_at(ctx, path)]
@@ -1755,7 +1820,15 @@ def emit_wat(program_src, frontend):
              "  ;; receipt_v2=" + receipt_v2_json,
              "  ;; custom section loom.component-bridge.v0: exact bounded heap-ingress evidence",
              "  ;; bridge exports are emitted by the binary backend; see docs/component_bridge_v0.md",
-             "  (global $loom_abi_version i32 (i32.const " + str(WASM_ABI_VERSION) + "))",
+             '  (import "env" "push_handler" (func $push_handler (param i32 i32) (result i32)))',
+             '  (import "env" "pop_handler" (func $pop_handler (param i32) (result i32)))',
+             '  (import "env" "current_handler" (func $current_handler (param i32) (result i32)))',
+             '  (import "env" "host_print" (func $host_print (param i32) (result i32)))',
+             '  (import "env" "push_caps" (func $push_caps (param i32) (result i32)))',
+             '  (import "env" "pop_caps" (func $pop_caps (result i32)))',
+             '  (import "env" "has_cap" (func $has_cap (param i32) (result i32)))',
+             '  (import "env" "host_ffi" (func $host_ffi (param i32 i32 i32) (result i32)))',
+             "  (global $loom_abi_version i32 (i32.const " + str(abi_version) + "))",
              "  (global $loom_heap_limit i32 (i32.const 65536))",
              "  (global $loom_heap_used (mut i32) (i32.const 0))",
              "  (global $loom_heap_static_used i32 (i32.const " + str(max(0, ctx.hp_init - 8)) + "))",
@@ -1849,7 +1922,8 @@ def emit_wat(program_src, frontend):
                   "    local.get $t  i32.const 1  i32.or)",
                   "  (func $get (param $rec i32) (param $fid i32) (result i32)",
                   "    local.get $rec",
-                  "    i32.eqz",
+                  "    i32.const " + str(_wasm_empty_record(ctx)),
+                  "    i32.eq",
                   "    if (result i32)",
                   "      i32.const 0",
                   "    else",
@@ -1866,7 +1940,25 @@ def emit_wat(program_src, frontend):
                   "        local.get $fid",
                   "        call $get",
                   "      end",
-                  "    end)",
+                  "    end)"]
+        if abi_version == WASM_ABI_V2_VERSION:
+            lines += ["  (func $__loom_numeric (param $v i32) (result i32)",
+                      "    local.get $v  i32.const 1  i32.eq",
+                      "    if (result i32)",
+                      "      i32.const 0",
+                      "    else",
+                      "      local.get $v  i32.const 5  i32.eq",
+                      "      if (result i32)  i32.const 2  else  local.get $v  end",
+                      "    end)",
+                      "  (func $closrec (param $next i32) (param $fid i32) (param $val i32) (result i32) (local $t i32)",
+                      "    i32.const 16  call $reserve  local.set $t",
+                      "    global.get $loom_heap_records  i32.const 1  i32.add  global.set $loom_heap_records",
+                      "    local.get $t  i32.const 7  i32.store  ;; closure kind",
+                      "    local.get $t  local.get $fid  i32.store offset=4",
+                      "    local.get $t  local.get $val  i32.store offset=8",
+                      "    local.get $t  local.get $next  i32.store offset=12",
+                      "    local.get $t  i32.const 1  i32.or)"]
+        lines += [
                   "  (func $cons (param $v i32) (param $rest i32) (result i32) (local $t i32)",
                   "    i32.const 12  call $reserve  local.set $t",
                   "    global.get $loom_heap_lists  i32.const 1  i32.add  global.set $loom_heap_lists",
@@ -1914,14 +2006,6 @@ def emit_wat(program_src, frontend):
             lines += ['  (data (i32.const ' + str(spec["obj"]) + ") " + _wat_bytes(_wasm_i32(_WASM_K_STRING) + _wasm_i32(len(spec["bytes"])) + _wasm_i32(spec["data"])) + ")"]
             if spec["bytes"]:
                 lines += ['  (data (i32.const ' + str(spec["data"]) + ") " + _wat_bytes(spec["bytes"]) + ")"]
-    lines += ['  (import "env" "push_handler" (func $push_handler (param i32 i32) (result i32)))',
-              '  (import "env" "pop_handler" (func $pop_handler (param i32) (result i32)))',
-              '  (import "env" "current_handler" (func $current_handler (param i32) (result i32)))',
-              '  (import "env" "host_print" (func $host_print (param i32) (result i32)))',
-              '  (import "env" "push_caps" (func $push_caps (param i32) (result i32)))',
-              '  (import "env" "pop_caps" (func $pop_caps (result i32)))',
-              '  (import "env" "has_cap" (func $has_cap (param i32) (result i32)))',
-              '  (import "env" "host_ffi" (func $host_ffi (param i32 i32 i32) (result i32)))']
     if order:
         def _apply_cases(cases, indent, arity):
             if not cases: return [indent + "unreachable"]
@@ -1942,7 +2026,7 @@ def emit_wat(program_src, frontend):
     for b in bodies: lines += b
     return "\n".join(lines + [")"])
 
-def run_wasm(program_src, call_src, frontend):
+def run_wasm(program_src, call_src, frontend, abi_version=WASM_ABI_VERSION):
     """Compile to wasm bytes, run via node's built-in WebAssembly, and decode the observable result. Needs node."""
     import subprocess, json as _json
     def _norm(v):
@@ -1964,14 +2048,17 @@ def run_wasm(program_src, call_src, frontend):
     fields_json = _json.dumps({str(v): k for k, v in _wasm_fields(program_src, frontend, capture_slots).items()})
     resources_json = _json.dumps({str(v): k for k, v in _wasm_resources(program_src, frontend).items()})
     foreigns_json = _json.dumps({str(v): k for k, v in _wasm_foreigns(program_src, frontend).items()})
-    wasm_bytes = compile_wasm(program_src, frontend)
-    verification = verify_trust_receipt(program_src, wasm_bytes, frontend)
+    wasm_bytes = compile_wasm(program_src, frontend, abi_version)
+    verification = verify_trust_receipt(program_src, wasm_bytes, frontend, abi_version)
     if not verification["valid"]:
         raise frontend.error("node-wasm: invalid trust receipt: " + "; ".join(verification["findings"]))
-    verification_v2 = verify_trust_receipt_v2(program_src, wasm_bytes, frontend)
+    verification_v2 = verify_trust_receipt_v2(program_src, wasm_bytes, frontend, abi_version)
     if not verification_v2["valid"]:
         raise frontend.error("node-wasm: invalid trust receipt v2: " + "; ".join(verification_v2["findings"]))
     arr = ",".join(str(b) for b in wasm_bytes)
+    v2_immediates = "if(v===1)return false;if(v===5)return true;if(v===7)return {};" if abi_version == WASM_ABI_V2_VERSION else ""
+    record_terminator = _WASM_V2_EMPTY_RECORD if abi_version == WASM_ABI_V2_VERSION else 0
+    v2_closure = "if(k===7){const o={};let q=v,n=0;while(q!==7){const r=__raw(q);if((q&1)!==1||!__valid(r,16)||__rd(r)!==7||n++>2048)throw new Error('invalid closure');const f=__rd(r+4);o[__fields[f]??String(f)]=__dec(__rd(r+8));q=__rd(r+12);}return {'$closure':o};}" if abi_version == WASM_ABI_V2_VERSION else ""
     js = ("const __out=[]; const __hs=[[],[],[],[]]; const __caps=[]; let __mem=null; const __rd=(p)=>__mem.getInt32(p,true); const __td=new TextDecoder();"
           "const __tags=" + tags_json + "; const __fields=" + fields_json + "; const __resources=" + resources_json + "; const __foreigns=" + foreigns_json + ";"
           "let __dec=(v)=>((Number.isInteger(v)&&(v&1)===0)?(v>>1):v);"
@@ -1986,18 +2073,19 @@ def run_wasm(program_src, call_src, frontend):
           "const __imports={env:{push_handler:__push,pop_handler:__pop,current_handler:__cur,host_print:(x)=>{__out.push(String(__dec(x)));return x|0;},push_caps:__push_caps,pop_caps:__pop_caps,has_cap:__has_cap,host_ffi:(id,args,silent)=>__ffi(id|0,args|0,silent|0)}};"
           "WebAssembly.instantiate(new Uint8Array([" + arr + "]), __imports)"
           ".then(m=>{__mem=m.instance.exports.memory ? new DataView(m.instance.exports.memory.buffer) : null;"
-          "const __abi=m.instance.exports.loom_abi_version;if(!__abi||__abi.value!==" + str(WASM_ABI_VERSION) + ")throw new Error('unsupported LOOM WASM ABI');"
+          "const __abi=m.instance.exports.loom_abi_version;if(!__abi||__abi.value!==" + str(abi_version) + ")throw new Error('unsupported LOOM WASM ABI');"
           "const __raw=(v)=>v&-2; const __valid=(p,n)=>p>=8&&p+n<=__mem.byteLength;"
           "__dec=(v)=>{"
-          "if(!Number.isInteger(v)) return v; if((v&1)===0) return v>>1; if(v===3) return [];"
-          "const p=__raw(v); if(!__valid(p,12)) throw new Error('invalid tagged pointer '+v); const k=__rd(p);"
+          "if(!Number.isInteger(v)) return v; if((v&1)===0) return v>>1;" + v2_immediates
+          + "if(v===3) return [];"
+          + "const p=__raw(v); if(!__valid(p,12)) throw new Error('invalid tagged pointer '+v); const k=__rd(p);"
           "if(k===1){const xs=[];let q=v,n=0;while(q!==3){const r=__raw(q);if((q&1)!==1||!__valid(r,12)||__rd(r)!==1||n++>2048)throw new Error('invalid list');xs.push(__dec(__rd(r+4)));q=__rd(r+8);}return xs;}"
-          "if(k===2){const o={};let q=v,n=0;while(q!==0){const r=__raw(q);if((q&1)!==1||!__valid(r,16)||__rd(r)!==2||n++>2048)throw new Error('invalid record');const f=__rd(r+4);o[__fields[f]??String(f)]=__dec(__rd(r+8));q=__rd(r+12);}return o;}"
+          "if(k===2){const o={};let q=v,n=0;while(q!==" + str(record_terminator) + "){const r=__raw(q);if((q&1)!==1||!__valid(r,16)||__rd(r)!==2||n++>2048)throw new Error('invalid record');const f=__rd(r+4);o[__fields[f]??String(f)]=__dec(__rd(r+8));q=__rd(r+12);}return o;}"
           "if(k===3){const t=__rd(p+4);return [__tags[t]??String(t),__dec(__rd(p+8))];}"
           "if(k===4)return [__eff_name(__rd(p+4)),__dec(__rd(p+8))];"
           "if(k===5)return '<used:' + (__resources[__rd(p+4)]??String(__rd(p+4))) + '>';"
-          "if(k===6){const n=__rd(p+4),d=__rd(p+8);return __td.decode(new Uint8Array(__mem.buffer,d,n));}"
-          "throw new Error('unknown heap kind '+k);};"
+          "if(k===6){const n=__rd(p+4),d=__rd(p+8);return __td.decode(new Uint8Array(__mem.buffer,d,n));}" + v2_closure
+          + "throw new Error('unknown heap kind '+k);};"
           "const __v=__dec(m.instance.exports[" + repr(name) + "](" + ",".join(str(a << 1) for a in args) + "));"
           "console.log('__VAL__'+JSON.stringify(__v));console.log('__OUT__'+JSON.stringify(__out));})"
           ".catch(e=>{console.error(String(e));process.exit(1)})")

@@ -225,6 +225,7 @@ def build_about(frontend):
         "language": "LOOM",
         "citadel_checks": meta.get("citadel_checks"),
         "wasm_abi_version": meta.get("wasm_abi_version"),
+        "wasm_abi_versions": list(meta.get("wasm_abi_versions", [meta.get("wasm_abi_version")])),
         "i31_bits": meta.get("i31_bits"),
         "backends": list(meta.get("backends", [])),
         "commands": list(meta.get("commands", [])),

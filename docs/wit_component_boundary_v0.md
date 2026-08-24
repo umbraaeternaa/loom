@@ -4,23 +4,24 @@ Status: implemented, normative, deterministic, content-addressed,
 non-executable, and non-authorizing.
 
 WIT Component Boundary v0 is the first explicit boundary between a checked LOOM
-core WebAssembly module and the WebAssembly Component Model. It preserves
-LOOM WASM ABI v1 unchanged. It does not relabel the existing tagged-`i32`
+core WebAssembly module and the WebAssembly Component Model. It supports an
+explicit LOOM WASM ABI profile while preserving ABI v1 unchanged. It does not relabel a tagged-`i32`
 module as a component and does not claim that a Canonical ABI adapter exists.
 
 ## Public API
 
 ~~~python
 loom.build_wit_component_boundary_v0(
-    source, wasm_bytes, package, world, exports=None,
+    source, wasm_bytes, package, world, exports=None, abi_version=1,
 )
 
 loom.verify_wit_component_boundary_v0(
-    boundary, source, wasm_bytes, package, world, exports=None,
+    boundary, source, wasm_bytes, package, world, exports=None, abi_version=1,
 )
 ~~~
 
-The builder returns `loom-wit-component-boundary-validation/v0`. A successful
+`abi_version` accepts the closed profiles `1` and `2`; every other value fails
+closed. The builder returns `loom-wit-component-boundary-validation/v0`. A successful
 result contains one `loom-wit-component-boundary/v0` artifact. The verifier
 rebuilds that artifact from all exact inputs and compares it closed.
 
@@ -47,7 +48,8 @@ Boundary v0 exports checked top-level `defx` functions only when all of these
 conditions hold:
 
 1. the complete LOOM source passes the checker;
-2. supplied WASM bytes are byte-identical to deterministic `compile_wasm` output;
+2. supplied WASM bytes are byte-identical to deterministic compiler output for
+   the explicitly selected ABI profile;
 3. both `loom.trust.v1` and `loom.trust.v2` receipts verify;
 4. the selected function has no declared, performed, or required effect other
    than optional `Pure`;
@@ -135,7 +137,8 @@ granted, that Canonical ABI lifting succeeded, or that any code executed.
 ## Next boundary
 
 The next additive contract is an independently verifiable adapter artifact:
-it must implement the bounded JSON transport, bridge LOOM ABI v1 to Canonical
+it must implement the bounded JSON transport, bridge collision-free LOOM
+Tagged Value ABI v2 to Canonical
 ABI memory, package a real component binary, and bind its bytes back to this
 boundary. Effect-to-WASI projection remains a later explicit gate. Neither
 step may mutate this v0 schema or infer authority from a valid boundary.

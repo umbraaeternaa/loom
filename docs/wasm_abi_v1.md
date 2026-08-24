@@ -2,6 +2,10 @@
 
 Status: normative for modules emitted by `compile_wasm`.
 
+ABI v1 remains the byte-compatible default. The opt-in
+[`Tagged Value ABI v2`](wasm_abi_v2.md) removes value-identity collisions for
+component transport; it is a separate profile and does not reinterpret v1.
+
 The binary module exports the immutable raw `i32` global
 `loom_abi_version`. A v1 host must require its value to be exactly `1`
 before calling a LOOM function or decoding linear memory.
