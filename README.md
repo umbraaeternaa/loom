@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 501 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 502 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 501/501 citadel checks
+PASS — 502/502 citadel checks
 ```
 
 ## The idea in one screen
@@ -201,6 +201,12 @@ an exact ABI v2 core, deny-by-trap environment, and generated adapter into a
 real zero-import WebAssembly Component. Its one-shot canonical JSON transport
 is independently unbundled, rehashed, WIT-checked, and invoked with pinned
 Wasmtime; verification remains evidence, never execution authorization.
+[`Signed Reproducible Component Release Attestation v0`](docs/component_release_attestation_v0.md)
+then rebuilds the repository-owned Rust builder twice from frozen offline
+sources, requires byte-identical builders and Components, and binds that
+evidence into an externally signed DSSE/in-toto release statement. It remains
+host-only, non-authorizing, and explicit that v0 makes no cross-platform or
+SLSA-level claim.
 
 Certified recursion can also use [`Proven Value Bounds v1`](docs/proven_value_bounds_v1.md):
 the checker derives conservative i31 and list-length upper bounds through

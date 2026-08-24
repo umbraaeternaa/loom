@@ -28,6 +28,7 @@ WASM_EQUIVALENCE_DOC = ROOT / "docs" / "wasm_source_equivalence_v1.md"
 WIT_COMPONENT_DOC = ROOT / "docs" / "wit_component_boundary_v0.md"
 COMPONENT_BRIDGE_DOC = ROOT / "docs" / "component_bridge_v0.md"
 COMPONENT_ADAPTER_DOC = ROOT / "docs" / "component_adapter_v0.md"
+COMPONENT_RELEASE_ATTESTATION_DOC = ROOT / "docs" / "component_release_attestation_v0.md"
 COMPILER_PROVENANCE_DOC = ROOT / "docs" / "compiler_provenance_v1.md"
 COMPILER_EVIDENCE_DOC = ROOT / "docs" / "gate_compiler_evidence_v1.md"
 COMPILER_EVIDENCE_V2_DOC = ROOT / "docs" / "gate_compiler_evidence_v2.md"
@@ -51,7 +52,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "501-component-adapter-v0")',
+        'bundleUrl.searchParams.set("v", "502-component-release-attestation-v0")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -153,10 +154,12 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "501 self-verifying checks",
-        ">501</div>",
+        "502 self-verifying checks",
+        ">502</div>",
     )
     forbidden = (
+        "501 self-verifying checks",
+        ">501</div>",
         "499 self-verifying checks",
         ">499</div>",
         "498 self-verifying checks",
@@ -671,6 +674,47 @@ def _check_component_adapter() -> None:
     ):
         if not path.is_file():
             raise SystemExit("docs parity: Component Adapter implementation input is absent: " + str(path))
+
+
+def _check_component_release_attestation() -> None:
+    words = " ".join(COMPONENT_RELEASE_ATTESTATION_DOC.read_text().split())
+    required = (
+        "LOOM Signed Reproducible Component Release Attestation v0",
+        "loom.build_component_release_reproducibility_v0(",
+        "loom.verify_component_release_reproducibility_v0(",
+        "loom.prepare_component_release_attestation_v0(",
+        "loom.build_component_release_attestation_v0(",
+        "loom.verify_component_release_attestation_v0(",
+        "loom-component-release-reproducibility/v0",
+        "https://in-toto.io/Statement/v1",
+        "https://umbraaeternaa.github.io/loom/attestation/component-release/v0",
+        "application/vnd.in-toto+json",
+        "cross_platform_claim: false",
+        "slsa_level_claim: none",
+        "authorization: none",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: Component release attestation drift: missing " + ", ".join(missing))
+    import loom as modular
+    spec = importlib.util.spec_from_file_location("loom_release_standalone", DOCS_LOOM)
+    if spec is None or spec.loader is None:
+        raise SystemExit("docs parity: could not load standalone Component release boundary")
+    standalone = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(standalone)
+    names = (
+        "build_component_release_reproducibility_v0",
+        "verify_component_release_reproducibility_v0",
+        "prepare_component_release_attestation_v0",
+        "build_component_release_attestation_v0",
+        "verify_component_release_attestation_v0",
+    )
+    if any(not hasattr(modular, name) for name in names):
+        raise SystemExit("docs parity: modular Component release surface is incomplete")
+    if any(hasattr(standalone, name) for name in names):
+        raise SystemExit("docs parity: host-only Component release surface leaked into standalone")
+    if not (ROOT / "loom_component_release.py").is_file():
+        raise SystemExit("docs parity: Component release implementation module is absent")
 
 
 def _check_compiler_provenance_doc() -> None:
@@ -1770,6 +1814,7 @@ def main() -> int:
     _check_wit_component_boundary()
     _check_component_bridge()
     _check_component_adapter()
+    _check_component_release_attestation()
     _check_compiler_provenance_doc()
     _check_compiler_evidence_doc()
     _check_compiler_evidence_v2_doc()

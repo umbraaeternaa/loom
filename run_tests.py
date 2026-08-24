@@ -2724,7 +2724,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             "actions_observed": ["read", "write", "test", "git-commit"],
             "evidence": [
                 {"kind": "syntax", "status": "pass", "detail": "PASS syntax"},
-                {"kind": "citadel", "status": "pass", "detail": "501/501"},
+                {"kind": "citadel", "status": "pass", "detail": "502/502"},
                 {"kind": "docs-parity", "status": "pass", "detail": "PASS docs parity"},
                 {"kind": "git-clean", "status": "pass", "detail": "clean"},
                 {"kind": "git-sync", "status": "pass", "detail": "HEAD == origin/main"},
@@ -5730,6 +5730,140 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             print("       action-attestation diagnostics:", json.dumps(action_attestation_diagnostics, sort_keys=True))
         ok += action_attestation_v0_ok
         print(f"  {'ok  ' if action_attestation_v0_ok else 'FAIL'} gate: Action Result Attestation v0")
+        try:                                           # signed reproducible Component release: clean source -> builder -> Component -> DSSE
+            release_api_names = (
+                "build_component_release_reproducibility_v0",
+                "verify_component_release_reproducibility_v0",
+                "prepare_component_release_attestation_v0",
+                "build_component_release_attestation_v0",
+                "verify_component_release_attestation_v0",
+            )
+            if not hasattr(_loom, release_api_names[0]):
+                component_release_v0_ok = (
+                    Path(_loom.__file__).parent.name == "docs"
+                    and all(not hasattr(_loom, name) for name in release_api_names)
+                )
+            else:
+                default_rust = Path.home() / ".rustup" / "toolchains" / "stable-aarch64-apple-darwin" / "bin"
+                cargo_path = Path(os.environ.get(
+                    "LOOM_CARGO", shutil.which("cargo") or default_rust / "cargo",
+                ))
+                rustc_path = Path(os.environ.get(
+                    "LOOM_RUSTC", shutil.which("rustc") or default_rust / "rustc",
+                ))
+                default_cargo_home = Path("/Users/macbook/codex/toolchains/loom-component/cargo")
+                if not default_cargo_home.is_dir():
+                    default_cargo_home = Path.home() / ".cargo"
+                cargo_home = Path(os.environ.get("LOOM_COMPONENT_CARGO_HOME", default_cargo_home))
+                builder_source_root = component_root / "tools" / "loom-component-builder"
+                release_kwargs = {
+                    "builder_source_root": builder_source_root,
+                    "cargo_executable": cargo_path,
+                    "rustc_executable": rustc_path,
+                    "cargo_home": cargo_home,
+                    "wasm_tools_executable": wasm_tools,
+                    "wasmtime_executable": wasmtime,
+                }
+                release_build = _loom.build_component_release_reproducibility_v0(
+                    adapter_boundary, adapter_source, adapter_core, adapter_package,
+                    adapter_world, adapter_exports, **release_kwargs,
+                )
+                release_name, release_version, release_time = "loom-adapter-test", "0.3.0-v0", 1787520000000
+                prepared_release = _loom.prepare_component_release_attestation_v0(
+                    release_build.get("evidence"), release_build.get("component"),
+                    release_name, release_version, test_key, release_time,
+                )
+                release_signing = base64.b64decode(prepared_release["signing_bytes"])
+                release_signature = base64.b64encode(sign_bytes(release_signing)).decode("ascii")
+                signed_release = _loom.build_component_release_attestation_v0(
+                    release_build["evidence"], release_build["component"],
+                    release_name, release_version, test_key, release_time,
+                    release_signature,
+                )
+                verified_release = _loom.verify_component_release_attestation_v0(
+                    signed_release["envelope"], release_build["evidence"],
+                    release_build["component"], adapter_boundary, adapter_source,
+                    adapter_core, adapter_package, adapter_world, adapter_exports,
+                    release_name, release_version, test_key, **release_kwargs,
+                )
+                tampered_release_envelope = copy.deepcopy(signed_release["envelope"])
+                tampered_release_payload = bytearray(base64.b64decode(tampered_release_envelope["payload"]))
+                tampered_release_payload[-2] ^= 1
+                tampered_release_envelope["payload"] = base64.b64encode(tampered_release_payload).decode("ascii")
+                rejected_release_signature = _loom.verify_component_release_attestation_v0(
+                    tampered_release_envelope, release_build["evidence"],
+                    release_build["component"], adapter_boundary, adapter_source,
+                    adapter_core, adapter_package, adapter_world, adapter_exports,
+                    release_name, release_version, test_key, **release_kwargs,
+                )
+                tampered_release_evidence = copy.deepcopy(release_build["evidence"])
+                tampered_release_evidence["equality"]["builder_bytes"] = False
+                evidence_body = dict(tampered_release_evidence)
+                evidence_body.pop("evidence_sha256")
+                tampered_release_evidence["evidence_sha256"] = hashlib.sha256(json.dumps(
+                    evidence_body, ensure_ascii=True, sort_keys=True,
+                    separators=(",", ":"), allow_nan=False,
+                ).encode()).hexdigest()
+                rejected_release_evidence = _loom.prepare_component_release_attestation_v0(
+                    tampered_release_evidence, release_build["component"],
+                    release_name, release_version, test_key, release_time,
+                )
+                rejected_release_tool = _loom.build_component_release_reproducibility_v0(
+                    adapter_boundary, adapter_source, adapter_core, adapter_package,
+                    adapter_world, adapter_exports,
+                    **dict(release_kwargs, cargo_executable="/usr/bin/true"),
+                )
+                release_statement = prepared_release["statement"]
+                release_predicate = release_statement["predicate"]
+                component_release_v0_ok = (
+                    release_build["valid"] and release_build["authorization"] == "none"
+                    and release_build["evidence"]["schema"] == "loom-component-release-reproducibility/v0"
+                    and release_build["evidence"]["equality"] == {
+                        "builder_bytes": True, "artifact_json": True, "component_bytes": True,
+                    }
+                    and release_build["evidence"]["builds"][0]["builder_sha256"]
+                    == release_build["evidence"]["builds"][1]["builder_sha256"]
+                    and release_build["evidence"]["lifecycle"] == {
+                        "clean_builds": 2, "network": "offline", "cargo_lock": "frozen",
+                        "cross_platform_claim": False, "slsa_level_claim": "none",
+                        "authorization": "none",
+                    }
+                    and prepared_release["valid"] and signed_release["valid"]
+                    and verified_release["valid"] and verified_release["authorization"] == "none"
+                    and release_signing.startswith(b"DSSEv1 28 application/vnd.in-toto+json ")
+                    and release_statement["_type"] == "https://in-toto.io/Statement/v1"
+                    and release_statement["predicateType"]
+                    == "https://umbraaeternaa.github.io/loom/attestation/component-release/v0"
+                    and [subject["name"] for subject in release_statement["subject"]] == [
+                        "loom-adapter-test-0.3.0-v0.component.wasm",
+                        "loom-component-adapter-artifact-v0.json",
+                        "loom-component-release-reproducibility-v0.json",
+                        "loom-component-builder",
+                    ]
+                    and release_predicate["reproducibility_sha256"]
+                    == release_build["evidence"]["evidence_sha256"]
+                    and release_predicate["lifecycle"]["authorization"] == "none"
+                    and not rejected_release_signature["valid"]
+                    and any(item["code"] == "invalid-release-signature" for item in rejected_release_signature["findings"])
+                    and not rejected_release_evidence["valid"]
+                    and any(item["code"] == "reproducibility-not-proven" for item in rejected_release_evidence["findings"])
+                    and not rejected_release_tool["valid"]
+                    and any(item["code"] == "component-release-build-rejected" for item in rejected_release_tool["findings"])
+                )
+                if not component_release_v0_ok:
+                    print("       component-release diagnostics:", json.dumps({
+                        "build": {"valid": release_build.get("valid"), "findings": release_build.get("findings")},
+                        "prepared": {"valid": prepared_release.get("valid"), "findings": prepared_release.get("findings")},
+                        "signed": {"valid": signed_release.get("valid"), "findings": signed_release.get("findings")},
+                        "verified": {"valid": verified_release.get("valid"), "findings": verified_release.get("findings")},
+                        "tampered_signature": rejected_release_signature.get("findings"),
+                        "tampered_evidence": rejected_release_evidence.get("findings"),
+                        "wrong_tool": rejected_release_tool.get("findings"),
+                    }, sort_keys=True))
+            ok += component_release_v0_ok
+            print(f"  {'ok  ' if component_release_v0_ok else 'FAIL'} backend(Component): signed reproducible release attestation v0")
+        except Exception as e:
+            print(f"  FAIL backend(Component) release attestation v0: {e}")
         integrated_observation = {
             "schema": "loom-gate-observation/v1", "result": "completed",
             "repositories": [{"root": "/Users/macbook/Projects/loom", "before_head": "4281c7b", "after_head": "f" * 40}],
@@ -6082,7 +6216,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == (500 if is_browser_bundle else 501)
+            and about_json["citadel_checks"] == (500 if is_browser_bundle else 502)
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["wasm_abi_versions"] == ([1] if is_browser_bundle else [1, 2])
             and about_json["i31_bits"] == 31
@@ -6206,7 +6340,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         readme = root.joinpath("README.md").read_text()
         rdoc = root.joinpath("docs", "release_readiness.md").read_text()
         modules = pyproject["tool"]["setuptools"]["py-modules"]
-        required_compiler_modules = {"loom", "loom_parse", "loom_checker", "loom_bounds", "loom_recursion", "loom_frontend", "loom_wasm", "loom_component", "loom_component_adapter", "loom_provenance"}
+        required_compiler_modules = {"loom", "loom_parse", "loom_checker", "loom_bounds", "loom_recursion", "loom_frontend", "loom_wasm", "loom_component", "loom_component_adapter", "loom_component_release", "loom_provenance"}
         modular_components = _loom_provenance.collect_compiler_components(root, "modular-python")
         standalone_components = _loom_provenance.collect_compiler_components(root, "standalone-python")
         modular_profile = _loom.build_wasm_compiler_profile("modular-python", modular_components)
@@ -6312,7 +6446,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 501/501 citadel checks" in quick
+            and "PASS -- 502/502 citadel checks" in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
             and "loom examples" in quick
@@ -6422,7 +6556,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "501-component-adapter-v0")' in play
+            and 'bundleUrl.searchParams.set("v", "502-component-release-attestation-v0")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -7042,7 +7176,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 501/501 citadel checks" in rdoc
+            and "PASS -- 502/502 citadel checks" in rdoc
             and "loom examples --format json" in rdoc
             and "loom doctor --dry-run --format json" in rdoc
             and "python3 verify_docs_parity.py" in rdoc
@@ -7106,7 +7240,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 148   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 149   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, signed reproducible Component Release Attestation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

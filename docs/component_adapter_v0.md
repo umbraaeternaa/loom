@@ -41,8 +41,10 @@ The repository-owned Rust assembler is locked by `Cargo.lock`; artifacts bind
 its executable, source-tree, and lockfile hashes separately.
 That binding identifies the exact executable used; v0 does not claim that the
 binary hash alone formally proves a reproducible source-to-binary compilation.
-CI pins Rust `1.93.0`, while signed reproducible builder releases remain a later
-release-supply-chain contract.
+CI pins Rust `1.93.0`. The additive
+[Signed Reproducible Component Release Attestation v0](component_release_attestation_v0.md)
+now performs two clean frozen source builds and binds their exact Component
+outputs without changing this artifact schema.
 
 ## Component shape
 
@@ -115,4 +117,6 @@ Adapter v0 is host-only and modular-only because building and independently
 verifying a Component requires filesystem/process oracles. The browser
 standalone remains the ABI v1 Playground and does not pretend to provide this
 API. Effect-to-WASI projection, reusable instances, streaming values,
-resources, and signed release attestations require later explicit contracts.
+resources and effect-to-WASI projection require later explicit contracts.
+Signed release evidence is provided separately by Component Release
+Attestation v0 and never changes this artifact's authorization.

@@ -902,7 +902,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
     emit_wat,
     LoomError,
     metadata={
-        "citadel_checks": 501,
+        "citadel_checks": 502,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "wasm_abi_versions": [_WASM_ABI_VERSION, _WASM_ABI_V2_VERSION],
         "i31_bits": INT_BITS,
@@ -4993,6 +4993,83 @@ def verify_action_result_attestation_v0(
         }])
     return _action_attestation_validation(
         statement, envelope, expected["attester_key_sha256"], [],
+    )
+
+
+import loom_component_release as _loom_component_release
+
+_COMPONENT_RELEASE_FRONTEND = _loom_component_release.Frontend(
+    build_component_adapter_artifact_v0,
+    verify_component_adapter_artifact_v0,
+    _loom_component_adapter._builder_source_identity,
+    _action_approval_validate_public_key,
+    _action_approval_rsa_verify,
+)
+
+
+def build_component_release_reproducibility_v0(
+    boundary, program_src, wasm_bytes, package, world, exports=None, *,
+    builder_source_root, cargo_executable, rustc_executable, cargo_home,
+    wasm_tools_executable, wasmtime_executable,
+):
+    return _loom_component_release.build_component_release_reproducibility_v0(
+        _COMPONENT_RELEASE_FRONTEND, boundary, program_src, wasm_bytes, package,
+        world, exports, builder_source_root=builder_source_root,
+        cargo_executable=cargo_executable, rustc_executable=rustc_executable,
+        cargo_home=cargo_home, wasm_tools_executable=wasm_tools_executable,
+        wasmtime_executable=wasmtime_executable,
+    )
+
+
+def verify_component_release_reproducibility_v0(
+    evidence, component_bytes, boundary, program_src, wasm_bytes, package, world,
+    exports=None, *, builder_source_root, cargo_executable, rustc_executable,
+    cargo_home, wasm_tools_executable, wasmtime_executable,
+):
+    return _loom_component_release.verify_component_release_reproducibility_v0(
+        _COMPONENT_RELEASE_FRONTEND, evidence, component_bytes, boundary,
+        program_src, wasm_bytes, package, world, exports,
+        builder_source_root=builder_source_root,
+        cargo_executable=cargo_executable, rustc_executable=rustc_executable,
+        cargo_home=cargo_home, wasm_tools_executable=wasm_tools_executable,
+        wasmtime_executable=wasmtime_executable,
+    )
+
+
+def prepare_component_release_attestation_v0(
+    evidence, component_bytes, release_name, release_version,
+    attester_public_key, attested_at_unix_ms,
+):
+    return _loom_component_release.prepare_component_release_attestation_v0(
+        _COMPONENT_RELEASE_FRONTEND, evidence, component_bytes, release_name,
+        release_version, attester_public_key, attested_at_unix_ms,
+    )
+
+
+def build_component_release_attestation_v0(
+    evidence, component_bytes, release_name, release_version,
+    attester_public_key, attested_at_unix_ms, signature,
+):
+    return _loom_component_release.build_component_release_attestation_v0(
+        _COMPONENT_RELEASE_FRONTEND, evidence, component_bytes, release_name,
+        release_version, attester_public_key, attested_at_unix_ms, signature,
+    )
+
+
+def verify_component_release_attestation_v0(
+    envelope, evidence, component_bytes, boundary, program_src, wasm_bytes,
+    package, world, exports, release_name, release_version, attester_public_key,
+    *, builder_source_root, cargo_executable, rustc_executable, cargo_home,
+    wasm_tools_executable, wasmtime_executable,
+):
+    return _loom_component_release.verify_component_release_attestation_v0(
+        _COMPONENT_RELEASE_FRONTEND, envelope, evidence, component_bytes,
+        boundary, program_src, wasm_bytes, package, world, exports, release_name,
+        release_version, attester_public_key,
+        builder_source_root=builder_source_root,
+        cargo_executable=cargo_executable, rustc_executable=rustc_executable,
+        cargo_home=cargo_home, wasm_tools_executable=wasm_tools_executable,
+        wasmtime_executable=wasmtime_executable,
     )
 
 

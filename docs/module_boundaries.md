@@ -104,6 +104,12 @@ It must expose no WASI/component import, mutate no Boundary v0 artifact, infer
 no authority, or silently fall back when its external oracle is absent. This
 host-only module is deliberately excluded from the standalone browser bundle.
 
+`loom_component_release.py` owns Signed Reproducible Component Release
+Attestation v0. It may run exact offline Cargo builds, inspect locked registry
+sources, invoke the Component builder/verifier, and verify an external DSSE
+signature. It must not hold a private key, grant authorization, or enter the
+browser standalone bundle.
+
 ## Citadel pin
 
 The citadel pins this contract by checking that development `loom.py` is backed
