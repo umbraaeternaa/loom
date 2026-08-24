@@ -5773,6 +5773,11 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                     release_build.get("evidence"), release_build.get("component"),
                     release_name, release_version, test_key, release_time,
                 )
+                if not release_build["valid"] or not prepared_release["valid"]:
+                    raise RuntimeError(json.dumps({
+                        "build_findings": release_build.get("findings", []),
+                        "prepared_findings": prepared_release.get("findings", []),
+                    }, sort_keys=True))
                 release_signing = base64.b64decode(prepared_release["signing_bytes"])
                 release_signature = base64.b64encode(sign_bytes(release_signing)).decode("ascii")
                 signed_release = _loom.build_component_release_attestation_v0(
