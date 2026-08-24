@@ -221,15 +221,16 @@ def _dependency_snapshot(source_root, cargo_home):
             for registry in registries
             if (registry / f"{package['name']}-{package['version']}").is_dir()
         ]
-        if len(matches) != 1:
-            raise ValueError(f"expected one cached source tree for {package['name']} {package['version']}")
-        package_root = matches[0]
+        if not matches:
+            raise ValueError(f"cached source tree is absent for {package['name']} {package['version']}")
         archives = [
             cache / f"{package['name']}-{package['version']}.crate"
             for cache in caches
             if (cache / f"{package['name']}-{package['version']}.crate").is_file()
         ]
-        if len(archives) != 1 or _sha256(archives[0].read_bytes()) != package["checksum"]:
+        if not archives or any(
+            _sha256(archive.read_bytes()) != package["checksum"] for archive in archives
+        ):
             raise ValueError(f"registry crate checksum mismatch for {package['name']}")
         archive_files = {}
         prefix = f"{package['name']}-{package['version']}/"
@@ -244,13 +245,14 @@ def _dependency_snapshot(source_root, cargo_home):
                 if not relative or stream is None or relative in archive_files:
                     raise ValueError(f"registry crate has an invalid member for {package['name']}")
                 archive_files[relative] = _sha256(stream.read())
-        source_files = {
-            path.relative_to(package_root).as_posix(): _sha256(path.read_bytes())
-            for path in package_root.rglob("*")
-            if path.is_file() and path.name != ".cargo-ok"
-        }
-        if source_files != archive_files:
-            raise ValueError(f"extracted registry source differs from the locked crate for {package['name']}")
+        for package_root in matches:
+            source_files = {
+                path.relative_to(package_root).as_posix(): _sha256(path.read_bytes())
+                for path in package_root.rglob("*")
+                if path.is_file() and path.name != ".cargo-ok"
+            }
+            if source_files != archive_files:
+                raise ValueError(f"extracted registry source differs from the locked crate for {package['name']}")
         snapshot.append({
             "name": package["name"],
             "version": package["version"],
