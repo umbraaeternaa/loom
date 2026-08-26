@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 502 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 503 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 502/502 citadel checks
+PASS — 503/503 citadel checks
 ```
 
 ## The idea in one screen
@@ -207,6 +207,12 @@ sources, requires byte-identical builders and Components, and binds that
 evidence into an externally signed DSSE/in-toto release statement. It remains
 host-only, non-authorizing, and explicit that v0 makes no cross-platform or
 SLSA-level claim.
+[`Cross-platform Component Release Evidence Federation v0`](docs/component_release_federation_v0.md)
+adds a separate threshold layer: one signed macOS arm64 statement and one
+signed Linux x86_64 statement, issued by different keys, must bind identical
+Component bytes, portable inputs, and adapter semantics. A third independent
+issuer signs the federation statement. Builder/toolchain bytes may differ;
+authorization and SLSA claims remain absent.
 
 Certified recursion can also use [`Proven Value Bounds v1`](docs/proven_value_bounds_v1.md):
 the checker derives conservative i31 and list-length upper bounds through

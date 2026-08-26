@@ -132,6 +132,9 @@ toolchain. It deliberately records `cross_platform_claim: false` and
   public release service;
 - that a signed Component has execution authority.
 
-Those require separate contracts. Linux/macOS evidence federation, threshold
-release signatures, transparency publication, and effect-to-WASI capability
-mapping remain future work.
+The additive
+[`Cross-platform Component Release Evidence Federation v0`](component_release_federation_v0.md)
+now closes only the Linux/macOS statement-concordance part with two distinct
+platform keys and a third federation issuer. Transparency publication,
+organizational independence, revocation, SLSA claims, and effect-to-WASI
+capability mapping remain future work.

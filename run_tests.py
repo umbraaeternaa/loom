@@ -2724,7 +2724,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             "actions_observed": ["read", "write", "test", "git-commit"],
             "evidence": [
                 {"kind": "syntax", "status": "pass", "detail": "PASS syntax"},
-                {"kind": "citadel", "status": "pass", "detail": "502/502"},
+                {"kind": "citadel", "status": "pass", "detail": "503/503"},
                 {"kind": "docs-parity", "status": "pass", "detail": "PASS docs parity"},
                 {"kind": "git-clean", "status": "pass", "detail": "clean"},
                 {"kind": "git-sync", "status": "pass", "detail": "HEAD == origin/main"},
@@ -4418,6 +4418,12 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         test_n_hex = "9839b5f2780d273a675993740acd545b6081d18edba0e9dffb4b2623faf6143d4b649d8ab89da611a5cae1128a5690607011601bbb94585a477d4e75f3a94f225dfacfc8911a5f68a4c558c7162305d63eb03e46c8c1438f1d6d4cae24e936ef0958756fcd8ea083b3bc262356b9d5b2427711319452b5b9c0f979d8be60571db915b21faa530653a6e92bdbb9d33cbfdc1040f9910a593b055f5e6eee0a189f300b41a63ff7dd9ec5185ebcb58c3927945fbf73014fdaccf1fe1179595b0300f8f80684e2b40508e68c09ef88893b9446149bcb150a5e0a12fed31cdf5eda1d18adb645a089dcf2e845e52f999c2c3939ccf652f92a07d175a5149e8bba81b7"
         test_d = int("87308eeb37684c5e61f550d9787e6cb1cf937b3869750eea0c3d4132286998054234fe74cf0b08616e8c2ee1a304c853dd333bd7654f943d19205528b6576175740be5b1df5691efad3b010cf8c141d31e4eb200206a58457c2cdadcb835d0c3992e7b9d3f410641f0c2e25bf56434e9e07d3ded24d20f9cad9f8c717676b8e61d7fdbbe4fa8008f088253e843d29a1c01ca9b6d6cbffbb92a77dcac860b9ead5eee8d9ef6b211dd44dd78075d2da309fa68db5c405fd58ccab32042982594495cc1aaab526e0d752f180cd526ab01017dc2ad9b01d354fc22e80b8797faef44e507344ac53b7ae388d65e54299dfbbdeff9be821b0692172736e6de90a2989", 16)
         test_key = {"algorithm": "rsa-pkcs1v15-sha256", "n": test_n_hex, "e": 65537}
+        linux_test_n_hex = "a314e75afdd65a7386028c91db5f34fdf183cc69d7ff5fb74528bb8db121c26c239f977d4cbaf6ef90ab0d53d7f1827e84b8141d87884bbba11213df6180529d251477fec7aefb42a001f9c42ea4a9b35230ee09ef883329ec4922eece2d2d5ce08dd3ea43c640d5c5a25bfc73087ee1eefe5d59934d4546d3511afe1953e3abc6c04f64b149553d79c293d68178c2d0e8692f0751b6904a6bb79ae72f7b306838edb50d863e426b5cc7f9df187ea978f26299e09e732d390cd3d8c4d63a616b181e83927697def1c959979ce91f96aafcaf462ef2915660117f7e91a6ea95e0bbd122e6b9f7290fdd4a307fdc9b24178802d9272db5c88a690861c04b170e83"
+        linux_test_d = int("22466c7195540de2a5d1b7559873a42193370e2958ba5595a1357465cd4ab9201d449784403233601a59b90d5c1f683bcb0d1d3d2f9517c5b18ea91a93d57287909982b6cba51d2ddd8f4cbd4cc852da5b75e931b16440cc98daae3ade9e64205719b7e64ea44650279f7e11cae388375811a1f107a27fe2e8daecff66b758ec158f91b5a430d5b8bc39114af2549f18c97ef7cd7605b7dd15d420e5e9e9d9830677f67190f0472ff69b920229e6e4036cf7b43bbaa444da411d1751d6624a3b741cc0616a6eceb4ed229f5bbd482dfe62bb49a7f3846ca717b3e2248780ba64fe0759cf2a86c9d5af9266c61c3effa369dd05b6bafc5c2563bfe4dd1b2c46c1", 16)
+        linux_test_key = {"algorithm": "rsa-pkcs1v15-sha256", "n": linux_test_n_hex, "e": 65537}
+        federation_test_n_hex = "9348280e3863927dcf6d75449a9527444881aef9723bf61780976a9f253db9e3b2a2bea927843d4157ba60376fc131d2c2b9ce8c3e4629f3dead982c581ee43461f1eec8f85d8bde7ec5510b6669c959b9193c730f392615dffc9797d46852333eb6e918aef228f0ac2f84e66eac43f9c3dfdd4f9e3096187ed6782dd125eaea2e6849f7103070995d1a68c195f10187ba58e65de5bb5720ba7ac31437d924335bd53d5e2299292b6115350644b0a96bd09e76a7b1a6b31114715dc4488d3caa4df8959a8551316ba41713e537387c8afd0f7851f93d2ecc84ef04c5c2e6aecbd67719a114b45623d90cca8da593dd9c4311744b392f017b886b93de5c3253ef"
+        federation_test_d = int("7d1b901af43f70d2b9feaadc89cb253dd5b183669568e5d475012a2ae1c19b44161c34850ff23eee608d0aea4c5df9eaa44a9d6f77feb5e8584171c04962844b12e0260c451d819090732032e4ddfb91e1afd42f90c0e4df341326da6c2de9956a3289b2d3f91459cc89d904bd024c03c0254ba33426e5790d55356506028596f9cd05b4624c076a4e15fbf6cb6535a4bab36b1ca58ca772c89b28a7b2d68833d085811b5cf0bf6c04748058659faa27dde4b7a61dcfde97470f17b93d401253ea5a21490e6ca0089a4d9af8bf0691ba33617d210be1e7ced5337ad7d16b232eca0ad8447fc4930a620410e9668a51e8283a96ae31bbf65bbc4c35b11e63e161", 16)
+        federation_test_key = {"algorithm": "rsa-pkcs1v15-sha256", "n": federation_test_n_hex, "e": 65537}
         approval_manifest = gate_manifest("codex", "code", ["/Users/macbook/Projects/loom"], ["/Users/macbook/Projects/loom/loom_approval.py"], ["read", "write", "test"], ["syntax", "citadel", "docs-parity", "git-clean"], [{"root": "/Users/macbook/Projects/loom", "expected_head": "4281c7b", "require_clean": True}])
         challenge_result = _loom.build_approval_challenge(approval_manifest, "1" * 64)
         challenge_same = _loom.build_approval_challenge(json.loads(json.dumps(approval_manifest)), "1" * 64)
@@ -4465,11 +4471,12 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         print(f"  {'ok  ' if request_contract_ok else 'FAIL'} gate: operator approval request v1")
         key_hash = hashlib.sha256(canonical(test_key).encode()).hexdigest()
         approval = {"schema": "loom-gate-operator-approval/v1", "challenge_sha256": challenge["challenge_sha256"], "manifest_sha256": challenge["manifest_sha256"], "approver": "operator", "decision": "approve", "key_sha256": key_hash}
-        modulus = int(test_n_hex, 16); size = (modulus.bit_length() + 7) // 8
-        def sign_bytes(message):
+        modulus = int(test_n_hex, 16)
+        def sign_bytes(message, private_d=test_d, public_n=modulus):
+            size = (public_n.bit_length() + 7) // 8
             digest_info = bytes.fromhex("3031300d060960864801650304020105000420") + hashlib.sha256(message).digest()
             encoded = b"\x00\x01" + b"\xff" * (size - len(digest_info) - 3) + b"\x00" + digest_info
-            return pow(int.from_bytes(encoded, "big"), test_d, modulus).to_bytes(size, "big")
+            return pow(int.from_bytes(encoded, "big"), private_d, public_n).to_bytes(size, "big")
         def sign_approval(body):
             message = canonical(body).encode()
             signed = dict(body)
@@ -5869,6 +5876,228 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             print(f"  {'ok  ' if component_release_v0_ok else 'FAIL'} backend(Component): signed reproducible release attestation v0")
         except Exception as e:
             print(f"  FAIL backend(Component) release attestation v0: {e}")
+        try:                                           # two platform statements -> distinct threshold federation issuer
+            federation_api_names = (
+                "build_component_release_federation_v0",
+                "prepare_component_release_federation_attestation_v0",
+                "build_component_release_federation_attestation_v0",
+                "verify_component_release_federation_attestation_v0",
+            )
+            if not hasattr(_loom, federation_api_names[0]):
+                component_federation_v0_ok = (
+                    Path(_loom.__file__).parent.name == "docs"
+                    and all(not hasattr(_loom, name) for name in federation_api_names)
+                )
+            else:
+                canonical_bytes = lambda value: json.dumps(
+                    value, ensure_ascii=True, sort_keys=True,
+                    separators=(",", ":"), allow_nan=False,
+                ).encode()
+                def rehash_artifact(evidence):
+                    artifact_body = dict(evidence["artifact"])
+                    artifact_body.pop("artifact_sha256", None)
+                    evidence["artifact"]["artifact_sha256"] = hashlib.sha256(
+                        canonical_bytes(artifact_body)
+                    ).hexdigest()
+                    for build in evidence["builds"]:
+                        build["artifact_sha256"] = evidence["artifact"]["artifact_sha256"]
+                def rehash_evidence(evidence):
+                    evidence_body = dict(evidence)
+                    evidence_body.pop("evidence_sha256", None)
+                    evidence["evidence_sha256"] = hashlib.sha256(
+                        canonical_bytes(evidence_body)
+                    ).hexdigest()
+                def platform_key(host):
+                    if host == "aarch64-apple-darwin":
+                        return test_key, test_d, int(test_n_hex, 16)
+                    return linux_test_key, linux_test_d, int(linux_test_n_hex, 16)
+                def sign_platform(evidence, key, private_d, public_n, when):
+                    prepared = _loom.prepare_component_release_attestation_v0(
+                        evidence, release_build["component"], release_name,
+                        release_version, key, when,
+                    )
+                    if not prepared["valid"]:
+                        raise RuntimeError(json.dumps(prepared["findings"], sort_keys=True))
+                    signature = base64.b64encode(sign_bytes(
+                        base64.b64decode(prepared["signing_bytes"]), private_d, public_n,
+                    )).decode("ascii")
+                    signed = _loom.build_component_release_attestation_v0(
+                        evidence, release_build["component"], release_name,
+                        release_version, key, when, signature,
+                    )
+                    if not signed["valid"]:
+                        raise RuntimeError(json.dumps(signed["findings"], sort_keys=True))
+                    return {
+                        "envelope": signed["envelope"], "evidence": evidence,
+                        "attester_public_key": key,
+                    }
+                current_evidence = copy.deepcopy(release_build["evidence"])
+                current_host = current_evidence["toolchain"]["rustc"]["host"]
+                other_host = (
+                    "x86_64-unknown-linux-gnu"
+                    if current_host == "aarch64-apple-darwin"
+                    else "aarch64-apple-darwin"
+                )
+                other_evidence = copy.deepcopy(current_evidence)
+                for label in ("cargo", "rustc"):
+                    identity = other_evidence["toolchain"][label]
+                    identity["host"] = other_host
+                    identity["version"] = identity["version"].replace(current_host, other_host)
+                    identity["sha256"] = hashlib.sha256(
+                        ("federation-test-" + other_host + "-" + label).encode()
+                    ).hexdigest()
+                other_evidence["toolchain"]["linker"] = {
+                    "version": "federation test linker " + other_host,
+                    "sha256": hashlib.sha256(("federation-test-linker-" + other_host).encode()).hexdigest(),
+                }
+                if other_host == "aarch64-apple-darwin":
+                    other_wasm_tools = "0caa33cff1a81fd1acd0a20a6cd955411c9932350ebbbe32ebae70708483e752"
+                    other_wasmtime = "1b9185f271806517d7f838b7f9446ee870feb0b22ee9a104e4af334b8c52ccdd"
+                else:
+                    other_wasm_tools = "ff4dcf239ce09315e531394c63c7f0e2cbe9856dfbbd1f5b2b4d267b4f09df95"
+                    other_wasmtime = "4fcabfd0e346761d32f250d4ce55706acef526495aaefb1eb8e6afe3bb0890c5"
+                for label in ("build_wasm_tools", "verify_wasm_tools"):
+                    other_evidence["toolchain"][label]["sha256"] = other_wasm_tools
+                other_evidence["toolchain"]["wasmtime"]["sha256"] = other_wasmtime
+                other_builder = hashlib.sha256(("federation-test-builder-" + other_host).encode()).hexdigest()
+                other_evidence["artifact"]["toolchain"]["builder"]["sha256"] = other_builder
+                other_evidence["artifact"]["toolchain"]["wasm_tools"]["sha256"] = other_wasm_tools
+                for build in other_evidence["builds"]:
+                    build["builder_sha256"] = other_builder
+                rehash_artifact(other_evidence)
+                rehash_evidence(other_evidence)
+                current_key, current_d, current_n = platform_key(current_host)
+                other_key, other_d, other_n = platform_key(other_host)
+                current_platform = sign_platform(
+                    current_evidence, current_key, current_d, current_n, release_time,
+                )
+                other_platform = sign_platform(
+                    other_evidence, other_key, other_d, other_n, release_time + 1,
+                )
+                platforms = [other_platform, current_platform]
+                federation_build = _loom.build_component_release_federation_v0(
+                    platforms, release_build["component"], release_name, release_version,
+                )
+                federation_time = release_time + 2
+                prepared_federation = _loom.prepare_component_release_federation_attestation_v0(
+                    platforms, release_build["component"], release_name, release_version,
+                    federation_test_key, federation_time,
+                )
+                if not federation_build["valid"] or not prepared_federation["valid"]:
+                    raise RuntimeError(json.dumps({
+                        "build": federation_build.get("findings"),
+                        "prepared": prepared_federation.get("findings"),
+                    }, sort_keys=True))
+                federation_signature = base64.b64encode(sign_bytes(
+                    base64.b64decode(prepared_federation["signing_bytes"]),
+                    federation_test_d, int(federation_test_n_hex, 16),
+                )).decode("ascii")
+                signed_federation = _loom.build_component_release_federation_attestation_v0(
+                    platforms, release_build["component"], release_name, release_version,
+                    federation_test_key, federation_time, federation_signature,
+                )
+                verified_federation = _loom.verify_component_release_federation_attestation_v0(
+                    signed_federation["envelope"], platforms, release_build["component"],
+                    release_name, release_version, federation_test_key,
+                )
+                duplicate_host = _loom.build_component_release_federation_v0(
+                    [current_platform, current_platform], release_build["component"],
+                    release_name, release_version,
+                )
+                same_key_other = sign_platform(
+                    other_evidence, current_key, current_d, current_n, release_time + 1,
+                )
+                duplicate_key = _loom.build_component_release_federation_v0(
+                    [current_platform, same_key_other], release_build["component"],
+                    release_name, release_version,
+                )
+                drift_evidence = copy.deepcopy(other_evidence)
+                drift_hash = hashlib.sha256(b"federation-portable-input-drift").hexdigest()
+                drift_evidence["inputs"]["source_sha256"] = drift_hash
+                drift_evidence["artifact"]["source_sha256"] = drift_hash
+                rehash_artifact(drift_evidence)
+                rehash_evidence(drift_evidence)
+                drift_platform = sign_platform(
+                    drift_evidence, other_key, other_d, other_n, release_time + 1,
+                )
+                portable_drift = _loom.build_component_release_federation_v0(
+                    [current_platform, drift_platform], release_build["component"],
+                    release_name, release_version,
+                )
+                reused_issuer = _loom.prepare_component_release_federation_attestation_v0(
+                    platforms, release_build["component"], release_name, release_version,
+                    current_key, federation_time,
+                )
+                empty_component = _loom.build_component_release_federation_v0(
+                    platforms, b"", release_name, release_version,
+                )
+                early_federation = _loom.prepare_component_release_federation_attestation_v0(
+                    platforms, release_build["component"], release_name, release_version,
+                    federation_test_key, release_time,
+                )
+                tampered_federation = copy.deepcopy(signed_federation["envelope"])
+                tampered_signature = bytearray(base64.b64decode(tampered_federation["signatures"][0]["sig"]))
+                tampered_signature[-1] ^= 1
+                tampered_federation["signatures"][0]["sig"] = base64.b64encode(tampered_signature).decode("ascii")
+                rejected_federation_signature = _loom.verify_component_release_federation_attestation_v0(
+                    tampered_federation, platforms, release_build["component"],
+                    release_name, release_version, federation_test_key,
+                )
+                federation = federation_build["federation"]
+                component_federation_v0_ok = (
+                    federation_build["valid"] and federation_build["authorization"] == "none"
+                    and [item["host"] for item in federation["platforms"]] == [
+                        "aarch64-apple-darwin", "x86_64-unknown-linux-gnu",
+                    ]
+                    and federation["threshold"] == {
+                        "required_hosts": ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"],
+                        "minimum_platforms": 2, "distinct_attester_keys": True,
+                    }
+                    and federation["equality"] == {
+                        "component_bytes": True, "portable_inputs": True,
+                        "portable_adapter_semantics": True, "builder_bytes": False,
+                        "toolchain_bytes": False,
+                    }
+                    and federation["lifecycle"]["cross_platform_claim"]
+                    == "component-bytes-and-portable-input-concordance"
+                    and federation["lifecycle"]["authorization"] == "none"
+                    and federation["lifecycle"]["slsa_level_claim"] == "none"
+                    and prepared_federation["valid"] and signed_federation["valid"]
+                    and verified_federation["valid"] and verified_federation["authorization"] == "none"
+                    and prepared_federation["statement"]["predicateType"]
+                    == "https://umbraaeternaa.github.io/loom/attestation/component-release-federation/v0"
+                    and not duplicate_host["valid"]
+                    and any(item["code"] == "incomplete-platform-set" for item in duplicate_host["findings"])
+                    and not duplicate_key["valid"]
+                    and any(item["code"] == "non-independent-platform-keys" for item in duplicate_key["findings"])
+                    and not portable_drift["valid"]
+                    and any(item["code"] == "portable-input-mismatch" for item in portable_drift["findings"])
+                    and not reused_issuer["valid"]
+                    and any(item["code"] == "non-independent-federation-key" for item in reused_issuer["findings"])
+                    and not empty_component["valid"]
+                    and any(item["code"] == "invalid-component-bytes" for item in empty_component["findings"])
+                    and not early_federation["valid"]
+                    and any(item["code"] == "federation-predates-platform-attestation" for item in early_federation["findings"])
+                    and not rejected_federation_signature["valid"]
+                    and any(item["code"] == "invalid-federation-signature" for item in rejected_federation_signature["findings"])
+                )
+                witness_out = os.environ.get("LOOM_FEDERATION_WITNESS_OUT")
+                if component_federation_v0_ok and witness_out:
+                    output = Path(witness_out)
+                    output.parent.mkdir(parents=True, exist_ok=True)
+                    output.write_bytes(canonical_bytes({
+                        "schema": "loom-component-release-platform-ci-witness/v0",
+                        "host": current_host,
+                        "release": {"name": release_name, "version": release_version},
+                        "component": base64.b64encode(release_build["component"]).decode("ascii"),
+                        "platform_attestation": current_platform,
+                        "test_only": True,
+                        "authorization": "none",
+                    }))
+            ok += component_federation_v0_ok
+            print(f"  {'ok  ' if component_federation_v0_ok else 'FAIL'} backend(Component): cross-platform release evidence federation v0")
+        except Exception as e:
+            print(f"  FAIL backend(Component) release federation v0: {e}")
         integrated_observation = {
             "schema": "loom-gate-observation/v1", "result": "completed",
             "repositories": [{"root": "/Users/macbook/Projects/loom", "before_head": "4281c7b", "after_head": "f" * 40}],
@@ -6221,7 +6450,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == (500 if is_browser_bundle else 502)
+            and about_json["citadel_checks"] == (500 if is_browser_bundle else 503)
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["wasm_abi_versions"] == ([1] if is_browser_bundle else [1, 2])
             and about_json["i31_bits"] == 31
@@ -6451,7 +6680,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 502/502 citadel checks" in quick
+            and "PASS -- 503/503 citadel checks" in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
             and "loom examples" in quick
@@ -6561,7 +6790,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "502-component-release-attestation-v0")' in play
+            and 'bundleUrl.searchParams.set("v", "503-component-release-federation-v0")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -7181,7 +7410,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 502/502 citadel checks" in rdoc
+            and "PASS -- 503/503 citadel checks" in rdoc
             and "loom examples --format json" in rdoc
             and "loom doctor --dry-run --format json" in rdoc
             and "python3 verify_docs_parity.py" in rdoc
@@ -7245,7 +7474,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 149   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, signed reproducible Component Release Attestation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 150   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

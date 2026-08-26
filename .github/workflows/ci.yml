@@ -40,12 +40,19 @@ jobs:
           echo "LOOM_CARGO=$(rustup which --toolchain 1.93.0 cargo)" >> "$GITHUB_ENV"
           echo "LOOM_RUSTC=$(rustup which --toolchain 1.93.0 rustc)" >> "$GITHUB_ENV"
           echo "LOOM_COMPONENT_CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}" >> "$GITHUB_ENV"
+          echo "LOOM_FEDERATION_WITNESS_OUT=${GITHUB_WORKSPACE}/.federation-witness/x86_64-unknown-linux-gnu.json" >> "$GITHUB_ENV"
       - name: Install package build tooling
         run: python -m pip install "setuptools>=61" wheel
       - name: Compile Python sources
-        run: python -m py_compile loom.py loom_parse.py loom_checker.py loom_bounds.py loom_frontend.py loom_recursion.py loom_runtime.py loom_cli.py loom_gate.py loom_observer.py loom_evidence.py loom_approval.py loom_codegen.py loom_wasm.py loom_component.py loom_component_adapter.py loom_component_release.py loom_provenance.py verify_docs_parity.py docs/loom.py run_tests.py fuzz_tests.py
+        run: python -m py_compile loom.py loom_parse.py loom_checker.py loom_bounds.py loom_frontend.py loom_recursion.py loom_runtime.py loom_cli.py loom_gate.py loom_observer.py loom_evidence.py loom_approval.py loom_codegen.py loom_wasm.py loom_component.py loom_component_adapter.py loom_component_release.py loom_provenance.py verify_docs_parity.py docs/loom.py run_tests.py fuzz_tests.py tools/verify_component_federation_ci.py
       - name: Run citadel
         run: python run_tests.py
+      - name: Upload Linux Component witness
+        uses: actions/upload-artifact@v4
+        with:
+          name: component-platform-linux
+          path: .federation-witness/x86_64-unknown-linux-gnu.json
+          if-no-files-found: error
       - name: Verify published docs parity
         run: python verify_docs_parity.py
       - name: Run extended deterministic fuzz seeds
@@ -53,3 +60,73 @@ jobs:
           python fuzz_tests.py --cases 256 --seed 0xC17ADE1
           python fuzz_tests.py --cases 256 --seed 0xBADC0DE
           python fuzz_tests.py --cases 256 --seed 0xA11CE
+
+  verify-macos-component:
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.93.0"
+      - name: Install pinned macOS Component Model oracles
+        run: |
+          mkdir -p .component-tools/wasm-tools .component-tools/wasmtime
+          curl -fsSL -o .component-tools/wasm-tools.tar.gz https://github.com/bytecodealliance/wasm-tools/releases/download/v1.257.1/wasm-tools-1.257.1-aarch64-macos.tar.gz
+          echo "1d1ced29aa8320733a7e27452434e66f9bcb61ce39a00ee63229594d71f8544d  .component-tools/wasm-tools.tar.gz" | shasum -a 256 -c -
+          tar -xzf .component-tools/wasm-tools.tar.gz -C .component-tools/wasm-tools
+          curl -fsSL -o .component-tools/wasmtime.tar.xz https://github.com/bytecodealliance/wasmtime/releases/download/v48.0.0/wasmtime-v48.0.0-aarch64-macos.tar.xz
+          echo "b62f687c7b19dd7c04b44ba5d6170a92a2c99bfc190887348aee9323e3703e60  .component-tools/wasmtime.tar.xz" | shasum -a 256 -c -
+          tar -xJf .component-tools/wasmtime.tar.xz -C .component-tools/wasmtime
+          echo "0caa33cff1a81fd1acd0a20a6cd955411c9932350ebbbe32ebae70708483e752  .component-tools/wasm-tools/wasm-tools-1.257.1-aarch64-macos/wasm-tools" | shasum -a 256 -c -
+          echo "1b9185f271806517d7f838b7f9446ee870feb0b22ee9a104e4af334b8c52ccdd  .component-tools/wasmtime/wasmtime-v48.0.0-aarch64-macos/wasmtime" | shasum -a 256 -c -
+          cargo build --locked --release --manifest-path tools/loom-component-builder/Cargo.toml
+          echo "LOOM_WASM_TOOLS=${GITHUB_WORKSPACE}/.component-tools/wasm-tools/wasm-tools-1.257.1-aarch64-macos/wasm-tools" >> "$GITHUB_ENV"
+          echo "LOOM_WASMTIME=${GITHUB_WORKSPACE}/.component-tools/wasmtime/wasmtime-v48.0.0-aarch64-macos/wasmtime" >> "$GITHUB_ENV"
+          echo "LOOM_COMPONENT_BUILDER=${GITHUB_WORKSPACE}/tools/loom-component-builder/target/release/loom-component-builder" >> "$GITHUB_ENV"
+          echo "LOOM_CARGO=$(rustup which --toolchain 1.93.0 cargo)" >> "$GITHUB_ENV"
+          echo "LOOM_RUSTC=$(rustup which --toolchain 1.93.0 rustc)" >> "$GITHUB_ENV"
+          echo "LOOM_COMPONENT_CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}" >> "$GITHUB_ENV"
+          echo "LOOM_FEDERATION_WITNESS_OUT=${GITHUB_WORKSPACE}/.federation-witness/aarch64-apple-darwin.json" >> "$GITHUB_ENV"
+      - name: Install package build tooling
+        run: python -m pip install "setuptools>=61" wheel
+      - name: Compile federation surfaces
+        run: python -m py_compile loom.py loom_component_release.py run_tests.py tools/verify_component_federation_ci.py
+      - name: Run macOS Component citadel
+        run: python run_tests.py
+      - name: Upload macOS Component witness
+        uses: actions/upload-artifact@v4
+        with:
+          name: component-platform-macos
+          path: .federation-witness/aarch64-apple-darwin.json
+          if-no-files-found: error
+
+  federate-component-evidence:
+    needs: [verify, verify-macos-component]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Download platform witnesses
+        uses: actions/download-artifact@v4
+        with:
+          pattern: component-platform-*
+          path: .federation-witness
+          merge-multiple: true
+      - name: Aggregate real macOS/Linux Component evidence
+        run: python tools/verify_component_federation_ci.py .federation-witness --output .federation-result/federation.json
+      - name: Upload test-only federation evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: component-federation-v0
+          path: .federation-result/federation.json
+          if-no-files-found: error

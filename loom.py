@@ -902,7 +902,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
     emit_wat,
     LoomError,
     metadata={
-        "citadel_checks": 502,
+        "citadel_checks": 503,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "wasm_abi_versions": [_WASM_ABI_VERSION, _WASM_ABI_V2_VERSION],
         "i31_bits": INT_BITS,
@@ -5070,6 +5070,47 @@ def verify_component_release_attestation_v0(
         cargo_executable=cargo_executable, rustc_executable=rustc_executable,
         cargo_home=cargo_home, wasm_tools_executable=wasm_tools_executable,
         wasmtime_executable=wasmtime_executable,
+    )
+
+
+def build_component_release_federation_v0(
+    platform_attestations, component_bytes, release_name, release_version,
+):
+    return _loom_component_release.build_component_release_federation_v0(
+        _COMPONENT_RELEASE_FRONTEND, platform_attestations, component_bytes,
+        release_name, release_version,
+    )
+
+
+def prepare_component_release_federation_attestation_v0(
+    platform_attestations, component_bytes, release_name, release_version,
+    federation_public_key, federated_at_unix_ms,
+):
+    return _loom_component_release.prepare_component_release_federation_attestation_v0(
+        _COMPONENT_RELEASE_FRONTEND, platform_attestations, component_bytes,
+        release_name, release_version, federation_public_key,
+        federated_at_unix_ms,
+    )
+
+
+def build_component_release_federation_attestation_v0(
+    platform_attestations, component_bytes, release_name, release_version,
+    federation_public_key, federated_at_unix_ms, signature,
+):
+    return _loom_component_release.build_component_release_federation_attestation_v0(
+        _COMPONENT_RELEASE_FRONTEND, platform_attestations, component_bytes,
+        release_name, release_version, federation_public_key,
+        federated_at_unix_ms, signature,
+    )
+
+
+def verify_component_release_federation_attestation_v0(
+    envelope, platform_attestations, component_bytes, release_name,
+    release_version, federation_public_key,
+):
+    return _loom_component_release.verify_component_release_federation_attestation_v0(
+        _COMPONENT_RELEASE_FRONTEND, envelope, platform_attestations,
+        component_bytes, release_name, release_version, federation_public_key,
     )
 
 

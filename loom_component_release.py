@@ -21,8 +21,14 @@ REPRO_VALIDATION_SCHEMA = "loom-component-release-reproducibility-validation/v0"
 ATTESTATION_VALIDATION_SCHEMA = "loom-component-release-attestation-validation/v0"
 PREDICATE_SCHEMA = "loom-component-release-attestation-predicate/v0"
 LIFECYCLE_SCHEMA = "loom-component-release-attestation-lifecycle/v0"
+FEDERATION_SCHEMA = "loom-component-release-federation/v0"
+FEDERATION_BUILD_SCHEMA = "loom-component-release-federation-build/v0"
+FEDERATION_ATTESTATION_VALIDATION_SCHEMA = "loom-component-release-federation-attestation-validation/v0"
+FEDERATION_PREDICATE_SCHEMA = "loom-component-release-federation-predicate/v0"
+FEDERATION_LIFECYCLE_SCHEMA = "loom-component-release-federation-lifecycle/v0"
 STATEMENT_TYPE = "https://in-toto.io/Statement/v1"
 PREDICATE_TYPE = "https://umbraaeternaa.github.io/loom/attestation/component-release/v0"
+FEDERATION_PREDICATE_TYPE = "https://umbraaeternaa.github.io/loom/attestation/component-release-federation/v0"
 PAYLOAD_TYPE = "application/vnd.in-toto+json"
 MAX_PAYLOAD_BYTES = 8 * 1024 * 1024
 MAX_SIGNATURE_BYTES = 8192
@@ -35,6 +41,7 @@ CARGO_COMMIT = "083ac5135f967fd9dc906ab057a2315861c7a80d"
 RUSTC_RELEASE = "1.93.0"
 RUSTC_COMMIT = "254b59607d4417e9dffbc307138ae5c86280fe4c"
 SUPPORTED_HOSTS = frozenset(("aarch64-apple-darwin", "x86_64-unknown-linux-gnu"))
+FEDERATION_HOSTS = tuple(sorted(SUPPORTED_HOSTS))
 _RELEASE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -96,6 +103,25 @@ def _attestation_result(statement, envelope, key_sha256, findings):
         "attester_key_sha256": key_sha256 if not findings else None,
         "findings": list(findings),
     }
+
+
+def _federation_result(schema, valid, *, federation=None, statement=None, envelope=None, key_sha256=None, findings=()):
+    result = {
+        "schema": schema,
+        "valid": bool(valid),
+        "advisory": True,
+        "authorization": "none",
+        "findings": list(findings),
+    }
+    if schema == FEDERATION_BUILD_SCHEMA:
+        result["federation"] = federation if valid else None
+    else:
+        result.update({
+            "statement": statement if valid else None,
+            "envelope": envelope if valid else None,
+            "federation_key_sha256": key_sha256 if valid else None,
+        })
+    return result
 
 
 def _run(argv, *, env=None, input_bytes=None, cwd=None):
@@ -934,4 +960,417 @@ def verify_component_release_attestation_v0(
         return _attestation_result(None, None, None, reproduced["findings"])
     return _attestation_result(
         statement, envelope, prepared["attester_key_sha256"], [],
+    )
+
+
+def _validated_key(frontend, value, path):
+    public_key, key_findings = frontend.validate_public_key(value)
+    findings = [
+        _finding(
+            path + ("." + item.get("path", "") if item.get("path") else ""),
+            item.get("code", "invalid-key"), item.get("message", "invalid public key"),
+        )
+        for item in key_findings
+    ]
+    if findings:
+        return None, None, findings
+    return public_key, _sha256(_json_bytes(public_key)), []
+
+
+def _strict_platform_attestation(
+    frontend, item, component_bytes, release_name, release_version, index,
+):
+    path = f"platform_attestations[{index}]"
+    if not isinstance(item, dict) or set(item) != {
+        "envelope", "evidence", "attester_public_key",
+    }:
+        return None, [_finding(
+            path, "invalid-platform-attestation",
+            "platform attestation must contain only envelope, evidence, and attester_public_key",
+        )]
+    evidence = item["evidence"]
+    findings = _static_reproducibility(evidence, component_bytes)
+    if findings:
+        return None, [
+            _finding(path + "." + finding["path"], finding["code"], finding["message"])
+            for finding in findings
+        ]
+    host = evidence["toolchain"]["rustc"]["host"]
+    if evidence["toolchain"]["cargo"]["host"] != host or host not in SUPPORTED_HOSTS:
+        return None, [_finding(
+            path + ".evidence.toolchain", "unsupported-platform-host",
+            "platform attestation host is outside the closed federation host set",
+        )]
+    public_key, key_sha256, findings = _validated_key(
+        frontend, item["attester_public_key"], path + ".attester_public_key",
+    )
+    if findings:
+        return None, findings
+    envelope = item["envelope"]
+    if not isinstance(envelope, dict) or set(envelope) != {
+        "payloadType", "payload", "signatures",
+    }:
+        return None, [_finding(
+            path + ".envelope", "invalid-platform-envelope",
+            "platform DSSE envelope shape is not closed",
+        )]
+    if envelope.get("payloadType") != PAYLOAD_TYPE:
+        return None, [_finding(
+            path + ".envelope.payloadType", "unsupported-payload-type",
+            "expected application/vnd.in-toto+json",
+        )]
+    payload, findings = _decode_base64(
+        envelope.get("payload"), path + ".envelope.payload", MAX_PAYLOAD_BYTES,
+    )
+    if findings:
+        return None, findings
+    signatures = envelope.get("signatures")
+    if not isinstance(signatures, list) or len(signatures) != 1:
+        return None, [_finding(
+            path + ".envelope.signatures", "invalid-platform-signature-set",
+            "federation requires exactly one unambiguous platform signature",
+        )]
+    signature = signatures[0]
+    if not isinstance(signature, dict) or set(signature) != {"keyid", "sig"}:
+        return None, [_finding(
+            path + ".envelope.signatures[0]", "invalid-platform-signature",
+            "platform signature shape is not closed",
+        )]
+    if signature.get("keyid") != key_sha256:
+        return None, [_finding(
+            path + ".envelope.signatures[0].keyid", "platform-keyid-mismatch",
+            "platform signature keyid does not bind the pinned attester key",
+        )]
+    raw_signature, findings = _decode_base64(
+        signature.get("sig"), path + ".envelope.signatures[0].sig", MAX_SIGNATURE_BYTES,
+    )
+    if findings:
+        return None, findings
+    signing = _pae(PAYLOAD_TYPE, payload)
+    if not frontend.rsa_verify(signing, raw_signature.hex(), public_key):
+        return None, [_finding(
+            path + ".envelope.signatures[0]", "invalid-platform-signature",
+            "platform DSSE signature does not verify with the pinned attester key",
+        )]
+    statement, findings = _statement_json(payload)
+    if findings:
+        return None, [
+            _finding(path + "." + finding["path"], finding["code"], finding["message"])
+            for finding in findings
+        ]
+    predicate = statement.get("predicate") if isinstance(statement, dict) else None
+    attested_at = predicate.get("attested_at_unix_ms") if isinstance(predicate, dict) else None
+    prepared = prepare_component_release_attestation_v0(
+        frontend, evidence, component_bytes, release_name, release_version,
+        item["attester_public_key"], attested_at,
+    )
+    if not prepared["valid"]:
+        return None, [
+            _finding(path + "." + finding["path"], finding["code"], finding["message"])
+            for finding in prepared["findings"]
+        ]
+    if statement != prepared["statement"]:
+        return None, [_finding(
+            path + ".statement", "platform-statement-mismatch",
+            "signed platform statement does not match its exact reproducibility evidence",
+        )]
+    artifact = evidence["artifact"]
+    portable_artifact = json.loads(_json_bytes(artifact).decode("ascii"))
+    portable_artifact.pop("artifact_sha256", None)
+    portable_artifact["toolchain"]["builder"].pop("sha256", None)
+    portable_artifact["toolchain"]["wasm_tools"].pop("sha256", None)
+    return {
+        "host": host,
+        "attested_at_unix_ms": attested_at,
+        "attester_key_sha256": key_sha256,
+        "statement_sha256": _sha256(_json_bytes(statement)),
+        "envelope_sha256": _sha256(_json_bytes(envelope)),
+        "reproducibility_sha256": evidence["evidence_sha256"],
+        "artifact_sha256": artifact["artifact_sha256"],
+        "builder_sha256": evidence["builds"][0]["builder_sha256"],
+        "toolchain_sha256": _sha256(_json_bytes(evidence["toolchain"])),
+        "dependency_sources_sha256": _sha256(_json_bytes(evidence["dependency_sources"])),
+        "inputs": evidence["inputs"],
+        "portable_artifact_sha256": _sha256(_json_bytes(portable_artifact)),
+    }, []
+
+
+def build_component_release_federation_v0(
+    frontend, platform_attestations, component_bytes, release_name, release_version,
+):
+    if not isinstance(component_bytes, (bytes, bytearray)) or not component_bytes:
+        return _federation_result(FEDERATION_BUILD_SCHEMA, False, findings=[_finding(
+            "component_bytes", "invalid-component-bytes",
+            "federation requires a non-empty WebAssembly Component byte string",
+        )])
+    if not isinstance(platform_attestations, list) or len(platform_attestations) != len(FEDERATION_HOSTS):
+        return _federation_result(FEDERATION_BUILD_SCHEMA, False, findings=[_finding(
+            "platform_attestations", "invalid-platform-set",
+            "federation requires exactly one attestation for each closed v0 host",
+        )])
+    records = []
+    findings = []
+    for index, item in enumerate(platform_attestations):
+        record, item_findings = _strict_platform_attestation(
+            frontend, item, component_bytes, release_name, release_version, index,
+        )
+        findings.extend(item_findings)
+        if record is not None:
+            records.append(record)
+    if findings:
+        return _federation_result(FEDERATION_BUILD_SCHEMA, False, findings=findings)
+    records.sort(key=lambda record: record["host"])
+    if tuple(record["host"] for record in records) != FEDERATION_HOSTS:
+        return _federation_result(FEDERATION_BUILD_SCHEMA, False, findings=[_finding(
+            "platform_attestations", "incomplete-platform-set",
+            "federation must cover macOS arm64 and Linux x86_64 exactly once",
+        )])
+    if len({record["attester_key_sha256"] for record in records}) != len(records):
+        return _federation_result(FEDERATION_BUILD_SCHEMA, False, findings=[_finding(
+            "platform_attestations", "non-independent-platform-keys",
+            "each platform statement must use a distinct pinned attester key",
+        )])
+    first = records[0]
+    for record in records[1:]:
+        if record["inputs"] != first["inputs"]:
+            return _federation_result(FEDERATION_BUILD_SCHEMA, False, findings=[_finding(
+                "platform_attestations", "portable-input-mismatch",
+                "platform statements do not bind identical source, core, WIT, and builder inputs",
+            )])
+        if record["portable_artifact_sha256"] != first["portable_artifact_sha256"]:
+            return _federation_result(FEDERATION_BUILD_SCHEMA, False, findings=[_finding(
+                "platform_attestations", "portable-artifact-mismatch",
+                "platform Component adapter semantics differ after removing host executable identities",
+            )])
+    component = bytes(component_bytes) if isinstance(component_bytes, (bytes, bytearray)) else b""
+    body = {
+        "schema": FEDERATION_SCHEMA,
+        "release": {"name": release_name, "version": release_version},
+        "component": {"sha256": _sha256(component), "byte_length": len(component)},
+        "portable_inputs": first["inputs"],
+        "portable_artifact_sha256": first["portable_artifact_sha256"],
+        "platforms": [{key: value for key, value in record.items() if key not in {"inputs", "portable_artifact_sha256"}} for record in records],
+        "threshold": {
+            "required_hosts": list(FEDERATION_HOSTS),
+            "minimum_platforms": len(FEDERATION_HOSTS),
+            "distinct_attester_keys": True,
+        },
+        "equality": {
+            "component_bytes": True,
+            "portable_inputs": True,
+            "portable_adapter_semantics": True,
+            "builder_bytes": False,
+            "toolchain_bytes": False,
+        },
+        "lifecycle": {
+            "schema": FEDERATION_LIFECYCLE_SCHEMA,
+            "platform_statements": len(FEDERATION_HOSTS),
+            "cross_platform_claim": "component-bytes-and-portable-input-concordance",
+            "same_host_rebuild_verification": "required-before-platform-attestation",
+            "authorization": "none",
+            "slsa_level_claim": "none",
+        },
+    }
+    body["federation_sha256"] = _sha256(_json_bytes(body))
+    return _federation_result(FEDERATION_BUILD_SCHEMA, True, federation=body)
+
+
+def prepare_component_release_federation_attestation_v0(
+    frontend, platform_attestations, component_bytes, release_name, release_version,
+    federation_public_key, federated_at_unix_ms,
+):
+    built = build_component_release_federation_v0(
+        frontend, platform_attestations, component_bytes, release_name, release_version,
+    )
+    if not built["valid"]:
+        return _federation_result(
+            FEDERATION_ATTESTATION_VALIDATION_SCHEMA, False, findings=built["findings"],
+        )
+    public_key, key_sha256, findings = _validated_key(
+        frontend, federation_public_key, "federation_public_key",
+    )
+    if findings:
+        return _federation_result(
+            FEDERATION_ATTESTATION_VALIDATION_SCHEMA, False, findings=findings,
+        )
+    federation = built["federation"]
+    platform_keys = {record["attester_key_sha256"] for record in federation["platforms"]}
+    if key_sha256 in platform_keys:
+        return _federation_result(FEDERATION_ATTESTATION_VALIDATION_SCHEMA, False, findings=[_finding(
+            "federation_public_key", "non-independent-federation-key",
+            "federation issuer key must differ from every platform attester key",
+        )])
+    if type(federated_at_unix_ms) is not int or not 0 <= federated_at_unix_ms <= MAX_SAFE_INTEGER:
+        return _federation_result(FEDERATION_ATTESTATION_VALIDATION_SCHEMA, False, findings=[_finding(
+            "federated_at_unix_ms", "invalid-federation-time",
+            "federation time must be a non-negative portable integer",
+        )])
+    if federated_at_unix_ms < max(record["attested_at_unix_ms"] for record in federation["platforms"]):
+        return _federation_result(FEDERATION_ATTESTATION_VALIDATION_SCHEMA, False, findings=[_finding(
+            "federated_at_unix_ms", "federation-predates-platform-attestation",
+            "federation time cannot precede either signed platform observation",
+        )])
+    statement = {
+        "_type": STATEMENT_TYPE,
+        "subject": [
+            {
+                "name": release_name + "-" + release_version + ".component.wasm",
+                "digest": {"sha256": federation["component"]["sha256"]},
+            },
+            {
+                "name": "loom-component-release-federation-v0.json",
+                "digest": {"sha256": federation["federation_sha256"]},
+            },
+        ] + [
+            {
+                "name": "loom-component-release-" + record["host"] + ".intoto.json",
+                "digest": {"sha256": record["statement_sha256"]},
+            }
+            for record in federation["platforms"]
+        ],
+        "predicateType": FEDERATION_PREDICATE_TYPE,
+        "predicate": {
+            "schema": FEDERATION_PREDICATE_SCHEMA,
+            "federation": federation,
+            "federation_sha256": federation["federation_sha256"],
+            "issuer": {
+                "role": "component-release-federation-issuer",
+                "algorithm": public_key["algorithm"],
+                "key_sha256": key_sha256,
+            },
+            "federated_at_unix_ms": federated_at_unix_ms,
+            "lifecycle": federation["lifecycle"],
+        },
+    }
+    payload = _json_bytes(statement)
+    signing = _pae(PAYLOAD_TYPE, payload)
+    result = _federation_result(
+        FEDERATION_ATTESTATION_VALIDATION_SCHEMA, True, statement=statement,
+        key_sha256=key_sha256,
+    )
+    result.update({
+        "payload_type": PAYLOAD_TYPE,
+        "payload": base64.b64encode(payload).decode("ascii"),
+        "signing_bytes": base64.b64encode(signing).decode("ascii"),
+        "signing_bytes_sha256": _sha256(signing),
+    })
+    return result
+
+
+def build_component_release_federation_attestation_v0(
+    frontend, platform_attestations, component_bytes, release_name, release_version,
+    federation_public_key, federated_at_unix_ms, signature,
+):
+    prepared = prepare_component_release_federation_attestation_v0(
+        frontend, platform_attestations, component_bytes, release_name, release_version,
+        federation_public_key, federated_at_unix_ms,
+    )
+    if not prepared["valid"]:
+        return prepared
+    signature_bytes, findings = _decode_base64(signature, "signature", MAX_SIGNATURE_BYTES)
+    if findings:
+        return _federation_result(
+            FEDERATION_ATTESTATION_VALIDATION_SCHEMA, False, findings=findings,
+        )
+    signing, _ = _decode_base64(
+        prepared["signing_bytes"], "signing_bytes", MAX_PAYLOAD_BYTES + 1024,
+    )
+    public_key, key_sha256, findings = _validated_key(
+        frontend, federation_public_key, "federation_public_key",
+    )
+    if findings or not frontend.rsa_verify(signing, signature_bytes.hex(), public_key):
+        return _federation_result(FEDERATION_ATTESTATION_VALIDATION_SCHEMA, False, findings=[_finding(
+            "signature", "invalid-federation-signature",
+            "DSSE signature is invalid for the federation issuer key",
+        )])
+    envelope = {
+        "payloadType": PAYLOAD_TYPE,
+        "payload": prepared["payload"],
+        "signatures": [{
+            "keyid": key_sha256,
+            "sig": base64.b64encode(signature_bytes).decode("ascii"),
+        }],
+    }
+    return _federation_result(
+        FEDERATION_ATTESTATION_VALIDATION_SCHEMA, True,
+        statement=prepared["statement"], envelope=envelope, key_sha256=key_sha256,
+    )
+
+
+def verify_component_release_federation_attestation_v0(
+    frontend, envelope, platform_attestations, component_bytes, release_name,
+    release_version, federation_public_key,
+):
+    if not isinstance(envelope, dict) or set(envelope) != {
+        "payloadType", "payload", "signatures",
+    }:
+        return _federation_result(FEDERATION_ATTESTATION_VALIDATION_SCHEMA, False, findings=[_finding(
+            "envelope", "invalid-federation-envelope", "federation DSSE envelope shape is not closed",
+        )])
+    if envelope.get("payloadType") != PAYLOAD_TYPE:
+        return _federation_result(FEDERATION_ATTESTATION_VALIDATION_SCHEMA, False, findings=[_finding(
+            "envelope.payloadType", "unsupported-payload-type", "expected application/vnd.in-toto+json",
+        )])
+    payload, findings = _decode_base64(
+        envelope.get("payload"), "envelope.payload", MAX_PAYLOAD_BYTES,
+    )
+    if findings:
+        return _federation_result(
+            FEDERATION_ATTESTATION_VALIDATION_SCHEMA, False, findings=findings,
+        )
+    public_key, key_sha256, findings = _validated_key(
+        frontend, federation_public_key, "federation_public_key",
+    )
+    if findings:
+        return _federation_result(
+            FEDERATION_ATTESTATION_VALIDATION_SCHEMA, False, findings=findings,
+        )
+    signatures = envelope.get("signatures")
+    if not isinstance(signatures, list) or len(signatures) != 1:
+        return _federation_result(FEDERATION_ATTESTATION_VALIDATION_SCHEMA, False, findings=[_finding(
+            "envelope.signatures", "invalid-federation-signature-set",
+            "federation envelope requires exactly one issuer signature",
+        )])
+    signature = signatures[0]
+    if (
+        not isinstance(signature, dict) or set(signature) != {"keyid", "sig"}
+        or signature.get("keyid") != key_sha256
+    ):
+        return _federation_result(FEDERATION_ATTESTATION_VALIDATION_SCHEMA, False, findings=[_finding(
+            "envelope.signatures[0]", "federation-keyid-mismatch",
+            "federation signature does not bind the pinned issuer key",
+        )])
+    raw_signature, findings = _decode_base64(
+        signature.get("sig"), "envelope.signatures[0].sig", MAX_SIGNATURE_BYTES,
+    )
+    if findings:
+        return _federation_result(
+            FEDERATION_ATTESTATION_VALIDATION_SCHEMA, False, findings=findings,
+        )
+    if not frontend.rsa_verify(_pae(PAYLOAD_TYPE, payload), raw_signature.hex(), public_key):
+        return _federation_result(FEDERATION_ATTESTATION_VALIDATION_SCHEMA, False, findings=[_finding(
+            "envelope.signatures[0]", "invalid-federation-signature",
+            "federation DSSE signature does not verify with the pinned issuer key",
+        )])
+    statement, findings = _statement_json(payload)
+    if findings:
+        return _federation_result(
+            FEDERATION_ATTESTATION_VALIDATION_SCHEMA, False, findings=findings,
+        )
+    predicate = statement.get("predicate") if isinstance(statement, dict) else None
+    federated_at = predicate.get("federated_at_unix_ms") if isinstance(predicate, dict) else None
+    prepared = prepare_component_release_federation_attestation_v0(
+        frontend, platform_attestations, component_bytes, release_name, release_version,
+        federation_public_key, federated_at,
+    )
+    if not prepared["valid"]:
+        return prepared
+    if statement != prepared["statement"]:
+        return _federation_result(FEDERATION_ATTESTATION_VALIDATION_SCHEMA, False, findings=[_finding(
+            "statement", "federation-statement-mismatch",
+            "signed federation statement does not match the exact platform set",
+        )])
+    return _federation_result(
+        FEDERATION_ATTESTATION_VALIDATION_SCHEMA, True, statement=statement,
+        envelope=envelope, key_sha256=key_sha256,
     )
