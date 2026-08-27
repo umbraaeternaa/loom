@@ -141,6 +141,8 @@ the bounded JSON transport, bridges collision-free LOOM Tagged Value ABI v2 to
 separate Canonical ABI memory, packages a real zero-import component binary,
 and binds its bytes back to this boundary. Boundary v0 itself deliberately
 continues to say `component_binary: absent`: it describes an exact requested
-surface, while the additive artifact proves one implementation. Effect-to-WASI
-projection remains a later explicit gate. Neither layer may mutate this v0
-schema or infer authority from valid evidence.
+surface, while the additive artifact proves one implementation. The additive
+[`Typed WASI Capability Mapping v0`](typed_wasi_capability_mapping_v0.md) now
+provides an explicit projection for selected ABI v2 effects without mutating
+this Pure boundary. An executable effectful adapter remains a later gate.
+Neither layer may infer authority from valid evidence.

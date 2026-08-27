@@ -863,6 +863,35 @@ def verify_wit_component_boundary_v0(boundary, program_src, wasm_bytes, package,
     )
 
 
+import loom_wasi_capabilities as _loom_wasi_capabilities
+
+_TYPED_WASI_FRONTEND = _loom_wasi_capabilities.Frontend(
+    parse,
+    check,
+    compile_wasm_v2,
+    verify_wasm_trust_receipt_abi_v2,
+    verify_wasm_trust_receipt_v2_abi_v2,
+    _WASM_ABI_V2_VERSION,
+    LoomError,
+)
+
+
+def build_typed_wasi_capability_mapping_v0(
+    program_src, wasm_bytes, package, world, exports=None,
+):
+    return _loom_wasi_capabilities.build_typed_wasi_capability_mapping_v0(
+        _TYPED_WASI_FRONTEND, program_src, wasm_bytes, package, world, exports,
+    )
+
+
+def verify_typed_wasi_capability_mapping_v0(
+    mapping, program_src, wasm_bytes, package, world, exports=None,
+):
+    return _loom_wasi_capabilities.verify_typed_wasi_capability_mapping_v0(
+        _TYPED_WASI_FRONTEND, mapping, program_src, wasm_bytes, package, world, exports,
+    )
+
+
 import loom_component_adapter as _loom_component_adapter
 
 _COMPONENT_ADAPTER_FRONTEND = _loom_component_adapter.Frontend(
@@ -902,7 +931,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
     emit_wat,
     LoomError,
     metadata={
-        "citadel_checks": 503,
+        "citadel_checks": 504,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "wasm_abi_versions": [_WASM_ABI_VERSION, _WASM_ABI_V2_VERSION],
         "i31_bits": INT_BITS,

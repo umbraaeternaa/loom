@@ -1963,6 +1963,143 @@ const env={push_handler:denied,pop_handler:denied,current_handler:denied,host_pr
         print(f"  {'ok  ' if component_ok else 'FAIL'} backend(Component): evidence-carrying Pure WIT boundary v0")
     except Exception as e:
         print(f"  FAIL backend(Component) boundary v0: {e}")
+    try:                                               # checked effects -> exact versioned WIT imports, never ambient authority
+        typed_wasi_api_names = (
+            "build_typed_wasi_capability_mapping_v0",
+            "verify_typed_wasi_capability_mapping_v0",
+        )
+        if not hasattr(_loom, typed_wasi_api_names[0]):
+            typed_wasi_v0_ok = (
+                Path(_loom.__file__).parent.name == "docs"
+                and all(not hasattr(_loom, name) for name in typed_wasi_api_names)
+            )
+        else:
+            typed_wasi_source = (
+                '(defx emit (IO) (fn (x) (print x))) '
+                '(defx act (IO Rand Alloc) (fn (x) '
+                '  (let (shown (emit x)) (let (sample (rand)) (alloc 2)))))'
+            )
+            typed_wasi_wasm = _loom.compile_wasm_v2(typed_wasi_source)
+            typed_wasi_package = "umbra:loom@0.4.0"
+            typed_wasi_world = "typed-wasi"
+            typed_wasi_exports = ["act"]
+            typed_wasi_result = _loom.build_typed_wasi_capability_mapping_v0(
+                typed_wasi_source, typed_wasi_wasm, typed_wasi_package,
+                typed_wasi_world, typed_wasi_exports,
+            )
+            typed_wasi_mapping = typed_wasi_result.get("mapping") or {}
+            typed_wasi_verified = _loom.verify_typed_wasi_capability_mapping_v0(
+                typed_wasi_mapping, typed_wasi_source, typed_wasi_wasm,
+                typed_wasi_package, typed_wasi_world, typed_wasi_exports,
+            )
+            io_source = '(defx emit (IO) (fn (x) (print x)))'
+            io_wasm = _loom.compile_wasm_v2(io_source)
+            io_result = _loom.build_typed_wasi_capability_mapping_v0(
+                io_source, io_wasm, typed_wasi_package, "stdout-only", ["emit"],
+            )
+            pure_source = '(defx identity () (fn (x) x))'
+            pure_result = _loom.build_typed_wasi_capability_mapping_v0(
+                pure_source, _loom.compile_wasm_v2(pure_source), typed_wasi_package,
+                "pure-only", ["identity"],
+            )
+            net_source = '(defx fetch (Net) (fn (x) (net x)))'
+            net_result = _loom.build_typed_wasi_capability_mapping_v0(
+                net_source, _loom.compile_wasm_v2(net_source), typed_wasi_package,
+                "net-denied", ["fetch"],
+            )
+            ffi_source = '(defx raw (FFI) (fn (x) (seam (FFI) (ffi "logger" x))))'
+            ffi_result = _loom.build_typed_wasi_capability_mapping_v0(
+                ffi_source, _loom.compile_wasm_v2(ffi_source), typed_wasi_package,
+                "ffi-denied", ["raw"],
+            )
+            abi_v1_result = _loom.build_typed_wasi_capability_mapping_v0(
+                typed_wasi_source, _loom.compile_wasm(typed_wasi_source),
+                typed_wasi_package, typed_wasi_world, typed_wasi_exports,
+            )
+            duplicate_result = _loom.build_typed_wasi_capability_mapping_v0(
+                typed_wasi_source, typed_wasi_wasm, typed_wasi_package,
+                typed_wasi_world, ["act", "act"],
+            )
+            tampered_mapping = copy.deepcopy(typed_wasi_mapping)
+            tampered_mapping["authorization"] = "execute"
+            tampered_body = dict(tampered_mapping)
+            tampered_body.pop("mapping_sha256", None)
+            tampered_mapping["mapping_sha256"] = hashlib.sha256(json.dumps(
+                tampered_body, ensure_ascii=True, sort_keys=True,
+                separators=(",", ":"), allow_nan=False,
+            ).encode()).hexdigest()
+            tampered_result = _loom.verify_typed_wasi_capability_mapping_v0(
+                tampered_mapping, typed_wasi_source, typed_wasi_wasm,
+                typed_wasi_package, typed_wasi_world, typed_wasi_exports,
+            )
+            externally_mutated = copy.deepcopy(typed_wasi_mapping)
+            externally_mutated["capability_projection"]["effects"][0]["disposition"] = "ambient"
+            rebuilt_result = _loom.build_typed_wasi_capability_mapping_v0(
+                typed_wasi_source, typed_wasi_wasm, typed_wasi_package,
+                typed_wasi_world, typed_wasi_exports,
+            )
+            projection = typed_wasi_mapping.get("capability_projection", {})
+            effect_rows = {item["effect"]: item for item in projection.get("effects", [])}
+            io_projection = io_result.get("mapping", {}).get("capability_projection", {})
+            typed_wasi_v0_ok = (
+                typed_wasi_result["valid"] and typed_wasi_verified["valid"]
+                and typed_wasi_verified["mapping"] == typed_wasi_mapping
+                and typed_wasi_mapping["schema"] == "loom-typed-wasi-capability-mapping/v0"
+                and typed_wasi_mapping["authorization"] == "none"
+                and typed_wasi_mapping["core_module"]["loom_abi_version"] == 2
+                and typed_wasi_mapping["exports"][0]["effects"] == {
+                    "declared": ["Alloc", "IO", "Rand"],
+                    "performed": ["Alloc", "IO", "Rand"],
+                    "required": [],
+                    "projected": ["Alloc", "IO", "Rand"],
+                }
+                and projection["schema"] == "loom-wasi-effect-projection/v0"
+                and projection["wasi_release"] == "0.2.8"
+                and projection["imports"] == [
+                    "wasi:cli/stdout@0.2.8", "wasi:io/streams@0.2.8",
+                    "wasi:random/random@0.2.8",
+                ]
+                and projection["denied_effects"] == ["FFI", "Net"]
+                and projection["ambient_authority"] is False
+                and effect_rows["IO"]["calls"] == [
+                    "wasi:cli/stdout.get-stdout",
+                    "wasi:io/streams.output-stream.blocking-write-and-flush",
+                ]
+                and effect_rows["Rand"]["result_projection"] == {
+                    "source": "u64", "target": "nonnegative-i31",
+                    "rule": "u64 modulo 1073741824", "uniform": True,
+                }
+                and effect_rows["Alloc"]["disposition"] == "internal-runtime"
+                and typed_wasi_mapping["lifecycle"] == {
+                    "component_binary": "absent", "effect_adapter": "required",
+                    "executable": False, "authorization": "none",
+                    "host_policy_binding": "required-before-instantiation",
+                }
+                and "import wasi:cli/stdout@0.2.8;" in typed_wasi_mapping["wit"]["source"]
+                and "import wasi:random/random@0.2.8;" in typed_wasi_mapping["wit"]["source"]
+                and io_result["valid"]
+                and io_projection["imports"] == [
+                    "wasi:cli/stdout@0.2.8", "wasi:io/streams@0.2.8",
+                ]
+                and "wasi:random/random" not in io_result["mapping"]["wit"]["source"]
+                and not pure_result["valid"]
+                and any(item["code"] == "empty-capability-projection" for item in pure_result["findings"])
+                and not net_result["valid"]
+                and any(item["code"] == "unmapped-wasi-effect" for item in net_result["findings"])
+                and not ffi_result["valid"]
+                and any(item["code"] == "unmapped-wasi-effect" for item in ffi_result["findings"])
+                and not abi_v1_result["valid"]
+                and any(item["code"] == "source-wasm-mismatch" for item in abi_v1_result["findings"])
+                and not duplicate_result["valid"]
+                and any(item["code"] == "duplicate-export" for item in duplicate_result["findings"])
+                and not tampered_result["valid"]
+                and any(item["code"] == "mapping-mismatch" for item in tampered_result["findings"])
+                and rebuilt_result == typed_wasi_result
+            )
+        ok += typed_wasi_v0_ok
+        print(f"  {'ok  ' if typed_wasi_v0_ok else 'FAIL'} backend(Component): Typed WASI Capability Mapping v0")
+    except Exception as e:
+        print(f"  FAIL backend(Component) Typed WASI Capability Mapping v0: {e}")
     class _PublishedAbiV1Only(Exception):
         pass
     try:                                               # Tagged Value ABI v2 preserves identities erased by ABI v1
@@ -2724,7 +2861,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             "actions_observed": ["read", "write", "test", "git-commit"],
             "evidence": [
                 {"kind": "syntax", "status": "pass", "detail": "PASS syntax"},
-                {"kind": "citadel", "status": "pass", "detail": "503/503"},
+                {"kind": "citadel", "status": "pass", "detail": "504/504"},
                 {"kind": "docs-parity", "status": "pass", "detail": "PASS docs parity"},
                 {"kind": "git-clean", "status": "pass", "detail": "clean"},
                 {"kind": "git-sync", "status": "pass", "detail": "HEAD == origin/main"},
@@ -6450,7 +6587,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == (500 if is_browser_bundle else 503)
+            and about_json["citadel_checks"] == (500 if is_browser_bundle else 504)
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["wasm_abi_versions"] == ([1] if is_browser_bundle else [1, 2])
             and about_json["i31_bits"] == 31
@@ -6574,7 +6711,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         readme = root.joinpath("README.md").read_text()
         rdoc = root.joinpath("docs", "release_readiness.md").read_text()
         modules = pyproject["tool"]["setuptools"]["py-modules"]
-        required_compiler_modules = {"loom", "loom_parse", "loom_checker", "loom_bounds", "loom_recursion", "loom_frontend", "loom_wasm", "loom_component", "loom_component_adapter", "loom_component_release", "loom_provenance"}
+        required_compiler_modules = {"loom", "loom_parse", "loom_checker", "loom_bounds", "loom_recursion", "loom_frontend", "loom_wasm", "loom_component", "loom_component_adapter", "loom_component_release", "loom_wasi_capabilities", "loom_provenance"}
         modular_components = _loom_provenance.collect_compiler_components(root, "modular-python")
         standalone_components = _loom_provenance.collect_compiler_components(root, "standalone-python")
         modular_profile = _loom.build_wasm_compiler_profile("modular-python", modular_components)
@@ -6615,7 +6752,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                     wheel_names = set(archive.namelist())
                 wheel_code = (
                     "import sys;sys.path.insert(0," + repr(str(wheel_paths[0])) + ");"
-                    "import loom,loom_bounds,loom_recursion,loom_component,loom_component_adapter,loom_provenance;"
+                    "import loom,loom_bounds,loom_recursion,loom_component,loom_component_adapter,loom_wasi_capabilities,loom_provenance;"
                     "w=loom.compile_wasm('(defx main () (fn () 42))');"
                     "assert w[:4]==b'\\x00asm'"
                 )
@@ -6680,7 +6817,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 503/503 citadel checks" in quick
+            and "PASS -- 504/504 citadel checks" in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
             and "loom examples" in quick
@@ -6790,7 +6927,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "503-component-release-federation-v0")' in play
+            and 'bundleUrl.searchParams.set("v", "504-typed-wasi-capability-mapping-v0")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -7390,6 +7527,8 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "parallel builds" in mbdoc
             and "legacy module-global `_WASM_*` compiler tables do not return" in mbdoc
             and "Tagged Value ABI v2 is currently an\nexplicit modular-only profile" in mbdoc
+            and "`loom_wasi_capabilities.py` | host-only Typed WASI effect projection and exact mapping verification" in mbdoc
+            and "non-executable WIT import projection" in mbdoc
             and "`loom_recursion.py` | shared named-call graph, recursive-SCC edges, static descent certificates, and quantitative recurrence metadata" in mbdoc
         )
         ok += module_boundary_doc_ok
@@ -7410,7 +7549,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 503/503 citadel checks" in rdoc
+            and "PASS -- 504/504 citadel checks" in rdoc
             and "loom examples --format json" in rdoc
             and "loom doctor --dry-run --format json" in rdoc
             and "python3 verify_docs_parity.py" in rdoc
@@ -7474,7 +7613,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 150   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 151   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

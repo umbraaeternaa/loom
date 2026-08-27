@@ -26,6 +26,7 @@ WASM_TRUST_DOC = ROOT / "docs" / "wasm_trust_provenance_v1.md"
 WASM_TRUST_V2_DOC = ROOT / "docs" / "wasm_trust_provenance_v2.md"
 WASM_EQUIVALENCE_DOC = ROOT / "docs" / "wasm_source_equivalence_v1.md"
 WIT_COMPONENT_DOC = ROOT / "docs" / "wit_component_boundary_v0.md"
+TYPED_WASI_CAPABILITY_DOC = ROOT / "docs" / "typed_wasi_capability_mapping_v0.md"
 COMPONENT_BRIDGE_DOC = ROOT / "docs" / "component_bridge_v0.md"
 COMPONENT_ADAPTER_DOC = ROOT / "docs" / "component_adapter_v0.md"
 COMPONENT_RELEASE_ATTESTATION_DOC = ROOT / "docs" / "component_release_attestation_v0.md"
@@ -52,7 +53,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "503-component-release-federation-v0")',
+        'bundleUrl.searchParams.set("v", "504-typed-wasi-capability-mapping-v0")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -154,8 +155,8 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "503 self-verifying checks",
-        ">503</div>",
+        "504 self-verifying checks",
+        ">504</div>",
     )
     forbidden = (
         "501 self-verifying checks",
@@ -554,7 +555,8 @@ def _check_wit_component_boundary() -> None:
         '"absent"',
         '"authorization": "none"',
         "does not yet implement the adapter",
-        "Effect-to-WASI projection remains a later explicit gate",
+        "Typed WASI Capability Mapping v0",
+        "An executable effectful adapter remains a later gate",
     )
     missing = [needle for needle in required if needle not in words]
     if missing:
@@ -587,6 +589,59 @@ def _check_wit_component_boundary() -> None:
     )
     if not modular_verify["valid"] or modular_verify != standalone_verify:
         raise SystemExit("docs parity: modular and standalone WIT component verifiers diverged")
+
+
+def _check_typed_wasi_capability_mapping() -> None:
+    words = " ".join(TYPED_WASI_CAPABILITY_DOC.read_text().split())
+    required = (
+        "LOOM Typed WASI Capability Mapping v0",
+        "loom.build_typed_wasi_capability_mapping_v0(",
+        "loom.verify_typed_wasi_capability_mapping_v0(",
+        "loom-typed-wasi-capability-mapping/v0",
+        "loom-typed-wasi-capability-mapping-validation/v0",
+        "loom-wasi-effect-projection/v0",
+        "wasi:cli/stdout@0.2.8",
+        "wasi:io/streams@0.2.8",
+        "wasi:random/random@0.2.8",
+        "u64 modulo 1073741824",
+        "unmapped-wasi-effect",
+        "ambient_authority",
+        '"component_binary": "absent"',
+        '"authorization": "none"',
+        "does not build an effectful Component",
+        "host policy",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: Typed WASI Capability Mapping v0 drift: missing " + ", ".join(missing))
+    import loom as modular
+    spec = importlib.util.spec_from_file_location("loom_typed_wasi_standalone", DOCS_LOOM)
+    if spec is None or spec.loader is None:
+        raise SystemExit("docs parity: could not load standalone Typed WASI boundary")
+    standalone = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(standalone)
+    names = (
+        "build_typed_wasi_capability_mapping_v0",
+        "verify_typed_wasi_capability_mapping_v0",
+    )
+    if any(not hasattr(modular, name) for name in names):
+        raise SystemExit("docs parity: modular Typed WASI surface is incomplete")
+    if any(hasattr(standalone, name) for name in names):
+        raise SystemExit("docs parity: host-only Typed WASI surface leaked into standalone")
+    if not (ROOT / "loom_wasi_capabilities.py").is_file():
+        raise SystemExit("docs parity: Typed WASI implementation module is absent")
+    source = '(defx emit (IO) (fn (x) (print x)))'
+    wasm = modular.compile_wasm_v2(source)
+    built = modular.build_typed_wasi_capability_mapping_v0(
+        source, wasm, "umbra:loom@0.4.0", "stdout-only", ["emit"],
+    )
+    if not built["valid"]:
+        raise SystemExit("docs parity: Typed WASI canonical fixture was rejected")
+    verified = modular.verify_typed_wasi_capability_mapping_v0(
+        built["mapping"], source, wasm, "umbra:loom@0.4.0", "stdout-only", ["emit"],
+    )
+    if not verified["valid"]:
+        raise SystemExit("docs parity: Typed WASI canonical fixture failed verification")
 
 
 def _check_component_bridge() -> None:
@@ -1812,6 +1867,7 @@ def main() -> int:
     _check_wasm_trust_v2_doc()
     _check_wasm_equivalence_doc()
     _check_wit_component_boundary()
+    _check_typed_wasi_capability_mapping()
     _check_component_bridge()
     _check_component_adapter()
     _check_component_release_attestation()

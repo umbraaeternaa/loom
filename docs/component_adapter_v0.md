@@ -116,7 +116,9 @@ Claim, mediation, execution permission, or capability grant.
 Adapter v0 is host-only and modular-only because building and independently
 verifying a Component requires filesystem/process oracles. The browser
 standalone remains the ABI v1 Playground and does not pretend to provide this
-API. Effect-to-WASI projection, reusable instances, streaming values,
-resources and effect-to-WASI projection require later explicit contracts.
+API. Typed effect-to-WASI projection now exists as a separate non-executable
+mapping contract; this zero-import adapter does not consume it. An effectful
+adapter, reusable instances, streaming values, and public resources require
+later explicit contracts.
 Signed release evidence is provided separately by Component Release
 Attestation v0 and never changes this artifact's authorization.

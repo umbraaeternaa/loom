@@ -24,6 +24,7 @@ Current stable boundaries:
 | `loom_codegen.py` | portable Python and JavaScript backends |
 | `loom_wasm.py` | WebAssembly/WAT backend and ABI runtime |
 | `loom_component.py` | deterministic WIT component-boundary projection and verification |
+| `loom_wasi_capabilities.py` | host-only Typed WASI effect projection and exact mapping verification |
 | `loom_recursion.py` | shared named-call graph, recursive-SCC edges, static descent certificates, and quantitative recurrence metadata |
 | `loom_provenance.py` | host-built content-addressed compiler profiles and closed surface collection |
 | `loom_cli.py` | CLI and machine-readable verdict surface |
@@ -95,6 +96,12 @@ binary and grants no WASI capability.
 The standalone browser bundle may inline the same implementation, but modular
 and standalone builders/verifiers must produce byte-identical boundary objects
 for identical source, WASM, package, world, and export inputs.
+
+`loom_wasi_capabilities.py` owns Typed WASI Capability Mapping v0. It consumes
+only checked ABI v2 source/core identity and emits a content-addressed,
+non-executable WIT import projection. It must minimize imports, pin the exact
+WASI release/spec sources, reject unmapped effects, grant no authority, and
+remain excluded from the ABI v1 browser standalone profile.
 
 `loom_component_adapter.py` owns Exact Component Adapter Artifact v0. It may
 invoke only explicitly supplied, hash-pinned builder, wasm-tools, and Wasmtime

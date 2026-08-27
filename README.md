@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 503 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 504 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 503/503 citadel checks
+PASS — 504/504 citadel checks
 ```
 
 ## The idea in one screen
@@ -213,6 +213,13 @@ signed Linux x86_64 statement, issued by different keys, must bind identical
 Component bytes, portable inputs, and adapter semantics. A third independent
 issuer signs the federation statement. Builder/toolchain bytes may differ;
 authorization and SLSA claims remain absent.
+[`Typed WASI Capability Mapping v0`](docs/typed_wasi_capability_mapping_v0.md)
+then projects checked ABI v2 effect rows into a minimal versioned WIT import
+set without building or authorizing an effectful Component. `IO/print` binds
+only WASI stdout/streams, `Rand` binds only secure random, and `Alloc` remains
+internal; `Net` and `FFI` fail closed until exact portable operation semantics
+exist. Every mapping binds source, core bytes, trust receipts, exports, WIT,
+WASI 0.2.8 spec digests, resource rules, and a non-executable lifecycle.
 
 Certified recursion can also use [`Proven Value Bounds v1`](docs/proven_value_bounds_v1.md):
 the checker derives conservative i31 and list-length upper bounds through
@@ -228,6 +235,7 @@ contract; higher-order and effectful arguments remain fail-closed.
 - [`loom_codegen.py`](loom_codegen.py) — isolated portable Python/JavaScript generators.
 - [`loom_wasm.py`](loom_wasm.py) — isolated WebAssembly/WAT compiler and ABI runtime.
 - [`loom_component.py`](loom_component.py) — evidence-carrying WIT component-boundary builder and verifier.
+- [`loom_wasi_capabilities.py`](loom_wasi_capabilities.py) — closed ABI v2 effect-to-WASI projection and verifier.
 - [`docs/component_bridge_v0.md`](docs/component_bridge_v0.md) — exact bridge metadata and bounded heap-ingress contract.
 - [`loom_provenance.py`](loom_provenance.py) — host-built modular/standalone compiler profiles.
 - [`run_tests.py`](run_tests.py) — the self-verifying suite: it accepts honest programs,

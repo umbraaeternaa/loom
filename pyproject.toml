@@ -52,5 +52,6 @@ py-modules = [
   "loom_provenance",
   "loom_recursion",
   "loom_runtime",
+  "loom_wasi_capabilities",
   "loom_wasm",
 ]
