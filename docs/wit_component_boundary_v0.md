@@ -144,5 +144,7 @@ continues to say `component_binary: absent`: it describes an exact requested
 surface, while the additive artifact proves one implementation. The additive
 [`Typed WASI Capability Mapping v0`](typed_wasi_capability_mapping_v0.md) now
 provides an explicit projection for selected ABI v2 effects without mutating
-this Pure boundary. An executable effectful adapter remains a later gate.
-Neither layer may infer authority from valid evidence.
+this Pure boundary. The additive host-only Effectful Component Adapter v1 now
+consumes a separate Typed WASI mapping and policy; this immutable Pure boundary
+remains non-executable and unchanged. Neither layer may infer authority from
+valid evidence.

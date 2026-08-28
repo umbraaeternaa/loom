@@ -44,6 +44,7 @@ _WASM_I_PUSH_CAPS = 4
 _WASM_I_POP_CAPS = 5
 _WASM_I_HAS_CAP = 6
 _WASM_I_FFI = 7
+_WASM_I_HOST_RAND = 8
 WASM_ABI_VERSION = 1
 WASM_ABI_V2_VERSION = 2
 EFFECT_IDS = {"IO": 0, "Net": 1, "Rand": 2, "Alloc": 3, "FFI": 4}
@@ -82,7 +83,7 @@ def _wasm_int(n):
 
 def _wasm_numeric(ctx, code):
     if ctx.abi_version == WASM_ABI_V2_VERSION:
-        return code + b"\x10" + _leb_u(ctx.numeric_id + _WASM_IMPORTS)
+        return code + b"\x10" + _leb_u(ctx.numeric_id + ctx.import_count)
     return code
 
 def _wasm_tag_bool(ctx):
@@ -114,11 +115,11 @@ def _wasm_require_cap(effid):
 
 def _wasm_meter_take(ctx, eff):
     return (b"\x23" + _leb_u(10) + _wasm_const(EFFECT_IDS[eff])
-            + b"\x10" + _leb_u(ctx.meter_take_id + _WASM_IMPORTS) + b"\x1a")
+            + b"\x10" + _leb_u(ctx.meter_take_id + ctx.import_count) + b"\x1a")
 
 def _wasm_depth_take(ctx):
     return (b"\x23" + _leb_u(11)
-            + b"\x10" + _leb_u(ctx.depth_take_id + _WASM_IMPORTS) + b"\x1a")
+            + b"\x10" + _leb_u(ctx.depth_take_id + ctx.import_count) + b"\x1a")
 
 def _wasm_transparent_body(frontend, node):
     head = node[0]
@@ -194,7 +195,7 @@ def _emit_wasm_node(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, s
         out = _emit_wasm(ctx, h, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
         for a in node[1:]:
             out += _emit_wasm(ctx, a, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
-        return out + b"\x10" + _leb_u(apply_id + _WASM_IMPORTS)
+        return out + b"\x10" + _leb_u(apply_id + ctx.import_count)
     if h == "fn":
         spec = ctx.closures.get(id(node))
         if spec is None: raise frontend.error("wasm: missing closure spec")
@@ -225,7 +226,7 @@ def _emit_wasm_node(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, s
     if h == "depthN":
         out = (b"\x23" + _leb_u(11)
                + b"\x23" + _leb_u(11) + _wasm_const(node[1])
-               + b"\x10" + _leb_u(ctx.depth_push_id + _WASM_IMPORTS) + b"\x24" + _leb_u(11))
+               + b"\x10" + _leb_u(ctx.depth_push_id + ctx.import_count) + b"\x24" + _leb_u(11))
         out += _emit_wasm_seq(ctx, node[2:], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers, metered_effs)
         return out + b"\x21" + _leb_u(lmap["hd"]) + b"\x24" + _leb_u(11) + b"\x20" + _leb_u(lmap["hd"])
     if h == "seamN":
@@ -233,7 +234,7 @@ def _emit_wasm_node(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, s
         out = b"\x41" + _leb_s(_wasm_capmask(node[2])) + b"\x10" + _leb_u(_WASM_I_PUSH_CAPS) + b"\x1a"
         out += (b"\x23" + _leb_u(10)
                 + b"\x23" + _leb_u(10) + _wasm_const(_wasm_capmask(node[2])) + _wasm_const(node[1])
-                + b"\x10" + _leb_u(ctx.meter_push_id + _WASM_IMPORTS) + b"\x24" + _leb_u(10))
+                + b"\x10" + _leb_u(ctx.meter_push_id + ctx.import_count) + b"\x24" + _leb_u(10))
         out += _emit_wasm_seq(ctx, body, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers, metered_effs)
         out += b"\x21" + _leb_u(lmap["hd"]) + b"\x24" + _leb_u(10) + b"\x20" + _leb_u(lmap["hd"])
         return out + b"\x10" + _leb_u(_WASM_I_POP_CAPS) + b"\x1a"
@@ -262,46 +263,52 @@ def _emit_wasm_node(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, s
     if h == "print":
         apply1_id = ctx.apply_ids.get(1, ctx.apply1_id)
         if "IO" in with_handlers:
-            return _wasm_meter_take(ctx, "IO") + _emit_wasm(ctx, with_handlers["IO"], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply1_id + _WASM_IMPORTS)
+            return _wasm_meter_take(ctx, "IO") + _emit_wasm(ctx, with_handlers["IO"], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply1_id + ctx.import_count)
         out = _wasm_require_cap(EFFECT_IDS["IO"]) + _wasm_meter_take(ctx, "IO") + b"\x41" + _leb_s(EFFECT_IDS["IO"]) + b"\x10" + _leb_u(_WASM_I_CURRENT) + b"\x22" + _leb_u(lmap["hd"]) + b"\x45\x04\x7f"
         out += _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
-        out += b"\x10" + _leb_u(_WASM_I_PRINT) + b"\x05" + b"\x20" + _leb_u(lmap["hd"]) + _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply1_id + _WASM_IMPORTS) + b"\x0b"
+        out += b"\x10" + _leb_u(_WASM_I_PRINT) + b"\x05" + b"\x20" + _leb_u(lmap["hd"]) + _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply1_id + ctx.import_count) + b"\x0b"
         if "IO" in handled_effs:
             return _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
         return out
     if h == "net":
         apply1_id = ctx.apply_ids.get(1, ctx.apply1_id)
         if "Net" in with_handlers:
-            return _wasm_meter_take(ctx, "Net") + _emit_wasm(ctx, with_handlers["Net"], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply1_id + _WASM_IMPORTS)
+            return _wasm_meter_take(ctx, "Net") + _emit_wasm(ctx, with_handlers["Net"], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply1_id + ctx.import_count)
         out = _wasm_require_cap(EFFECT_IDS["Net"]) + _wasm_meter_take(ctx, "Net") + b"\x41" + _leb_s(EFFECT_IDS["Net"]) + b"\x10" + _leb_u(_WASM_I_CURRENT) + b"\x22" + _leb_u(lmap["hd"]) + b"\x45\x04\x7f"
-        out += b"\x41" + _leb_s(EFFECT_IDS["Net"]) + _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(cons_i + 1 + _WASM_IMPORTS)
-        out += b"\x05" + b"\x20" + _leb_u(lmap["hd"]) + _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply1_id + _WASM_IMPORTS) + b"\x0b"
+        out += b"\x41" + _leb_s(EFFECT_IDS["Net"]) + _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(cons_i + 1 + ctx.import_count)
+        out += b"\x05" + b"\x20" + _leb_u(lmap["hd"]) + _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply1_id + ctx.import_count) + b"\x0b"
         return out
     if h == "rand":
         apply0_id = ctx.apply_ids.get(0)
         if apply0_id is None:
             raise frontend.error("wasm: missing arity-0 apply helper")
         if "Rand" in with_handlers:
-            return _wasm_meter_take(ctx, "Rand") + _emit_wasm(ctx, with_handlers["Rand"], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply0_id + _WASM_IMPORTS)
+            return _wasm_meter_take(ctx, "Rand") + _emit_wasm(ctx, with_handlers["Rand"], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply0_id + ctx.import_count)
+        if ctx.effectful_component_v1:
+            return (
+                _wasm_require_cap(EFFECT_IDS["Rand"])
+                + _wasm_meter_take(ctx, "Rand")
+                + b"\x10" + _leb_u(_WASM_I_HOST_RAND)
+            )
         out = _wasm_require_cap(EFFECT_IDS["Rand"]) + _wasm_meter_take(ctx, "Rand") + b"\x41" + _leb_s(EFFECT_IDS["Rand"]) + b"\x10" + _leb_u(_WASM_I_CURRENT) + b"\x22" + _leb_u(lmap["hd"]) + b"\x45\x04\x7f"
-        out += b"\x41" + _leb_s(EFFECT_IDS["Rand"]) + b"\x41\x00" + b"\x10" + _leb_u(cons_i + 1 + _WASM_IMPORTS)
-        out += b"\x05" + b"\x20" + _leb_u(lmap["hd"]) + b"\x10" + _leb_u(apply0_id + _WASM_IMPORTS) + b"\x0b"
+        out += b"\x41" + _leb_s(EFFECT_IDS["Rand"]) + b"\x41\x00" + b"\x10" + _leb_u(cons_i + 1 + ctx.import_count)
+        out += b"\x05" + b"\x20" + _leb_u(lmap["hd"]) + b"\x10" + _leb_u(apply0_id + ctx.import_count) + b"\x0b"
         return out
     if h == "alloc":
         apply1_id = ctx.apply_ids.get(1, ctx.apply1_id)
         if "Alloc" in with_handlers:
-            return _wasm_meter_take(ctx, "Alloc") + _emit_wasm(ctx, with_handlers["Alloc"], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + _emit_wasm(ctx, node[1] if len(node) > 1 else 0, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply1_id + _WASM_IMPORTS)
+            return _wasm_meter_take(ctx, "Alloc") + _emit_wasm(ctx, with_handlers["Alloc"], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + _emit_wasm(ctx, node[1] if len(node) > 1 else 0, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply1_id + ctx.import_count)
         out = _wasm_require_cap(EFFECT_IDS["Alloc"]) + _wasm_meter_take(ctx, "Alloc") + b"\x41" + _leb_s(EFFECT_IDS["Alloc"]) + b"\x10" + _leb_u(_WASM_I_CURRENT) + b"\x22" + _leb_u(lmap["hd"]) + b"\x45\x04\x7f"
         if len(node) == 1:
             out += _wasm_const(_WASM_NIL)
         else:
             out += (_wasm_numeric(ctx, _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers))
                     + _wasm_int(0)
-                    + b"\x10" + _leb_u(ctx.alloc_id + _WASM_IMPORTS))
+                    + b"\x10" + _leb_u(ctx.alloc_id + ctx.import_count))
         if len(node) == 1:
-            out += b"\x05" + b"\x20" + _leb_u(lmap["hd"]) + b"\x41\x00" + b"\x10" + _leb_u(apply1_id + _WASM_IMPORTS) + b"\x0b"
+            out += b"\x05" + b"\x20" + _leb_u(lmap["hd"]) + b"\x41\x00" + b"\x10" + _leb_u(apply1_id + ctx.import_count) + b"\x0b"
         else:
-            out += b"\x05" + b"\x20" + _leb_u(lmap["hd"]) + _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply1_id + _WASM_IMPORTS) + b"\x0b"
+            out += b"\x05" + b"\x20" + _leb_u(lmap["hd"]) + _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(apply1_id + ctx.import_count) + b"\x0b"
         return out
     transparent_body = _wasm_transparent_body(frontend, node)
     if transparent_body is not None:
@@ -315,27 +322,27 @@ def _emit_wasm_node(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, s
                 + _wasm_const(1 if "IO" in handled_effs else 0)
                 + b"\x10" + _leb_u(_WASM_I_FFI))
     if h == "use":
-        return _wasm_const(ctx.resources[node[1]]) + b"\x10" + _leb_u(ctx.resource_use_id + _WASM_IMPORTS)
+        return _wasm_const(ctx.resources[node[1]]) + b"\x10" + _leb_u(ctx.resource_use_id + ctx.import_count)
     if h in ("record", "closure-record"):
         if len(node) == 1: return _wasm_const(_wasm_empty_record(ctx))
         items = [fld for fld in node[1:] if isinstance(fld, list) and len(fld) >= 2]
         out = _wasm_const(_wasm_empty_record(ctx))
         record_i = ctx.closure_record_id if h == "closure-record" else rec_i
         for fld in reversed(items):
-            out = out + b"\x41" + _leb_s(fields[fld[0]]) + _emit_wasm(ctx, fld[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(record_i + _WASM_IMPORTS)
+            out = out + b"\x41" + _leb_s(fields[fld[0]]) + _emit_wasm(ctx, fld[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(record_i + ctx.import_count)
         return out
     if h == "get":
-        return _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x41" + _leb_s(fields[node[2]]) + b"\x10" + _leb_u(get_i + _WASM_IMPORTS)
+        return _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x41" + _leb_s(fields[node[2]]) + b"\x10" + _leb_u(get_i + ctx.import_count)
     if h == "list":                                                     # (list a b ..) -> cons(a, cons(b, .. nil))
         if len(node) == 1: return _wasm_const(_WASM_NIL)
         out = b"".join(_emit_wasm(ctx, a, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) for a in node[1:]) + _wasm_const(_WASM_NIL)
-        return out + b"".join(b"\x10" + _leb_u(cons_i + _WASM_IMPORTS) for _ in node[1:])   # fold to the right via $cons
-    if h == "cons": return _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + _emit_wasm(ctx, node[2], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(cons_i + _WASM_IMPORTS)
+        return out + b"".join(b"\x10" + _leb_u(cons_i + ctx.import_count) for _ in node[1:])   # fold to the right via $cons
+    if h == "cons": return _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + _emit_wasm(ctx, node[2], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(cons_i + ctx.import_count)
     if h == "head": return _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + _wasm_unptr() + b"\x28\x02\x04"
     if h == "tail": return _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + _wasm_unptr() + b"\x28\x02\x08"
     if h == "empty": return _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + _wasm_const(_WASM_NIL) + b"\x46" + _wasm_tag_bool(ctx)
     if h == "variant":
-        return _wasm_const(tags[node[1]]) + _emit_wasm(ctx, node[2], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(ctx.variant_id + _WASM_IMPORTS)
+        return _wasm_const(tags[node[1]]) + _emit_wasm(ctx, node[2], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x10" + _leb_u(ctx.variant_id + ctx.import_count)
     if h == "match":                                                    # scrut->$s; chain: load tag; ==TAG; if (bind payload) body else .. unreachable
         out = _emit_wasm(ctx, node[1], lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) + b"\x21" + _leb_u(si)
         def _arms(a):
@@ -353,11 +360,11 @@ def _emit_wasm_node(ctx, node, lmap, fmap, cons_i, rec_i, get_i, tags, fields, s
         out = b"\x20" + _leb_u(lmap[h])
         for a in node[1:]:
             out += _emit_wasm(ctx, a, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers)
-        return out + b"\x10" + _leb_u(apply_id + _WASM_IMPORTS)
+        return out + b"\x10" + _leb_u(apply_id + ctx.import_count)
     if h in fmap:                                                       # call $fn  (first-order / recursive)
         args = b"".join(_emit_wasm(ctx, a, lmap, fmap, cons_i, rec_i, get_i, tags, fields, si, callable_env, handled_effs, with_handlers) for a in node[1:])
         charge = _wasm_depth_take(ctx) if (ctx.current_fn, h) in ctx.recursive_edges else b""
-        return args + charge + b"\x10" + _leb_u(fmap[h] + _WASM_IMPORTS)
+        return args + charge + b"\x10" + _leb_u(fmap[h] + ctx.import_count)
     raise frontend.error("wasm: form not yet in the WASM backend: " + str(h))
 
 def _wasm_defxs(program_src, frontend):
@@ -1023,7 +1030,10 @@ def _bridge_byte_range(offset, lower, upper):
             + _bridge_load_byte(offset) + _wasm_const(upper) + b"\x4d\x71")
 
 
-def _bridge_chain_validation(value_local, cursor_local, count_local, terminator, kind, size, next_offset, kind_func):
+def _bridge_chain_validation(
+    value_local, cursor_local, count_local, terminator, kind, size, next_offset,
+    kind_func, import_count,
+):
     """Validate a complete list/record tail, bounding malformed cycles to 2048 cells."""
     get = lambda index: b"\x20" + _leb_u(index)
     set_ = lambda index: b"\x21" + _leb_u(index)
@@ -1032,7 +1042,7 @@ def _bridge_chain_validation(value_local, cursor_local, count_local, terminator,
     code += get(cursor_local) + _wasm_const(terminator) + b"\x46\x0d\x01"
     code += _bridge_trap_if(
         get(cursor_local) + _wasm_const(kind) + _wasm_const(size)
-        + b"\x10" + _leb_u(kind_func + _WASM_IMPORTS) + b"\x45"
+        + b"\x10" + _leb_u(kind_func + import_count) + b"\x45"
     )
     code += _bridge_trap_if(get(count_local) + _wasm_const(2048) + b"\x4f")
     code += (get(cursor_local) + _wasm_unptr() + b"\x28\x02" + _leb_u(next_offset)
@@ -1129,13 +1139,16 @@ class _WasmContext:
                  "depth_push_id", "depth_take_id", "recursive_edges", "current_fn",
                  "variant_id", "alloc_id", "resource_use_id", "numeric_id", "closure_record_id",
                  "bridge_base", "tags", "fields", "resources", "foreigns",
-                 "strings", "string_layout", "hp_init", "node_path_by_id", "span_by_path", "trust_receipt", "trust_receipt_v2", "_metered_effs")
+                 "strings", "string_layout", "hp_init", "node_path_by_id", "span_by_path", "trust_receipt", "trust_receipt_v2",
+                 "effectful_component_v1", "import_count", "_metered_effs")
 
-    def __init__(self, program_src, frontend, abi_version=WASM_ABI_VERSION):
+    def __init__(self, program_src, frontend, abi_version=WASM_ABI_VERSION, *, effectful_component_v1=False):
         if abi_version not in (WASM_ABI_VERSION, WASM_ABI_V2_VERSION):
             raise frontend.error("wasm: unsupported LOOM ABI version " + str(abi_version))
         self.frontend = frontend
         self.abi_version = abi_version
+        self.effectful_component_v1 = bool(effectful_component_v1)
+        self.import_count = _WASM_IMPORTS + int(self.effectful_component_v1)
         self._metered_effs = set()
         self.defs, self.top, self.closures, self.order = _wasm_collect_closures(program_src, frontend)
         self.closure_by_id = {spec["id"]: spec for spec in self.order}
@@ -1179,12 +1192,18 @@ class _WasmContext:
         self.recursive_edges = recursive_edges(graph_fns)
         self.current_fn = None
 
-def compile_wasm(program_src, frontend, abi_version=WASM_ABI_VERSION):
+def compile_wasm(
+    program_src, frontend, abi_version=WASM_ABI_VERSION, *,
+    effectful_component_v1=False,
+):
     """Compile checked LOOM to a real WebAssembly module.
     Integers use even immediates; odd values are typed heap pointers, so host decoding never guesses from pointer shape."""
     _, errs = frontend.check(frontend.parse(program_src))
     if errs: raise frontend.error("; ".join(errs))
-    ctx = _WasmContext(program_src, frontend, abi_version)
+    ctx = _WasmContext(
+        program_src, frontend, abi_version,
+        effectful_component_v1=effectful_component_v1,
+    )
     if ctx.hp_init > 65536:
         raise frontend.error("wasm heap: static data exceeds the fixed 64 KiB memory page")
     ds, order = ctx.defs, ctx.order
@@ -1223,7 +1242,7 @@ def compile_wasm(program_src, frontend, abi_version=WASM_ABI_VERSION):
     heap_static_g, heap_record_g, heap_list_g = 4, 5, 6
     heap_variant_g, heap_effect_g, heap_resource_g = 7, 8, 9
     def _bump_global(g): return b"\x23" + _leb_u(g) + _wasm_const(1) + b"\x6a\x24" + _leb_u(g)
-    rec_code = (_wasm_const(16) + b"\x10" + _leb_u(reserve_i + _WASM_IMPORTS) + b"\x21\x03"  # $t = reserve(16)
+    rec_code = (_wasm_const(16) + b"\x10" + _leb_u(reserve_i + ctx.import_count) + b"\x21\x03"  # $t = reserve(16)
                 + _bump_global(heap_record_g) +
                 b"\x20\x03" + _wasm_const(_WASM_K_RECORD) + b"\x36\x02\x00" # kind
                 b"\x20\x03\x20\x01\x36\x02\x04"                              # field-id
@@ -1245,22 +1264,22 @@ def compile_wasm(program_src, frontend, abi_version=WASM_ABI_VERSION):
                 b"\x05"
                 b"\x20\x00" + _wasm_unptr() + b"\x28\x02\x0c"                # miss -> follow next and recurse
                 b"\x20\x01"
-                b"\x10" + _leb_u(get_i + _WASM_IMPORTS) +
+                b"\x10" + _leb_u(get_i + ctx.import_count) +
                 b"\x0b"
                 b"\x0b"
                 b"\x0b")
-    cons_code = (_wasm_const(12) + b"\x10" + _leb_u(reserve_i + _WASM_IMPORTS) + b"\x21\x02"
+    cons_code = (_wasm_const(12) + b"\x10" + _leb_u(reserve_i + ctx.import_count) + b"\x21\x02"
                  + _bump_global(heap_list_g) +
                  b"\x20\x02" + _wasm_const(_WASM_K_LIST) + b"\x36\x02\x00"
                  b"\x20\x02\x20\x00\x36\x02\x04" b"\x20\x02\x20\x01\x36\x02\x08"
                  b"\x20\x02" + _wasm_const(1) + b"\x72\x0b")
-    effbox_code = (_wasm_const(12) + b"\x10" + _leb_u(reserve_i + _WASM_IMPORTS) + b"\x21\x02"
+    effbox_code = (_wasm_const(12) + b"\x10" + _leb_u(reserve_i + ctx.import_count) + b"\x21\x02"
                    + _bump_global(heap_effect_g) +
                    b"\x20\x02" + _wasm_const(_WASM_K_EFFECT) + b"\x36\x02\x00"
                    b"\x20\x02\x20\x00\x36\x02\x04"
                    b"\x20\x02\x20\x01\x36\x02\x08"
                    b"\x20\x02" + _wasm_const(1) + b"\x72\x0b")
-    variant_code = (_wasm_const(12) + b"\x10" + _leb_u(reserve_i + _WASM_IMPORTS) + b"\x21\x02"
+    variant_code = (_wasm_const(12) + b"\x10" + _leb_u(reserve_i + ctx.import_count) + b"\x21\x02"
                     + _bump_global(heap_variant_g) +
                     b"\x20\x02" + _wasm_const(_WASM_K_VARIANT) + b"\x36\x02\x00"
                     b"\x20\x02\x20\x00\x36\x02\x04"
@@ -1273,12 +1292,12 @@ def compile_wasm(program_src, frontend, abi_version=WASM_ABI_VERSION):
                 cap_fields = []
             else:
                 cap_fields = [f"e{i}" for i in range(len(spec["captures"]))]
-            case = (b"\x20\x00" + _wasm_const(fields["code"]) + b"\x10" + _leb_u(get_i + _WASM_IMPORTS) + _wasm_int(spec["id"]) + b"\x46" + b"\x04\x7f")
+            case = (b"\x20\x00" + _wasm_const(fields["code"]) + b"\x10" + _leb_u(get_i + ctx.import_count) + _wasm_int(spec["id"]) + b"\x46" + b"\x04\x7f")
             for fld in cap_fields:
-                case += b"\x20\x00" + b"\x41" + _leb_s(fields[fld]) + b"\x10" + _leb_u(get_i + _WASM_IMPORTS)
+                case += b"\x20\x00" + b"\x41" + _leb_s(fields[fld]) + b"\x10" + _leb_u(get_i + ctx.import_count)
             for i in range(arity):
                 case += b"\x20" + _leb_u(1 + i)
-            case += b"\x10" + _leb_u(spec["id"] + _WASM_IMPORTS) + b"\x05" + code + b"\x0b"
+            case += b"\x10" + _leb_u(spec["id"] + ctx.import_count) + b"\x05" + code + b"\x0b"
             code = case
         return code
     def _sec(sid, c): return bytes([sid]) + _leb_u(len(c)) + c
@@ -1310,7 +1329,7 @@ def compile_wasm(program_src, frontend, abi_version=WASM_ABI_VERSION):
           + b"\x7f\x01" + _wasm_const(0) + b"\x0b"                                  # private pending bridge byte pointer
           + b"\x7f\x01" + _wasm_const(0) + b"\x0b"                                  # private pending bridge byte length
           + b"\x7f\x01" + _wasm_const(0) + b"\x0b")                                 # private pending bridge allocation flag
-    ic = (_leb_u(8)
+    ic = (_leb_u(ctx.import_count)
           + _leb_u(len("env")) + b"env" + _leb_u(len("push_handler")) + b"push_handler" + b"\x00" + _leb_u(ti[2])
           + _leb_u(len("env")) + b"env" + _leb_u(len("pop_handler")) + b"pop_handler" + b"\x00" + _leb_u(ti[1])
           + _leb_u(len("env")) + b"env" + _leb_u(len("current_handler")) + b"current_handler" + b"\x00" + _leb_u(ti[1])
@@ -1318,7 +1337,9 @@ def compile_wasm(program_src, frontend, abi_version=WASM_ABI_VERSION):
           + _leb_u(len("env")) + b"env" + _leb_u(len("push_caps")) + b"push_caps" + b"\x00" + _leb_u(ti[1])
           + _leb_u(len("env")) + b"env" + _leb_u(len("pop_caps")) + b"pop_caps" + b"\x00" + _leb_u(ti[0])
           + _leb_u(len("env")) + b"env" + _leb_u(len("has_cap")) + b"has_cap" + b"\x00" + _leb_u(ti[1])
-          + _leb_u(len("env")) + b"env" + _leb_u(len("host_ffi")) + b"host_ffi" + b"\x00" + _leb_u(ti[3]))
+          + _leb_u(len("env")) + b"env" + _leb_u(len("host_ffi")) + b"host_ffi" + b"\x00" + _leb_u(ti[3])
+          + ((_leb_u(len("env")) + b"env" + _leb_u(len("host_rand")) + b"host_rand"
+              + b"\x00" + _leb_u(ti[0])) if ctx.effectful_component_v1 else b""))
     ec = _leb_u(len(funcs) + 16)
     ec += _leb_u(len("memory")) + b"memory" + b"\x02" + _leb_u(0)                  # export linear memory for the heap-backed runtime
     abi_name = b"loom_abi_version"
@@ -1344,9 +1365,9 @@ def compile_wasm(program_src, frontend, abi_version=WASM_ABI_VERSION):
         (b"loom_component_record", bridge_record_i),
         (b"loom_component_variant", bridge_variant_i),
     ):
-        ec += _leb_u(len(name)) + name + b"\x00" + _leb_u(index + _WASM_IMPORTS)
+        ec += _leb_u(len(name)) + name + b"\x00" + _leb_u(index + ctx.import_count)
     for i, t in enumerate(ds):
-        nb = t[1].encode(); ec += _leb_u(len(nb)) + nb + b"\x00" + _leb_u(i + _WASM_IMPORTS)         # export func
+        nb = t[1].encode(); ec += _leb_u(len(nb)) + nb + b"\x00" + _leb_u(i + ctx.import_count)         # export func
     cc = _leb_u(len(funcs) + len(lambda_funcs) + 20 + len(apply_arities) + (2 if abi_version == WASM_ABI_V2_VERSION else 0))
     for _, _, nloc, code, _ in funcs:
         loc = (_leb_u(1) + _leb_u(nloc) + b"\x7f") if nloc else _leb_u(0)                           # let-locals (i32)
@@ -1369,12 +1390,12 @@ def compile_wasm(program_src, frontend, abi_version=WASM_ABI_VERSION):
                   b"\x20\x01"
                   + _wasm_int(1) +
                   b"\x6a"
-                  b"\x10" + _leb_u(helper_base + 5 + _WASM_IMPORTS) +            # call $alloc
-                  b"\x10" + _leb_u(cons_i + _WASM_IMPORTS) +
+                  b"\x10" + _leb_u(helper_base + 5 + ctx.import_count) +            # call $alloc
+                  b"\x10" + _leb_u(cons_i + ctx.import_count) +
                   b"\x0b"
                   b"\x0b")
     e = (_leb_u(1) + _leb_u(2) + b"\x7f") + alloc_code; cc += _leb_u(len(e)) + e                # $alloc: 2 locals ($n,$i)
-    resource_use_code = (_wasm_const(8) + b"\x10" + _leb_u(reserve_i + _WASM_IMPORTS) + b"\x21\x01"
+    resource_use_code = (_wasm_const(8) + b"\x10" + _leb_u(reserve_i + ctx.import_count) + b"\x21\x01"
                          + _bump_global(heap_resource_g) +
                          b"\x20\x01" + _wasm_const(_WASM_K_RESOURCE) + b"\x36\x02\x00"
                          b"\x20\x01\x20\x00\x36\x02\x04"
@@ -1390,7 +1411,7 @@ def compile_wasm(program_src, frontend, abi_version=WASM_ABI_VERSION):
                     b"\x20\x02\x24\x00"                                  # $hp = $new
                     b"\x20\x01\x0b")                                      # return $t
     e = (_leb_u(1) + _leb_u(2) + b"\x7f") + reserve_code; cc += _leb_u(len(e)) + e              # $reserve: 2 locals ($t,$new)
-    meter_push_code = (_wasm_const(28) + b"\x10" + _leb_u(reserve_i + _WASM_IMPORTS) + b"\x21\x03"
+    meter_push_code = (_wasm_const(28) + b"\x10" + _leb_u(reserve_i + ctx.import_count) + b"\x21\x03"
                        b"\x20\x03\x20\x00\x36\x02\x00"
                        b"\x20\x03\x20\x01\x36\x02\x04"
                        + b"".join(b"\x20\x03\x20\x02\x36\x02" + _leb_u(8 + 4 * i) for i in range(len(EFFECT_IDS)))
@@ -1399,20 +1420,20 @@ def compile_wasm(program_src, frontend, abi_version=WASM_ABI_VERSION):
     meter_take_code = (b"\x20\x00\x45\x04\x7f\x41\x00\x05"
                        b"\x20\x00\x28\x02\x04\x41\x01\x20\x01\x74\x71\x04\x40"
                        b"\x20\x00\x20\x01\x41\x02\x74\x6a\x28\x02\x08\x45\x04\x40\x00\x0b\x0b"
-                       b"\x20\x00\x28\x02\x00\x20\x01\x10" + _leb_u(ctx.meter_take_id + _WASM_IMPORTS) + b"\x1a"
+                       b"\x20\x00\x28\x02\x00\x20\x01\x10" + _leb_u(ctx.meter_take_id + ctx.import_count) + b"\x1a"
                        b"\x20\x00\x28\x02\x04\x41\x01\x20\x01\x74\x71\x04\x40"
                        b"\x20\x00\x20\x01\x41\x02\x74\x6a"
                        b"\x20\x00\x20\x01\x41\x02\x74\x6a\x28\x02\x08\x41\x01\x6b\x36\x02\x08\x0b"
                        b"\x41\x00\x0b\x0b")
     e = _leb_u(0) + meter_take_code; cc += _leb_u(len(e)) + e
-    depth_push_code = (_wasm_const(8) + b"\x10" + _leb_u(reserve_i + _WASM_IMPORTS) + b"\x21\x02"
+    depth_push_code = (_wasm_const(8) + b"\x10" + _leb_u(reserve_i + ctx.import_count) + b"\x21\x02"
                        + b"\x20\x02\x20\x00\x36\x02\x00"
                        + b"\x20\x02\x20\x01\x36\x02\x04"
                        + b"\x20\x02\x0b")
     e = (_leb_u(1) + _leb_u(1) + b"\x7f") + depth_push_code; cc += _leb_u(len(e)) + e
     depth_take_code = (b"\x20\x00\x45\x04\x7f\x41\x00\x05"
                        b"\x20\x00\x28\x02\x04\x45\x04\x40\x00\x0b"
-                       b"\x20\x00\x28\x02\x00\x10" + _leb_u(ctx.depth_take_id + _WASM_IMPORTS) + b"\x1a"
+                       b"\x20\x00\x28\x02\x00\x10" + _leb_u(ctx.depth_take_id + ctx.import_count) + b"\x1a"
                        b"\x20\x00\x20\x00\x28\x02\x04\x41\x01\x6b\x36\x02\x04"
                        b"\x41\x00\x0b\x0b")
     e = _leb_u(0) + depth_take_code; cc += _leb_u(len(e)) + e
@@ -1435,7 +1456,7 @@ def compile_wasm(program_src, frontend, abi_version=WASM_ABI_VERSION):
         numeric_body = _leb_u(0) + numeric_code
         cc += _leb_u(len(numeric_body)) + numeric_body
         closure_record_code = (
-            _wasm_const(16) + b"\x10" + _leb_u(reserve_i + _WASM_IMPORTS) + b"\x21\x03"
+            _wasm_const(16) + b"\x10" + _leb_u(reserve_i + ctx.import_count) + b"\x21\x03"
             + _bump_global(heap_record_g)
             + b"\x20\x03" + _wasm_const(_WASM_K_CLOSURE) + b"\x36\x02\x00"
             + b"\x20\x03\x20\x01\x36\x02\x04"
@@ -1465,10 +1486,10 @@ def compile_wasm(program_src, frontend, abi_version=WASM_ABI_VERSION):
             + b"\x20\x00" + _wasm_const(_WASM_V2_TRUE) + b"\x46\x04\x40" + _wasm_const(1) + b"\x0f\x0b"
             + b"\x20\x00" + _wasm_const(_WASM_V2_EMPTY_RECORD) + b"\x46\x04\x40" + _wasm_const(1) + b"\x0f\x0b")
            if abi_version == WASM_ABI_V2_VERSION else b"")
-        + b"\x20\x00" + _wasm_const(_WASM_K_LIST) + _wasm_const(12) + b"\x10" + _leb_u(bridge_kind_i + _WASM_IMPORTS)
-        + b"\x20\x00" + _wasm_const(_WASM_K_RECORD) + _wasm_const(16) + b"\x10" + _leb_u(bridge_kind_i + _WASM_IMPORTS) + b"\x72"
-        + b"\x20\x00" + _wasm_const(_WASM_K_VARIANT) + _wasm_const(12) + b"\x10" + _leb_u(bridge_kind_i + _WASM_IMPORTS) + b"\x72"
-        + b"\x20\x00" + _wasm_const(_WASM_K_STRING) + _wasm_const(12) + b"\x10" + _leb_u(bridge_kind_i + _WASM_IMPORTS) + b"\x72\x0b"
+        + b"\x20\x00" + _wasm_const(_WASM_K_LIST) + _wasm_const(12) + b"\x10" + _leb_u(bridge_kind_i + ctx.import_count)
+        + b"\x20\x00" + _wasm_const(_WASM_K_RECORD) + _wasm_const(16) + b"\x10" + _leb_u(bridge_kind_i + ctx.import_count) + b"\x72"
+        + b"\x20\x00" + _wasm_const(_WASM_K_VARIANT) + _wasm_const(12) + b"\x10" + _leb_u(bridge_kind_i + ctx.import_count) + b"\x72"
+        + b"\x20\x00" + _wasm_const(_WASM_K_STRING) + _wasm_const(12) + b"\x10" + _leb_u(bridge_kind_i + ctx.import_count) + b"\x72\x0b"
     )
     e = _leb_u(0) + value_valid_code
     cc += _leb_u(len(e)) + e
@@ -1482,7 +1503,7 @@ def compile_wasm(program_src, frontend, abi_version=WASM_ABI_VERSION):
         + _bridge_trap_if(b"\x20\x00" + _wasm_const(65516) + b"\x4b")
         + _bridge_trap_if(b"\x23" + _leb_u(15))
         + b"\x20\x00" + _wasm_const(3) + b"\x6a" + _wasm_const(-4) + b"\x71\x21\x02"
-        + b"\x20\x02\x10" + _leb_u(reserve_i + _WASM_IMPORTS) + b"\x21\x01"
+        + b"\x20\x02\x10" + _leb_u(reserve_i + ctx.import_count) + b"\x21\x01"
         + b"\x20\x01\x24" + _leb_u(13)
         + b"\x20\x00\x24" + _leb_u(14)
         + _wasm_const(1) + b"\x24" + _leb_u(15)
@@ -1495,8 +1516,8 @@ def compile_wasm(program_src, frontend, abi_version=WASM_ABI_VERSION):
         _bridge_trap_if(b"\x23" + _leb_u(15) + b"\x45")
         + _bridge_trap_if(b"\x20\x00\x23" + _leb_u(13) + b"\x47")
         + _bridge_trap_if(b"\x20\x01\x23" + _leb_u(14) + b"\x47")
-        + _bridge_trap_if(b"\x20\x00\x20\x01\x10" + _leb_u(bridge_utf8_i + _WASM_IMPORTS) + b"\x45")
-        + _wasm_const(12) + b"\x10" + _leb_u(reserve_i + _WASM_IMPORTS) + b"\x21\x02"
+        + _bridge_trap_if(b"\x20\x00\x20\x01\x10" + _leb_u(bridge_utf8_i + ctx.import_count) + b"\x45")
+        + _wasm_const(12) + b"\x10" + _leb_u(reserve_i + ctx.import_count) + b"\x21\x02"
         + _bump_global(12)
         + b"\x20\x02" + _wasm_const(_WASM_K_STRING) + b"\x36\x02\x00"
         + b"\x20\x02\x20\x01\x36\x02\x04"
@@ -1508,26 +1529,32 @@ def compile_wasm(program_src, frontend, abi_version=WASM_ABI_VERSION):
     cc += _leb_u(len(e)) + e
 
     bridge_cons_code = (
-        _bridge_trap_if(b"\x20\x00\x10" + _leb_u(bridge_value_i + _WASM_IMPORTS) + b"\x45")
-        + _bridge_chain_validation(1, 2, 3, _WASM_NIL, _WASM_K_LIST, 12, 8, bridge_kind_i)
-        + b"\x20\x00\x20\x01\x10" + _leb_u(cons_i + _WASM_IMPORTS) + b"\x0b"
+        _bridge_trap_if(b"\x20\x00\x10" + _leb_u(bridge_value_i + ctx.import_count) + b"\x45")
+        + _bridge_chain_validation(
+            1, 2, 3, _WASM_NIL, _WASM_K_LIST, 12, 8, bridge_kind_i,
+            ctx.import_count,
+        )
+        + b"\x20\x00\x20\x01\x10" + _leb_u(cons_i + ctx.import_count) + b"\x0b"
     )
     e = (_leb_u(1) + _leb_u(2) + b"\x7f") + bridge_cons_code
     cc += _leb_u(len(e)) + e
 
     bridge_record_code = (
         _bridge_trap_if(b"\x20\x00" + _wasm_const(len(fields)) + b"\x4f")
-        + _bridge_trap_if(b"\x20\x01\x10" + _leb_u(bridge_value_i + _WASM_IMPORTS) + b"\x45")
-        + _bridge_chain_validation(2, 3, 4, _wasm_empty_record(ctx), _WASM_K_RECORD, 16, 12, bridge_kind_i)
-        + b"\x20\x02\x20\x00\x20\x01\x10" + _leb_u(rec_i + _WASM_IMPORTS) + b"\x0b"
+        + _bridge_trap_if(b"\x20\x01\x10" + _leb_u(bridge_value_i + ctx.import_count) + b"\x45")
+        + _bridge_chain_validation(
+            2, 3, 4, _wasm_empty_record(ctx), _WASM_K_RECORD, 16, 12,
+            bridge_kind_i, ctx.import_count,
+        )
+        + b"\x20\x02\x20\x00\x20\x01\x10" + _leb_u(rec_i + ctx.import_count) + b"\x0b"
     )
     e = (_leb_u(1) + _leb_u(2) + b"\x7f") + bridge_record_code
     cc += _leb_u(len(e)) + e
 
     bridge_variant_code = (
         _bridge_trap_if(b"\x20\x00" + _wasm_const(len(tags)) + b"\x4f")
-        + _bridge_trap_if(b"\x20\x01\x10" + _leb_u(bridge_value_i + _WASM_IMPORTS) + b"\x45")
-        + b"\x20\x00\x20\x01\x10" + _leb_u(ctx.variant_id + _WASM_IMPORTS) + b"\x0b"
+        + _bridge_trap_if(b"\x20\x01\x10" + _leb_u(bridge_value_i + ctx.import_count) + b"\x45")
+        + b"\x20\x00\x20\x01\x10" + _leb_u(ctx.variant_id + ctx.import_count) + b"\x0b"
     )
     e = _leb_u(0) + bridge_variant_code
     cc += _leb_u(len(e)) + e
@@ -1553,7 +1580,10 @@ def compile_wasm(program_src, frontend, abi_version=WASM_ABI_VERSION):
     bridge_custom = _leb_u(len(_COMPONENT_BRIDGE_SECTION_NAME)) + _COMPONENT_BRIDGE_SECTION_NAME + bridge_payload
     return prefix + _sec(0, bridge_custom) + suffix
 
-def emit_wat(program_src, frontend, abi_version=WASM_ABI_VERSION):
+def emit_wat(
+    program_src, frontend, abi_version=WASM_ABI_VERSION, *,
+    effectful_component_v1=False,
+):
     """Human-readable WebAssembly Text (the 'assembler') for what compile_wasm encodes to bytes:
     tagged integers plus typed list/record/variant/closure/effect objects on a linear-memory heap."""
     _, errs = frontend.check(frontend.parse(program_src))
@@ -1698,9 +1728,11 @@ def emit_wat(program_src, frontend, abi_version=WASM_ABI_VERSION):
                 return meter_take("Net") + w(with_handlers["Net"], ind, handled_effs, with_handlers, callable_env) + w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + [ind + "call $apply1"]
             return [ind + "i32.const 1  ;; effect Net", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end"] + meter_take("Net") + [ind + "i32.const 1  ;; effect Net"] + w(node[1], ind, handled_effs, with_handlers, callable_env, child_path(1)) + [ind + "call $effbox  ;; alloc effect box from net" + _wat_at(ctx, path)]
         if h == "rand":
-            uses_heap[0] = True
             if "Rand" in with_handlers:
                 return meter_take("Rand") + w(with_handlers["Rand"], ind, handled_effs, with_handlers, callable_env) + [ind + "call $apply0"]
+            if effectful_component_v1:
+                return [ind + "i32.const 2  ;; effect Rand", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end"] + meter_take("Rand") + [ind + "call $host_rand"]
+            uses_heap[0] = True
             return [ind + "i32.const 2  ;; effect Rand", ind + "call $has_cap", ind + "i32.eqz", ind + "if", ind + "  unreachable", ind + "end"] + meter_take("Rand") + [ind + "i32.const 2  ;; effect Rand", ind + "i32.const 0"] + [ind + "call $effbox  ;; alloc effect box from rand" + _wat_at(ctx, path)]
         if h == "alloc":
             uses_heap[0] = True
@@ -1828,6 +1860,7 @@ def emit_wat(program_src, frontend, abi_version=WASM_ABI_VERSION):
              '  (import "env" "pop_caps" (func $pop_caps (result i32)))',
              '  (import "env" "has_cap" (func $has_cap (param i32) (result i32)))',
              '  (import "env" "host_ffi" (func $host_ffi (param i32 i32 i32) (result i32)))',
+             *(['  (import "env" "host_rand" (func $host_rand (result i32)))'] if effectful_component_v1 else []),
              "  (global $loom_abi_version i32 (i32.const " + str(abi_version) + "))",
              "  (global $loom_heap_limit i32 (i32.const 65536))",
              "  (global $loom_heap_used (mut i32) (i32.const 0))",

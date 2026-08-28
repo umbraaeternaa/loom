@@ -6,7 +6,7 @@ experimental, and what LOOM does not claim yet.
 
 ## Current public baseline
 
-- Canonical self-verification: `PASS -- 504/504 citadel checks`.
+- Canonical self-verification: `PASS -- 505/505 citadel checks`.
 - Published browser bundle parity is required before release:
   `python3 verify_docs_parity.py`.
 - The public compatibility surface is `loom.py`; module boundaries are pinned in
@@ -61,6 +61,12 @@ experimental, and what LOOM does not claim yet.
   independent verifier rechecks source/boundary/bridge/WIT/module hashes,
   unbundles all three cores with pinned wasm-tools, and invokes a refusal probe
   through pinned Wasmtime without a WASI linker. It never grants authorization.
+- Effectful Component Adapter v1 emits a real host-policy-bound Component for
+  the closed `IO`, `Rand`, and `Alloc` subset. It imports exactly mapped WASI
+  0.2.8 interfaces, embeds four independently regenerated core modules, drops
+  stdout resources before return, and is exercised through real Wasmtime
+  calls. `Net`, `FFI`, ambient authority, and execution authorization remain
+  refused.
 - Signed Reproducible Component Release Attestation v0 resolves the active
   host graph with locked offline Cargo metadata, performs two clean frozen
   offline builds from exact active locked crate archives, requires
@@ -204,10 +210,10 @@ python3 loom.py about --format json
 
 Expected public markers:
 
-- `run_tests.py` prints `PASS -- 504/504 citadel checks`.
+- `run_tests.py` prints `PASS -- 505/505 citadel checks`.
 - `verify_docs_parity.py` prints that the published bundle is standalone and
   citadel-green.
-- `loom.py about --format json` reports `citadel_checks: 504`, the default
+- `loom.py about --format json` reports `citadel_checks: 505`, the default
   WASM ABI version, all supported WASM ABI versions, and the backend list.
 - An installed checkout exposes `loom` as the same CLI surface as
   `python3 loom.py`.

@@ -2056,7 +2056,8 @@ const env={push_handler:denied,pop_handler:denied,current_handler:denied,host_pr
                 and projection["schema"] == "loom-wasi-effect-projection/v0"
                 and projection["wasi_release"] == "0.2.8"
                 and projection["imports"] == [
-                    "wasi:cli/stdout@0.2.8", "wasi:io/streams@0.2.8",
+                    "wasi:cli/stdout@0.2.8", "wasi:io/error@0.2.8",
+                    "wasi:io/streams@0.2.8",
                     "wasi:random/random@0.2.8",
                 ]
                 and projection["denied_effects"] == ["FFI", "Net"]
@@ -2076,10 +2077,12 @@ const env={push_handler:denied,pop_handler:denied,current_handler:denied,host_pr
                     "host_policy_binding": "required-before-instantiation",
                 }
                 and "import wasi:cli/stdout@0.2.8;" in typed_wasi_mapping["wit"]["source"]
+                and "import wasi:io/error@0.2.8;" in typed_wasi_mapping["wit"]["source"]
                 and "import wasi:random/random@0.2.8;" in typed_wasi_mapping["wit"]["source"]
                 and io_result["valid"]
                 and io_projection["imports"] == [
-                    "wasi:cli/stdout@0.2.8", "wasi:io/streams@0.2.8",
+                    "wasi:cli/stdout@0.2.8", "wasi:io/error@0.2.8",
+                    "wasi:io/streams@0.2.8",
                 ]
                 and "wasi:random/random" not in io_result["mapping"]["wit"]["source"]
                 and not pure_result["valid"]
@@ -2460,6 +2463,200 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         pass
     except Exception as e:
         print(f"  FAIL backend(Component) Adapter Artifact v0: {e}")
+    try:                                               # effect rows -> exact WASI imports -> real linked Component execution
+        effectful_api_names = (
+            "prepare_effectful_component_host_policy_v1",
+            "verify_effectful_component_host_policy_v1",
+            "build_effectful_component_adapter_v1",
+            "verify_effectful_component_adapter_v1",
+        )
+        if not hasattr(_loom, effectful_api_names[0]):
+            effectful_ok = (
+                Path(_loom.__file__).parent.name == "docs"
+                and all(not hasattr(_loom, name) for name in effectful_api_names)
+            )
+            ok += effectful_ok
+            print(f"  {'ok  ' if effectful_ok else 'FAIL'} backend(Component): published standalone excludes host-only Effectful Adapter v1")
+            raise _PublishedAbiV1Only
+        effectful_package = "umbra:loom@0.5.0"
+        effectful_root = Path(__file__).parent
+        effectful_wasm_tools = Path(os.environ.get(
+            "LOOM_WASM_TOOLS",
+            "/Users/macbook/codex/toolchains/loom-component/installed/wasm-tools-1.257.1-aarch64-macos/wasm-tools",
+        ))
+        effectful_wasmtime = Path(os.environ.get(
+            "LOOM_WASMTIME",
+            "/Users/macbook/codex/toolchains/loom-component/installed/wasmtime-v48.0.0-aarch64-macos/wasmtime",
+        ))
+        effectful_builder = Path(os.environ.get(
+            "LOOM_EFFECTFUL_COMPONENT_BUILDER",
+            "/private/tmp/loom-effectful-component-builder-target/release/loom-effectful-component-builder",
+        ))
+        io_source = '(defx emit (IO) (fn (x) (print x)))'
+        io_core = _loom.compile_wasm_v2(io_source)
+        io_mapping_result = _loom.build_typed_wasi_capability_mapping_v0(
+            io_source, io_core, effectful_package, "effectful-io", ["emit"],
+        )
+        io_mapping = io_mapping_result.get("mapping") or {}
+        io_policy_result = _loom.prepare_effectful_component_host_policy_v1(io_mapping, "citadel-io")
+        io_policy = io_policy_result.get("policy") or {}
+        if not all(path.is_file() for path in (effectful_wasm_tools, effectful_wasmtime, effectful_builder)):
+            closed = _loom.build_effectful_component_adapter_v1(
+                io_mapping, io_policy, io_source, io_core, effectful_package,
+                "effectful-io", ["emit"],
+                builder_executable=effectful_root / "missing-effectful-builder",
+                wasm_tools_executable=effectful_root / "missing-wasm-tools",
+            )
+            effectful_ok = (
+                closed["valid"] is False and closed["artifact"] is None
+                and closed["component"] is None
+                and [item["code"] for item in closed["findings"]]
+                == ["effectful-component-build-rejected"]
+            )
+            ok += effectful_ok
+            print(f"  {'ok  ' if effectful_ok else 'FAIL'} backend(Component): Effectful Adapter v1 toolchain absence fails closed")
+        else:
+            build_tools = {
+                "builder_executable": str(effectful_builder),
+                "wasm_tools_executable": str(effectful_wasm_tools),
+            }
+            verify_tools = {
+                "wasm_tools_executable": str(effectful_wasm_tools),
+                "wasmtime_executable": str(effectful_wasmtime),
+            }
+
+            def build_effectful_fixture(source, world, export, policy_id):
+                core = _loom.compile_wasm_v2(source)
+                mapped = _loom.build_typed_wasi_capability_mapping_v0(
+                    source, core, effectful_package, world, [export],
+                )
+                mapping = mapped.get("mapping") or {}
+                prepared = _loom.prepare_effectful_component_host_policy_v1(mapping, policy_id)
+                policy = prepared.get("policy") or {}
+                built = _loom.build_effectful_component_adapter_v1(
+                    mapping, policy, source, core, effectful_package, world, [export], **build_tools,
+                )
+                if not built["valid"]:
+                    raise ValueError(f"effectful fixture build rejected: {built['findings']}")
+                verified = _loom.verify_effectful_component_adapter_v1(
+                    built.get("artifact"), built.get("component"), mapping, policy,
+                    source, core, effectful_package, world, [export], **verify_tools,
+                )
+                return core, mapping, policy, built, verified
+
+            def invoke_effectful(component, export, args):
+                request = json.dumps(
+                    {"args": args}, ensure_ascii=True, sort_keys=True, separators=(",", ":"),
+                ).encode()
+                wave = "[" + ",".join(str(byte) for byte in request) + "]"
+                with tempfile.TemporaryDirectory(prefix="loom-effectful-runtime-") as raw_tmp:
+                    component_path = Path(raw_tmp) / "component.wasm"
+                    component_path.write_bytes(component)
+                    invoked = subprocess.run(
+                        [str(effectful_wasmtime), "run", "--invoke", f"{export}({wave})", str(component_path)],
+                        capture_output=True, text=True,
+                    )
+                marker = "ok(["
+                start = invoked.stdout.rfind(marker)
+                end = invoked.stdout.find("])" , start)
+                if invoked.returncode or start < 0 or end < 0:
+                    raise ValueError("effectful Wasmtime invocation failed: " + invoked.stderr.strip())
+                numbers = invoked.stdout[start + len(marker):end].strip()
+                payload = bytes(int(item.strip()) for item in numbers.split(",") if item.strip())
+                return invoked.stdout[:start], json.loads(payload.decode("utf-8"))
+
+            _, io_mapping, io_policy, io_a, io_verified = build_effectful_fixture(
+                io_source, "effectful-io", "emit", "citadel-io",
+            )
+            io_b = _loom.build_effectful_component_adapter_v1(
+                io_mapping, io_policy, io_source, io_core, effectful_package,
+                "effectful-io", ["emit"], **build_tools,
+            )
+            _, rand_mapping, _, rand_built, rand_verified = build_effectful_fixture(
+                '(defx sample (Rand) (fn () (rand)))', "effectful-rand", "sample", "citadel-rand",
+            )
+            _, alloc_mapping, _, alloc_built, alloc_verified = build_effectful_fixture(
+                '(defx reserve (Alloc) (fn (n) (alloc n)))', "effectful-alloc", "reserve", "citadel-alloc",
+            )
+            io_prefix, io_value = invoke_effectful(io_a["component"], "emit", [7])
+            rand_prefix, rand_value = invoke_effectful(rand_built["component"], "sample", [])
+            alloc_prefix, alloc_value = invoke_effectful(alloc_built["component"], "reserve", [3])
+
+            def rehash_effectful(value, key):
+                body = copy.deepcopy(value)
+                body.pop(key, None)
+                value[key] = hashlib.sha256(json.dumps(
+                    body, ensure_ascii=True, sort_keys=True,
+                    separators=(",", ":"), allow_nan=False,
+                ).encode()).hexdigest()
+
+            bad_policy = copy.deepcopy(io_policy)
+            bad_policy["ambient_authority"] = True
+            rehash_effectful(bad_policy, "policy_sha256")
+            bad_policy_verified = _loom.verify_effectful_component_host_policy_v1(
+                bad_policy, io_mapping, "citadel-io",
+            )
+            bad_artifact = copy.deepcopy(io_a["artifact"])
+            bad_artifact["lifecycle"]["authorization"] = "execute"
+            rehash_effectful(bad_artifact, "artifact_sha256")
+            bad_artifact_verified = _loom.verify_effectful_component_adapter_v1(
+                bad_artifact, io_a["component"], io_mapping, io_policy, io_source,
+                io_core, effectful_package, "effectful-io", ["emit"], **verify_tools,
+            )
+            bad_component = io_a["component"][:-1] + bytes([io_a["component"][-1] ^ 1])
+            bad_component_verified = _loom.verify_effectful_component_adapter_v1(
+                io_a["artifact"], bad_component, io_mapping, io_policy, io_source,
+                io_core, effectful_package, "effectful-io", ["emit"], **verify_tools,
+            )
+            net_source = '(defx fetch (Net) (fn (x) (net x)))'
+            net_mapping = _loom.build_typed_wasi_capability_mapping_v0(
+                net_source, _loom.compile_wasm_v2(net_source), effectful_package,
+                "effectful-net", ["fetch"],
+            )
+            builder_root = effectful_root / "tools" / "loom-effectful-component-builder"
+            builder_sources = {
+                name: hashlib.sha256((builder_root / name).read_bytes()).hexdigest()
+                for name in ("Cargo.toml", "src/main.rs")
+            }
+            builder_tree_hash = hashlib.sha256(json.dumps(
+                builder_sources, ensure_ascii=True, sort_keys=True, separators=(",", ":"),
+            ).encode()).hexdigest()
+            builder_lock_hash = hashlib.sha256((builder_root / "Cargo.lock").read_bytes()).hexdigest()
+            effectful_ok = (
+                io_mapping_result["valid"] and io_policy_result["valid"]
+                and io_a["valid"] and io_b["valid"]
+                and io_a["component"] == io_b["component"]
+                and io_a["artifact"] == io_b["artifact"]
+                and io_verified["valid"] and rand_verified["valid"] and alloc_verified["valid"]
+                and io_verified["evidence"]["embedded_core_modules"] == 4
+                and io_verified["evidence"]["authorization"] == "none"
+                and io_a["artifact"]["lifecycle"]["host_policy_bound"] is True
+                and io_mapping["capability_projection"]["imports"] == [
+                    "wasi:cli/stdout@0.2.8", "wasi:io/error@0.2.8", "wasi:io/streams@0.2.8",
+                ]
+                and rand_mapping["capability_projection"]["imports"] == ["wasi:random/random@0.2.8"]
+                and alloc_mapping["capability_projection"]["imports"] == []
+                and io_prefix == "7" and io_value == {"ok": 7}
+                and rand_prefix == "" and isinstance(rand_value.get("ok"), int)
+                and 0 <= rand_value["ok"] < 1073741824
+                and alloc_prefix == "" and alloc_value == {"ok": [0, 1, 2]}
+                and bad_policy_verified["valid"] is False
+                and bad_artifact_verified["valid"] is False
+                and bad_component_verified["valid"] is False
+                and net_mapping["valid"] is False
+                and any(item["code"] == "unmapped-wasi-effect" for item in net_mapping["findings"])
+                and builder_tree_hash == _loom._loom_component_adapter.EFFECTFUL_BUILDER_SOURCE_TREE_SHA256
+                and builder_lock_hash == _loom._loom_component_adapter.EFFECTFUL_BUILDER_LOCKFILE_SHA256
+                and _loom.verify_wasm_component_bridge_v0_abi_v2(
+                    io_source, _loom.compile_wasm_v2(io_source),
+                )["valid"]
+            )
+            ok += effectful_ok
+            print(f"  {'ok  ' if effectful_ok else 'FAIL'} backend(Component): Effectful Adapter v1 exact IO/Rand/Alloc lowering + host policy + Wasmtime")
+    except _PublishedAbiV1Only:
+        pass
+    except Exception as e:
+        print(f"  FAIL backend(Component) Effectful Adapter v1: {e}")
     try:                                               # effect frontier: IO `with` reinterprets print through a handler closure
         prog = '(defx h () (fn (x) (* x 2))) (defx t () (fn () (with IO h (print 5))))'
         v33, o33 = run_wasm(prog, "(t)")
@@ -2861,7 +3058,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             "actions_observed": ["read", "write", "test", "git-commit"],
             "evidence": [
                 {"kind": "syntax", "status": "pass", "detail": "PASS syntax"},
-                {"kind": "citadel", "status": "pass", "detail": "504/504"},
+                {"kind": "citadel", "status": "pass", "detail": "505/505"},
                 {"kind": "docs-parity", "status": "pass", "detail": "PASS docs parity"},
                 {"kind": "git-clean", "status": "pass", "detail": "clean"},
                 {"kind": "git-sync", "status": "pass", "detail": "HEAD == origin/main"},
@@ -6587,7 +6784,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == (500 if is_browser_bundle else 504)
+            and about_json["citadel_checks"] == (500 if is_browser_bundle else 505)
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["wasm_abi_versions"] == ([1] if is_browser_bundle else [1, 2])
             and about_json["i31_bits"] == 31
@@ -6817,7 +7014,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 504/504 citadel checks" in quick
+            and "PASS -- 505/505 citadel checks" in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
             and "loom examples" in quick
@@ -6927,7 +7124,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "504-typed-wasi-capability-mapping-v0")' in play
+            and 'bundleUrl.searchParams.set("v", "505-effectful-component-adapter-v1")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -7549,7 +7746,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 504/504 citadel checks" in rdoc
+            and "PASS -- 505/505 citadel checks" in rdoc
             and "loom examples --format json" in rdoc
             and "loom doctor --dry-run --format json" in rdoc
             and "python3 verify_docs_parity.py" in rdoc
@@ -7613,7 +7810,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 151   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 152   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

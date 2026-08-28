@@ -38,6 +38,11 @@ _SUPPORTED_EFFECTS = frozenset(("IO", "Rand", "Alloc"))
 _DENIED_EFFECTS = frozenset(("Net", "FFI"))
 
 _SPEC_SOURCES = {
+    "wasi:io/error@0.2.8": [{
+        "repository": "https://github.com/WebAssembly/wasi-io",
+        "tag": "v0.2.8", "path": "wit/error.wit",
+        "sha256": "55c598b16829f7dfcd3fd373d96dd86ef0373d9354745436a61c2d3832791e11",
+    }],
     "wasi:cli/stdout@0.2.8": [
         {
             "repository": "https://github.com/WebAssembly/wasi-cli",
@@ -67,7 +72,10 @@ _EFFECT_PROJECTIONS = {
         "effect": "IO",
         "loom_operation": "print",
         "disposition": "wasi-import",
-        "imports": ["wasi:cli/stdout@0.2.8", "wasi:io/streams@0.2.8"],
+        "imports": [
+            "wasi:cli/stdout@0.2.8", "wasi:io/error@0.2.8",
+            "wasi:io/streams@0.2.8",
+        ],
         "calls": [
             "wasi:cli/stdout.get-stdout",
             "wasi:io/streams.output-stream.blocking-write-and-flush",

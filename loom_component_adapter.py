@@ -16,6 +16,12 @@ SCHEMA = "loom-component-adapter-artifact/v0"
 BUILD_SCHEMA = "loom-component-adapter-build/v0"
 VALIDATION_SCHEMA = "loom-component-adapter-validation/v0"
 EVIDENCE_SECTION = "loom.component-adapter.v0"
+EFFECTFUL_SCHEMA = "loom-effectful-component-adapter/v1"
+EFFECTFUL_BUILD_SCHEMA = "loom-effectful-component-adapter-build/v1"
+EFFECTFUL_VALIDATION_SCHEMA = "loom-effectful-component-adapter-validation/v1"
+EFFECTFUL_EVIDENCE_SECTION = "loom.effectful-component-adapter.v1"
+HOST_POLICY_SCHEMA = "loom-effectful-component-host-policy/v1"
+HOST_POLICY_VALIDATION_SCHEMA = "loom-effectful-component-host-policy-validation/v1"
 MAX_ENVELOPE_BYTES = 1 << 20
 MAX_DEPTH = 64
 MAX_CELLS = 2048
@@ -40,8 +46,11 @@ WASMTIME_SHA256 = frozenset((
 ))
 BUILDER_SOURCE_TREE_SHA256 = "8de3766b6a627924aaa62b739c5f45fd83f52e294abc5ea1474651703dfc4ec3"
 BUILDER_LOCKFILE_SHA256 = "16a0cfe122acfd6d56ca9b9678714b46a911e48714e8ad52da275910e45b4c13"
+EFFECTFUL_BUILDER_SOURCE_TREE_SHA256 = "449de276a592eeae3127184433bf586cbbb1197091f4b7f472937e9f0c7eddcb"
+EFFECTFUL_BUILDER_LOCKFILE_SHA256 = "6b0d46b53aa468420e9b711049cb2690bd51d4a40d74f9932b5f599bec84c623"
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
+_POLICY_ID = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 _ENV_SIGNATURES = (
     ("push_handler", 2), ("pop_handler", 1), ("current_handler", 1),
     ("host_print", 1), ("push_caps", 1), ("pop_caps", 0),
@@ -50,11 +59,20 @@ _ENV_SIGNATURES = (
 
 
 class Frontend:
-    __slots__ = ("verify_boundary", "verify_bridge")
+    __slots__ = (
+        "verify_boundary", "verify_bridge", "verify_mapping", "emit_wat",
+        "compile_effectful_wasm",
+    )
 
-    def __init__(self, verify_boundary, verify_bridge):
+    def __init__(
+        self, verify_boundary, verify_bridge, verify_mapping=None, emit_wat=None,
+        compile_effectful_wasm=None,
+    ):
         self.verify_boundary = verify_boundary
         self.verify_bridge = verify_bridge
+        self.verify_mapping = verify_mapping
+        self.emit_wat = emit_wat
+        self.compile_effectful_wasm = compile_effectful_wasm
 
 
 def _json_bytes(value):
@@ -73,7 +91,7 @@ def _finding(path, code, message):
 
 def _result(schema, valid, *, artifact=None, component=None, findings=()):
     result = {"schema": schema, "valid": bool(valid), "findings": list(findings)}
-    if schema == BUILD_SCHEMA:
+    if schema in (BUILD_SCHEMA, EFFECTFUL_BUILD_SCHEMA):
         result.update({"artifact": artifact if valid else None, "component": component if valid else None})
     else:
         result["artifact"] = artifact if valid else None
@@ -110,6 +128,13 @@ def _builder_source_identity():
     }
 
 
+def _effectful_builder_source_identity():
+    return {
+        "source_tree_sha256": EFFECTFUL_BUILDER_SOURCE_TREE_SHA256,
+        "lockfile_sha256": EFFECTFUL_BUILDER_LOCKFILE_SHA256,
+    }
+
+
 def _builder_tool(path):
     if not isinstance(path, (str, os.PathLike)):
         raise ValueError("builder executable path is required")
@@ -117,6 +142,19 @@ def _builder_tool(path):
     if not resolved.is_file() or not os.access(resolved, os.X_OK):
         raise ValueError("builder is not an executable file")
     identity = {"sha256": _sha256(resolved.read_bytes()), **_builder_source_identity()}
+    return identity, str(resolved)
+
+
+def _effectful_builder_tool(path):
+    if not isinstance(path, (str, os.PathLike)):
+        raise ValueError("effectful builder executable path is required")
+    resolved = Path(path).resolve(strict=True)
+    if not resolved.is_file() or not os.access(resolved, os.X_OK):
+        raise ValueError("effectful builder is not an executable file")
+    identity = {
+        "sha256": _sha256(resolved.read_bytes()),
+        **_effectful_builder_source_identity(),
+    }
     return identity, str(resolved)
 
 
@@ -130,6 +168,155 @@ def _deny_env_wat():
         params = " ".join("(param i32)" for _ in range(arity))
         funcs.append(f'  (func (export "{name}") {params} (result i32) unreachable)')
     return "(module\n" + "\n".join(funcs) + "\n)\n"
+
+
+def _canonical_memory_wat():
+    return f'(module (memory (export "memory") {CANONICAL_MEMORY_PAGES} {CANONICAL_MEMORY_PAGES}))\n'
+
+
+def _effect_env_wat(effects):
+    effects = set(effects)
+    unknown = effects - {"IO", "Rand", "Alloc"}
+    if unknown:
+        raise ValueError("effect environment contains unsupported effects: " + ", ".join(sorted(unknown)))
+    random_import = (
+        '  (import "wasi" "get_random_u64" (func $get-random-u64 (result i64)))\n'
+        if "Rand" in effects else ""
+    )
+    host_rand = (
+        "  (func (export \"host_rand\") (result i32)\n"
+        "    call $get-random-u64 i32.wrap_i64 i32.const 1073741823 i32.and i32.const 1 i32.shl)\n"
+        if "Rand" in effects else
+        '  (func (export "host_rand") (result i32) unreachable)\n'
+    )
+    host_print = (
+        "  (func (export \"host_print\") (param $value i32) (result i32)\n"
+        "    global.get $print-count i32.const 2048 i32.ge_u if unreachable end\n"
+        "    global.get $print-count i32.const 2 i32.shl local.get $value i32.store\n"
+        "    global.get $print-count i32.const 1 i32.add global.set $print-count local.get $value)\n"
+        if "IO" in effects else
+        '  (func (export "host_print") (param i32) (result i32) unreachable)\n'
+    )
+    return f'''(module
+{random_import}  (memory 1)
+  (global $cap-depth (mut i32) (i32.const 0))
+  (global $print-count (mut i32) (i32.const 0))
+  (func $handler-depth-address (param $effect i32) (result i32)
+    local.get $effect i32.const 5 i32.ge_u if unreachable end
+    i32.const 12288 local.get $effect i32.const 2 i32.shl i32.add)
+  (func $handler-slot-address (param $effect i32) (param $depth i32) (result i32)
+    i32.const 16384 local.get $effect i32.const 8 i32.shl i32.add
+    local.get $depth i32.const 2 i32.shl i32.add)
+  (func (export "push_handler") (param $effect i32) (param $handler i32) (result i32)
+    (local $depth i32) (local $address i32)
+    local.get $effect call $handler-depth-address local.tee $address i32.load local.tee $depth
+    i32.const 64 i32.ge_u if unreachable end
+    local.get $effect local.get $depth call $handler-slot-address local.get $handler i32.store
+    local.get $address local.get $depth i32.const 1 i32.add i32.store i32.const 0)
+  (func (export "pop_handler") (param $effect i32) (result i32)
+    (local $depth i32) (local $address i32)
+    local.get $effect call $handler-depth-address local.tee $address i32.load local.tee $depth
+    i32.eqz if unreachable end
+    local.get $address local.get $depth i32.const 1 i32.sub i32.store i32.const 0)
+  (func (export "current_handler") (param $effect i32) (result i32) (local $depth i32)
+    local.get $effect call $handler-depth-address i32.load local.tee $depth
+    i32.eqz if i32.const 0 return end
+    local.get $effect local.get $depth i32.const 1 i32.sub call $handler-slot-address i32.load)
+{host_print}  (func (export "push_caps") (param $mask i32) (result i32)
+    global.get $cap-depth i32.const 64 i32.ge_u if unreachable end
+    i32.const 8192 global.get $cap-depth i32.const 2 i32.shl i32.add
+    local.get $mask i32.store
+    global.get $cap-depth i32.const 1 i32.add global.set $cap-depth i32.const 0)
+  (func (export "pop_caps") (result i32)
+    global.get $cap-depth i32.eqz if unreachable end
+    global.get $cap-depth i32.const 1 i32.sub global.set $cap-depth i32.const 0)
+  (func (export "has_cap") (param $effect i32) (result i32) (local $mask i32)
+    global.get $cap-depth i32.eqz if i32.const 1 return end
+    i32.const 8192 global.get $cap-depth i32.const 1 i32.sub i32.const 2 i32.shl i32.add
+    i32.load local.set $mask
+    local.get $mask i32.const 1 local.get $effect i32.shl i32.and i32.eqz i32.eqz)
+  (func (export "host_ffi") (param i32 i32 i32) (result i32) unreachable)
+{host_rand}  (func (export "print_count") (result i32) global.get $print-count)
+  (func (export "print_at") (param $index i32) (result i32)
+    local.get $index global.get $print-count i32.ge_u if unreachable end
+    local.get $index i32.const 2 i32.shl i32.load)
+  (func (export "clear_prints") i32.const 0 i32.const 0 global.get $print-count i32.const 2 i32.shl memory.fill
+    i32.const 0 global.set $print-count)
+)
+'''
+
+
+def _host_policy_body(mapping, policy_id):
+    if not isinstance(mapping, dict) or not _HEX64.fullmatch(str(mapping.get("mapping_sha256", ""))):
+        raise ValueError("mapping must carry a valid mapping_sha256")
+    if not isinstance(policy_id, str) or not _POLICY_ID.fullmatch(policy_id):
+        raise ValueError("policy_id must be a lowercase kebab identifier")
+    projection = mapping.get("capability_projection")
+    if not isinstance(projection, dict):
+        raise ValueError("mapping capability projection is absent")
+    effects = sorted(item.get("effect") for item in projection.get("effects", ()) if isinstance(item, dict))
+    if not effects or any(effect not in {"IO", "Rand", "Alloc"} for effect in effects):
+        raise ValueError("host policy requires the closed non-empty IO,Rand,Alloc projection")
+    imports = projection.get("imports")
+    if not isinstance(imports, list) or any(not isinstance(item, str) for item in imports):
+        raise ValueError("mapping import set is malformed")
+    return {
+        "schema": HOST_POLICY_SCHEMA,
+        "policy_id": policy_id,
+        "mapping_sha256": mapping["mapping_sha256"],
+        "wasi_release": projection.get("wasi_release"),
+        "allowed_effects": effects,
+        "allowed_imports": sorted(imports),
+        "bindings": {
+            "stdout": "inherited-stdout-only" if "IO" in effects else "absent",
+            "random": "wasi-random-u64-modulo-1073741824" if "Rand" in effects else "absent",
+            "allocation": "loom-internal-fixed-page" if "Alloc" in effects else "absent",
+        },
+        "denied_authority": ["environment", "filesystem", "network", "stderr", "stdin"],
+        "ambient_authority": False,
+        "authorization": "none",
+    }
+
+
+def prepare_effectful_component_host_policy_v1(mapping, policy_id):
+    try:
+        body = _host_policy_body(mapping, policy_id)
+        body["policy_sha256"] = _sha256(_json_bytes(body))
+        return {
+            "schema": HOST_POLICY_VALIDATION_SCHEMA,
+            "valid": True,
+            "policy": body,
+            "findings": [],
+        }
+    except (KeyError, TypeError, ValueError) as exc:
+        return {
+            "schema": HOST_POLICY_VALIDATION_SCHEMA,
+            "valid": False,
+            "policy": None,
+            "findings": [_finding("host_policy", "host-policy-rejected", str(exc))],
+        }
+
+
+def verify_effectful_component_host_policy_v1(policy, mapping, policy_id):
+    expected = prepare_effectful_component_host_policy_v1(mapping, policy_id)
+    if not expected["valid"]:
+        return expected
+    findings = []
+    if not isinstance(policy, dict):
+        findings.append(_finding("host_policy", "expected-object", "host policy must be an object"))
+    else:
+        body = dict(policy)
+        supplied_hash = body.pop("policy_sha256", None)
+        if supplied_hash != _sha256(_json_bytes(body)):
+            findings.append(_finding("host_policy.policy_sha256", "host-policy-hash-mismatch", "host policy hash does not match canonical policy bytes"))
+        if policy != expected["policy"]:
+            findings.append(_finding("host_policy", "host-policy-mismatch", "host policy does not match the exact mapping and policy identifier"))
+    return {
+        "schema": HOST_POLICY_VALIDATION_SCHEMA,
+        "valid": not findings,
+        "policy": policy if not findings else None,
+        "findings": findings,
+    }
 
 
 def _canonical_name_bytes(name):
@@ -190,7 +377,9 @@ def _emit_name_cases(items, family):
     return "\n".join(lines)
 
 
-def _import_lines(exports):
+def _import_lines(exports, *, effectful_effects=None):
+    effects = set(effectful_effects or ())
+    effectful = effectful_effects is not None
     lines = [
         '  (import "loom" "memory" (memory $loom 1))',
         '  (import "loom" "loom_component_alloc_bytes" (func $alloc-bytes (param i32) (result i32)))',
@@ -199,6 +388,19 @@ def _import_lines(exports):
         '  (import "loom" "loom_component_record" (func $record (param i32 i32 i32) (result i32)))',
         '  (import "loom" "loom_component_variant" (func $variant (param i32 i32) (result i32)))',
     ]
+    if effectful:
+        lines += [
+            '  (import "canonical" "memory" (memory $canonical 35 35))',
+            '  (import "envlog" "print_count" (func $print-count (result i32)))',
+            '  (import "envlog" "print_at" (func $print-at (param i32) (result i32)))',
+            '  (import "envlog" "clear_prints" (func $clear-prints))',
+        ]
+        if "IO" in effects:
+            lines += [
+                '  (import "wasi" "get_stdout" (func $get-stdout (result i32)))',
+                '  (import "wasi" "blocking_write_and_flush" (func $blocking-write-and-flush (param i32 i32 i32 i32)))',
+                '  (import "wasi" "drop_output_stream" (func $drop-output-stream (param i32)))',
+            ]
     for item in exports:
         params = " ".join("(param i32)" for _ in range(item["arity"]))
         lines.append(f'  (import "loom" "{item["loom_name"]}" (func $loom-{item["wit_name"]} {params} (result i32)))')
@@ -691,7 +893,7 @@ def _serializer_wat(items, literals):
 '''
 
 
-def _invoke_wat(item, literals):
+def _invoke_wat(item, literals, *, flush_prints=False):
     args = "\n".join(
         f"    i32.const {CANONICAL_ARGS_START + index * 4} i32.load $canonical"
         for index in range(item["arity"])
@@ -702,6 +904,7 @@ def _invoke_wat(item, literals):
     if (result i32)
 {args}
       call $loom-{item['wit_name']} local.set $value
+{('      call $flush-prints' + chr(10)) if flush_prints else ''}\
       global.get $out-start global.set $out
       i32.const {literals['ok']['ptr']} i32.const {len(literals['ok']['raw'])} call $emit-static
       local.get $value call $serialize i32.const 125 call $emit
@@ -710,7 +913,9 @@ def _invoke_wat(item, literals):
   (func (export "cm32p2||{item['wit_name']}_post") (param i32))'''
 
 
-def _adapter_wat(boundary, bridge):
+def _adapter_wat(boundary, bridge, *, effectful_effects=None):
+    effects = set(effectful_effects or ())
+    effectful = effectful_effects is not None
     exports = boundary["exports"]
     for item in exports:
         arity = item.get("arity")
@@ -727,10 +932,31 @@ def _adapter_wat(boundary, bridge):
         data.append(f'  (data (memory $canonical) (i32.const {item["raw_ptr"]}) "{_wat_data(item["raw"])}")')
     for item in literals.values():
         data.append(f'  (data (memory $canonical) (i32.const {item["ptr"]}) "{_wat_data(item["raw"])}")')
-    invokes = "\n".join(_invoke_wat(item, literals) for item in exports)
+    invokes = "\n".join(_invoke_wat(item, literals, flush_prints="IO" in effects) for item in exports)
+    memory = "" if effectful else f"  (memory $canonical {CANONICAL_MEMORY_PAGES})\n"
+    flush = ""
+    if "IO" in effects:
+        flush = f'''  (func $flush-prints (local $i i32) (local $n i32) (local $stream i32)
+    call $print-count local.set $n
+    block $done loop $each
+      local.get $i local.get $n i32.ge_u br_if $done
+      i32.const 0 global.set $err i32.const 0 global.set $cells i32.const 0 global.set $depth
+      i32.const {CANONICAL_OUTPUT_START} global.set $out-start
+      i32.const {CANONICAL_OUTPUT_START} global.set $out
+      local.get $i call $print-at call $serialize
+      global.get $err if unreachable end
+      call $get-stdout local.set $stream
+      local.get $stream i32.const {CANONICAL_OUTPUT_START}
+      global.get $out i32.const {CANONICAL_OUTPUT_START} i32.sub
+      i32.const {CANONICAL_SCRATCH_START} call $blocking-write-and-flush
+      local.get $stream call $drop-output-stream
+      i32.const {CANONICAL_SCRATCH_START} i32.load $canonical if unreachable end
+      local.get $i i32.const 1 i32.add local.set $i br $each
+    end end call $clear-prints)
+'''
     return f'''(module
-{_import_lines(exports)}
-  (memory $canonical {CANONICAL_MEMORY_PAGES})
+{_import_lines(exports, effectful_effects=effectful_effects)}
+{memory}\
   (global $used (mut i32) (i32.const 0))
   (global $heap (mut i32) (i32.const {CANONICAL_INPUT_START}))
   (global $pos (mut i32) (i32.const 0))
@@ -748,6 +974,7 @@ def _adapter_wat(boundary, bridge):
 {chr(10).join(data)}
 {_parser_wat(items, special, literals)}
 {_serializer_wat(items, literals)}
+{flush}\
   (func $prepare (param $request i32) (param $length i32) (param $arity i32) (result i32)
     global.get $used if unreachable end i32.const 1 global.set $used
     i32.const 0 global.set $err i32.const 0 global.set $cells i32.const 0 global.set $depth
@@ -1088,3 +1315,423 @@ def verify_component_adapter_artifact_v0(
     except (KeyError, TypeError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
         findings.append(_finding("verification", "component-artifact-rejected", str(exc)))
         return _result(VALIDATION_SCHEMA, False, findings=findings)
+
+
+def _closed_effectful_inputs(
+    frontend, mapping, host_policy, source, core_wasm, package, world, exports,
+):
+    if frontend.verify_mapping is None or frontend.compile_effectful_wasm is None:
+        raise ValueError("Effectful Component Adapter v1 frontend is incomplete")
+    verified = frontend.verify_mapping(
+        mapping, source, core_wasm, package, world, exports,
+    )
+    if not verified.get("valid"):
+        raise ValueError(
+            "Typed WASI mapping verification failed: "
+            + "; ".join(item.get("message", "") for item in verified.get("findings", ()))
+        )
+    policy_id = host_policy.get("policy_id") if isinstance(host_policy, dict) else None
+    policy_result = verify_effectful_component_host_policy_v1(
+        host_policy, mapping, policy_id,
+    )
+    if not policy_result["valid"]:
+        raise ValueError(
+            "host policy verification failed: "
+            + "; ".join(item.get("message", "") for item in policy_result["findings"])
+        )
+    bridge_result = frontend.verify_bridge(source, core_wasm)
+    if not bridge_result.get("valid"):
+        raise ValueError(
+            "Component Bridge v0 verification failed: "
+            + "; ".join(bridge_result.get("findings", ()))
+        )
+    if mapping.get("core_module", {}).get("loom_abi_version") != 2:
+        raise ValueError("Effectful Component Adapter v1 requires LOOM ABI v2")
+    projection = mapping.get("capability_projection", {})
+    effects = sorted(
+        item.get("effect") for item in projection.get("effects", ())
+        if isinstance(item, dict)
+    )
+    if not effects or any(effect not in {"IO", "Rand", "Alloc"} for effect in effects):
+        raise ValueError("effect projection is outside the closed IO,Rand,Alloc set")
+    if host_policy.get("allowed_effects") != effects:
+        raise ValueError("host policy effect set differs from the mapping")
+    return bridge_result["bridge"], effects
+
+
+def _effectful_evidence(
+    mapping, host_policy, source, core_wasm, bridge, effects,
+    canonical_memory, effect_env, linked_core, adapter,
+):
+    return {
+        "schema": "loom-effectful-component-adapter-evidence/v1",
+        "mapping_sha256": mapping["mapping_sha256"],
+        "host_policy_sha256": host_policy["policy_sha256"],
+        "source_sha256": _sha256(source.encode("utf-8")),
+        "source_core_sha256": _sha256(bytes(core_wasm)),
+        "bridge_sha256": _sha256(_json_bytes(bridge)),
+        "effects": list(effects),
+        "canonical_memory_core_sha256": _sha256(canonical_memory),
+        "effect_env_core_sha256": _sha256(effect_env),
+        "linked_core_sha256": _sha256(linked_core),
+        "adapter_core_sha256": _sha256(adapter),
+        "wit_source": mapping["wit"]["source"],
+        "wit_sha256": mapping["wit"]["sha256"],
+        "ambient_authority": False,
+        "authorization": "none",
+    }
+
+
+def build_effectful_component_adapter_v1(
+    frontend, mapping, host_policy, source, core_wasm, package, world, exports=None, *,
+    builder_executable, wasm_tools_executable,
+):
+    findings = []
+    try:
+        bridge, effects = _closed_effectful_inputs(
+            frontend, mapping, host_policy, source, core_wasm, package, world, exports,
+        )
+        wasm_tools_id, wasm_tools = _tool(
+            wasm_tools_executable, WASM_TOOLS_VERSION, WASM_TOOLS_SHA256, "wasm-tools",
+        )
+        builder_id, builder = _effectful_builder_tool(builder_executable)
+        linked_core = frontend.compile_effectful_wasm(source)
+        memory_wat = _canonical_memory_wat()
+        env_wat = _effect_env_wat(effects)
+        adapter_wat = _adapter_wat(mapping, bridge, effectful_effects=effects)
+        with tempfile.TemporaryDirectory(prefix="loom-effectful-component-v1-") as raw_tmp:
+            tmp = Path(raw_tmp)
+            memory_path = tmp / "canonical-memory.wasm"
+            env_path = tmp / "effect-env.wasm"
+            linked_path = tmp / "loom-linked.wasm"
+            adapter_path = tmp / "adapter.wasm"
+            evidence_path = tmp / "evidence.json"
+            output_path = tmp / "component.wasm"
+            canonical_memory = _parse_wat(wasm_tools, memory_wat, memory_path)
+            effect_env = _parse_wat(wasm_tools, env_wat, env_path)
+            linked_path.write_bytes(linked_core)
+            adapter = _parse_wat(wasm_tools, adapter_wat, adapter_path)
+            evidence = _effectful_evidence(
+                mapping, host_policy, source, core_wasm, bridge, effects,
+                canonical_memory, effect_env, linked_core, adapter,
+            )
+            evidence_path.write_bytes(_json_bytes(evidence))
+            argv = [
+                builder, str(memory_path), str(env_path), str(linked_path),
+                str(adapter_path), str(evidence_path), str(output_path),
+                ",".join(effects),
+            ]
+            argv += [f"{item['loom_name']}={item['wit_name']}" for item in mapping["exports"]]
+            built = _run(argv)
+            if built.returncode:
+                raise ValueError(
+                    "effectful component builder failed: "
+                    + built.stderr.decode("utf-8", "replace").strip()
+                )
+            component = output_path.read_bytes()
+            structural = _run([
+                wasm_tools, "validate", "--features", "component-model", str(output_path),
+            ])
+            if structural.returncode:
+                raise ValueError(
+                    "wasm-tools rejected final effectful component: "
+                    + structural.stderr.decode("utf-8", "replace").strip()
+                )
+        imports = sorted(mapping["capability_projection"]["imports"])
+        body = {
+            "schema": EFFECTFUL_SCHEMA,
+            "mapping": {
+                "schema": mapping["schema"], "sha256": mapping["mapping_sha256"],
+            },
+            "host_policy": {
+                "schema": host_policy["schema"], "policy_id": host_policy["policy_id"],
+                "sha256": host_policy["policy_sha256"],
+            },
+            "source_sha256": _sha256(source.encode("utf-8")),
+            "source_core": {"sha256": _sha256(bytes(core_wasm)), "loom_abi_version": 2},
+            "linked_core": {
+                "sha256": _sha256(linked_core),
+                "lowering": "typed-wasi-effect-lowering/v1",
+            },
+            "bridge_sha256": _sha256(_json_bytes(bridge)),
+            "canonical_memory_core_sha256": _sha256(canonical_memory),
+            "effect_env_core_sha256": _sha256(effect_env),
+            "adapter_core_sha256": _sha256(adapter),
+            "component": {
+                "sha256": _sha256(component), "byte_length": len(component),
+                "imports": imports, "wasi_imports": imports,
+            },
+            "wit": {"source": mapping["wit"]["source"], "sha256": mapping["wit"]["sha256"]},
+            "exports": mapping["exports"],
+            "effects": effects,
+            "transport": {
+                "schema": mapping["transport"]["schema"],
+                "max_envelope_bytes": MAX_ENVELOPE_BYTES,
+                "max_depth": MAX_DEPTH, "max_cells": MAX_CELLS, "max_args": MAX_ARGS,
+            },
+            "lifecycle": {
+                "one_shot": True,
+                "instantiable": "requires-runtime-verification-and-host-policy",
+                "host_policy_bound": True,
+                "authorization": "none",
+            },
+            "toolchain": {"builder": builder_id, "wasm_tools": wasm_tools_id},
+        }
+        body["artifact_sha256"] = _sha256(_json_bytes(body))
+        return _result(EFFECTFUL_BUILD_SCHEMA, True, artifact=body, component=component)
+    except (KeyError, TypeError, ValueError, UnicodeError) as exc:
+        findings.append(_finding("build", "effectful-component-build-rejected", str(exc)))
+        return _result(EFFECTFUL_BUILD_SCHEMA, False, findings=findings)
+
+
+def _wasmtime_effectful_invalid_probe(wasmtime, component_path, wit_name, imports):
+    request = b'{ "args":[]}'
+    wave = "[" + ",".join(str(byte) for byte in request) + "]"
+    result = _run([
+        wasmtime, "run", "--invoke", f"{wit_name}({wave})", str(component_path),
+    ])
+    if result.returncode:
+        raise ValueError(
+            "Wasmtime could not bind/invoke the effectful component: "
+            + result.stderr.decode("utf-8", "replace").strip()
+        )
+    output = result.stdout.decode("utf-8", "strict").strip()
+    expected = b'{"error":{"code":"invalid-envelope","message":"request rejected"}}'
+    expected_wave = "err([" + ", ".join(str(byte) for byte in expected) + "])"
+    if output != expected_wave:
+        raise ValueError(f"Wasmtime effectful refusal probe mismatch: {output!r}")
+    return {
+        "engine": WASMTIME_VERSION,
+        "wasi_imports_bound": list(imports),
+        "invalid_envelope_refused": True,
+    }
+
+
+def _expected_effectful_wit_json(mapping, document):
+    worlds = document.get("worlds") if isinstance(document, dict) else None
+    interfaces = document.get("interfaces") if isinstance(document, dict) else None
+    packages = document.get("packages") if isinstance(document, dict) else None
+    types = document.get("types") if isinstance(document, dict) else None
+    if not all(isinstance(item, list) for item in (worlds, interfaces, packages, types)):
+        return False
+    if len(worlds) != 1:
+        return False
+    world = worlds[0]
+    imports = []
+    for value in world.get("imports", {}).values():
+        try:
+            interface = interfaces[value["interface"]["id"]]
+            package = packages[interface["package"]]["name"]
+            base, version = package.rsplit("@", 1)
+            imports.append(f"{base}/{interface['name']}@{version}")
+        except (KeyError, IndexError, TypeError, ValueError):
+            return False
+    if sorted(imports) != sorted(mapping["capability_projection"]["imports"]):
+        return False
+    exports = world.get("exports")
+    expected_names = {item["wit_name"] for item in mapping["exports"]}
+    if not isinstance(exports, dict) or set(exports) != expected_names:
+        return False
+    for name, value in exports.items():
+        function = value.get("function") if isinstance(value, dict) else None
+        if not isinstance(function, dict):
+            return False
+        params = function.get("params")
+        result_index = function.get("result")
+        if (
+            function.get("name") != name or function.get("kind") != "freestanding"
+            or not isinstance(params, list) or len(params) != 1
+            or params[0].get("name") != "request"
+            or not isinstance(params[0].get("type"), int)
+            or not isinstance(result_index, int)
+        ):
+            return False
+        param_index = params[0]["type"]
+        try:
+            if types[param_index].get("kind") != {"list": "u8"}:
+                return False
+            if types[result_index].get("kind") != {
+                "result": {"ok": param_index, "err": param_index},
+            }:
+                return False
+        except (IndexError, TypeError, AttributeError):
+            return False
+    expected_functions = {
+        "wasi:io/error@0.2.8": set(),
+        "wasi:io/streams@0.2.8": {"[method]output-stream.blocking-write-and-flush"},
+        "wasi:cli/stdout@0.2.8": {"get-stdout"},
+        "wasi:random/random@0.2.8": {"get-random-u64"},
+    }
+    for interface in interfaces:
+        try:
+            package = packages[interface["package"]]["name"]
+            base, version = package.rsplit("@", 1)
+            identity = f"{base}/{interface['name']}@{version}"
+        except (KeyError, IndexError, TypeError, ValueError):
+            return False
+        if identity in expected_functions:
+            functions = interface.get("functions", {})
+            if not isinstance(functions, dict) or set(functions) != expected_functions[identity]:
+                return False
+    return True
+
+
+def verify_effectful_component_adapter_v1(
+    frontend, artifact, component_bytes, mapping, host_policy, source, core_wasm,
+    package, world, exports=None, *, wasm_tools_executable, wasmtime_executable,
+):
+    findings = []
+    try:
+        bridge, effects = _closed_effectful_inputs(
+            frontend, mapping, host_policy, source, core_wasm, package, world, exports,
+        )
+        wasm_tools_id, wasm_tools = _tool(
+            wasm_tools_executable, WASM_TOOLS_VERSION, WASM_TOOLS_SHA256, "wasm-tools",
+        )
+        wasmtime_id, wasmtime = _tool(
+            wasmtime_executable, WASMTIME_VERSION, WASMTIME_SHA256, "wasmtime",
+        )
+        if not isinstance(artifact, dict):
+            raise ValueError("artifact must be an object")
+        expected_keys = {
+            "schema", "mapping", "host_policy", "source_sha256", "source_core",
+            "linked_core", "bridge_sha256", "canonical_memory_core_sha256",
+            "effect_env_core_sha256", "adapter_core_sha256", "component", "wit",
+            "exports", "effects", "transport", "lifecycle", "toolchain", "artifact_sha256",
+        }
+        if set(artifact) != expected_keys or artifact.get("schema") != EFFECTFUL_SCHEMA:
+            raise ValueError("effectful artifact schema has unknown or missing fields")
+        body = dict(artifact)
+        supplied_hash = body.pop("artifact_sha256", None)
+        if supplied_hash != _sha256(_json_bytes(body)):
+            raise ValueError("effectful artifact SHA-256 mismatch")
+        component = bytes(component_bytes) if isinstance(component_bytes, (bytes, bytearray)) else b""
+        imports = sorted(mapping["capability_projection"]["imports"])
+        expected_component = {
+            "sha256": _sha256(component), "byte_length": len(component),
+            "imports": imports, "wasi_imports": imports,
+        }
+        if artifact["component"] != expected_component:
+            raise ValueError("effectful component identity or import claim mismatch")
+        if artifact["mapping"] != {"schema": mapping["schema"], "sha256": mapping["mapping_sha256"]}:
+            raise ValueError("Typed WASI mapping identity mismatch")
+        if artifact["host_policy"] != {
+            "schema": host_policy["schema"], "policy_id": host_policy["policy_id"],
+            "sha256": host_policy["policy_sha256"],
+        }:
+            raise ValueError("host policy identity mismatch")
+        if artifact["source_sha256"] != _sha256(source.encode("utf-8")):
+            raise ValueError("source identity mismatch")
+        if artifact["source_core"] != {"sha256": _sha256(bytes(core_wasm)), "loom_abi_version": 2}:
+            raise ValueError("source core identity mismatch")
+        if artifact["bridge_sha256"] != _sha256(_json_bytes(bridge)):
+            raise ValueError("Component Bridge identity mismatch")
+        if artifact["wit"] != {"source": mapping["wit"]["source"], "sha256": mapping["wit"]["sha256"]}:
+            raise ValueError("exact WIT evidence mismatch")
+        if artifact["exports"] != mapping["exports"] or artifact["effects"] != effects:
+            raise ValueError("export or effect projection mismatch")
+        if artifact["transport"] != {
+            "schema": mapping["transport"]["schema"], "max_envelope_bytes": MAX_ENVELOPE_BYTES,
+            "max_depth": MAX_DEPTH, "max_cells": MAX_CELLS, "max_args": MAX_ARGS,
+        }:
+            raise ValueError("transport policy mismatch")
+        if artifact["lifecycle"] != {
+            "one_shot": True,
+            "instantiable": "requires-runtime-verification-and-host-policy",
+            "host_policy_bound": True,
+            "authorization": "none",
+        }:
+            raise ValueError("lifecycle or authorization claim mismatch")
+        artifact_wasm_tools = artifact["toolchain"].get("wasm_tools")
+        if (
+            not isinstance(artifact_wasm_tools, dict)
+            or set(artifact_wasm_tools) != {"version", "sha256"}
+            or artifact_wasm_tools.get("version") != WASM_TOOLS_VERSION
+            or artifact_wasm_tools.get("sha256") not in WASM_TOOLS_SHA256
+        ):
+            raise ValueError("build wasm-tools artifact identity mismatch")
+        builder_id = artifact["toolchain"].get("builder")
+        if not isinstance(builder_id, dict) or set(builder_id) != {"sha256", "source_tree_sha256", "lockfile_sha256"}:
+            raise ValueError("effectful builder identity is malformed")
+        if any(not _HEX64.fullmatch(str(value)) for value in builder_id.values()):
+            raise ValueError("effectful builder identity hash is malformed")
+        local_builder_id = _effectful_builder_source_identity()
+        if (
+            builder_id["source_tree_sha256"] != local_builder_id["source_tree_sha256"]
+            or builder_id["lockfile_sha256"] != local_builder_id["lockfile_sha256"]
+        ):
+            raise ValueError("effectful builder source tree or lockfile identity mismatch")
+
+        expected_linked_core = frontend.compile_effectful_wasm(source)
+        with tempfile.TemporaryDirectory(prefix="loom-effectful-component-verify-v1-") as raw_tmp:
+            tmp = Path(raw_tmp)
+            component_path = tmp / "component.wasm"
+            component_path.write_bytes(component)
+            valid = _run([wasm_tools, "validate", "--features", "component-model", str(component_path)])
+            if valid.returncode:
+                raise ValueError("wasm-tools structural validation failed")
+            wit_json = _run([wasm_tools, "component", "wit", "--json", str(component_path)])
+            if wit_json.returncode:
+                raise ValueError("wasm-tools effectful WIT extraction failed")
+            document = json.loads(wit_json.stdout.decode("utf-8", "strict"))
+            if not _expected_effectful_wit_json(mapping, document):
+                raise ValueError("effectful Component WIT semantic identity mismatch")
+            module_dir = tmp / "modules"
+            module_dir.mkdir()
+            unbundled = _run([
+                wasm_tools, "component", "unbundle", "--threshold", "0",
+                "--module-dir", str(module_dir), "-o", str(tmp / "unbundled.wasm"),
+                str(component_path),
+            ])
+            if unbundled.returncode:
+                raise ValueError("wasm-tools effectful component unbundle failed")
+            modules = sorted(path.read_bytes() for path in module_dir.glob("*.wasm"))
+            if len(modules) != 4:
+                raise ValueError(f"effectful component must embed exactly four core modules, found {len(modules)}")
+            memory = _parse_wat(wasm_tools, _canonical_memory_wat(), tmp / "expected-memory.wasm")
+            env_core = _parse_wat(wasm_tools, _effect_env_wat(effects), tmp / "expected-env.wasm")
+            linked = bytes(expected_linked_core)
+            adapter = _parse_wat(
+                wasm_tools, _adapter_wat(mapping, bridge, effectful_effects=effects),
+                tmp / "expected-adapter.wasm",
+            )
+            expected_hashes = sorted(_sha256(item) for item in (memory, env_core, linked, adapter))
+            if sorted(_sha256(module) for module in modules) != expected_hashes:
+                raise ValueError("embedded effectful core module set mismatch")
+            identities = {
+                "canonical_memory_core_sha256": _sha256(memory),
+                "effect_env_core_sha256": _sha256(env_core),
+                "adapter_core_sha256": _sha256(adapter),
+            }
+            for key, value in identities.items():
+                if artifact[key] != value:
+                    raise ValueError(f"{key} mismatch")
+            if artifact["linked_core"] != {
+                "sha256": _sha256(linked), "lowering": "typed-wasi-effect-lowering/v1",
+            }:
+                raise ValueError("effect-linked core identity mismatch")
+            evidence = _effectful_evidence(
+                mapping, host_policy, source, core_wasm, bridge, effects,
+                memory, env_core, linked, adapter,
+            )
+            if _component_custom(component, EFFECTFUL_EVIDENCE_SECTION) != _json_bytes(evidence):
+                raise ValueError("exact effectful component evidence custom section mismatch")
+            runtime = _wasmtime_effectful_invalid_probe(
+                wasmtime, component_path, mapping["exports"][0]["wit_name"], imports,
+            )
+        result = _result(EFFECTFUL_VALIDATION_SCHEMA, True, artifact=artifact)
+        result["evidence"] = {
+            "structural_validation": "wasm-tools:accepted",
+            "component_imports": imports,
+            "wasi_imports": imports,
+            "embedded_core_modules": 4,
+            "runtime": runtime,
+            "wasm_tools": wasm_tools_id,
+            "wasmtime": wasmtime_id,
+            "host_policy_sha256": host_policy["policy_sha256"],
+            "authorization": "none",
+        }
+        return result
+    except (KeyError, TypeError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
+        findings.append(_finding("verification", "effectful-component-rejected", str(exc)))
+        return _result(EFFECTFUL_VALIDATION_SCHEMA, False, findings=findings)

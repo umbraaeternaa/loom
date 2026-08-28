@@ -29,6 +29,7 @@ WIT_COMPONENT_DOC = ROOT / "docs" / "wit_component_boundary_v0.md"
 TYPED_WASI_CAPABILITY_DOC = ROOT / "docs" / "typed_wasi_capability_mapping_v0.md"
 COMPONENT_BRIDGE_DOC = ROOT / "docs" / "component_bridge_v0.md"
 COMPONENT_ADAPTER_DOC = ROOT / "docs" / "component_adapter_v0.md"
+EFFECTFUL_COMPONENT_ADAPTER_DOC = ROOT / "docs" / "effectful_component_adapter_v1.md"
 COMPONENT_RELEASE_ATTESTATION_DOC = ROOT / "docs" / "component_release_attestation_v0.md"
 COMPILER_PROVENANCE_DOC = ROOT / "docs" / "compiler_provenance_v1.md"
 COMPILER_EVIDENCE_DOC = ROOT / "docs" / "gate_compiler_evidence_v1.md"
@@ -53,7 +54,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "504-typed-wasi-capability-mapping-v0")',
+        'bundleUrl.searchParams.set("v", "505-effectful-component-adapter-v1")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -155,8 +156,8 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "504 self-verifying checks",
-        ">504</div>",
+        "505 self-verifying checks",
+        ">505</div>",
     )
     forbidden = (
         "501 self-verifying checks",
@@ -556,7 +557,7 @@ def _check_wit_component_boundary() -> None:
         '"authorization": "none"',
         "does not yet implement the adapter",
         "Typed WASI Capability Mapping v0",
-        "An executable effectful adapter remains a later gate",
+        "Effectful Component Adapter v1",
     )
     missing = [needle for needle in required if needle not in words]
     if missing:
@@ -601,6 +602,7 @@ def _check_typed_wasi_capability_mapping() -> None:
         "loom-typed-wasi-capability-mapping-validation/v0",
         "loom-wasi-effect-projection/v0",
         "wasi:cli/stdout@0.2.8",
+        "wasi:io/error@0.2.8",
         "wasi:io/streams@0.2.8",
         "wasi:random/random@0.2.8",
         "u64 modulo 1073741824",
@@ -729,6 +731,52 @@ def _check_component_adapter() -> None:
     ):
         if not path.is_file():
             raise SystemExit("docs parity: Component Adapter implementation input is absent: " + str(path))
+
+
+def _check_effectful_component_adapter() -> None:
+    words = " ".join(EFFECTFUL_COMPONENT_ADAPTER_DOC.read_text().split())
+    required = (
+        "LOOM Effectful Component Adapter v1",
+        "loom.prepare_effectful_component_host_policy_v1(",
+        "loom.verify_effectful_component_host_policy_v1(",
+        "loom.build_effectful_component_adapter_v1(",
+        "loom.verify_effectful_component_adapter_v1(",
+        "loom-effectful-component-adapter/v1",
+        "loom.effectful-component-adapter.v1",
+        "wasi:io/error@0.2.8",
+        "exactly four independently recoverable core modules",
+        "Every instance is one-shot",
+        "authorization: none",
+        "Net` and `FFI` remain refused",
+        "host-only and modular-only",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: Effectful Component Adapter v1 drift: missing " + ", ".join(missing))
+    import loom as modular
+    spec = importlib.util.spec_from_file_location("loom_effectful_adapter_standalone", DOCS_LOOM)
+    if spec is None or spec.loader is None:
+        raise SystemExit("docs parity: could not load standalone Effectful Adapter boundary")
+    standalone = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(standalone)
+    names = (
+        "prepare_effectful_component_host_policy_v1",
+        "verify_effectful_component_host_policy_v1",
+        "build_effectful_component_adapter_v1",
+        "verify_effectful_component_adapter_v1",
+    )
+    if any(not hasattr(modular, name) for name in names):
+        raise SystemExit("docs parity: modular Effectful Adapter v1 surface is incomplete")
+    if any(hasattr(standalone, name) for name in names):
+        raise SystemExit("docs parity: host-only Effectful Adapter v1 leaked into standalone")
+    for path in (
+        ROOT / "loom_component_adapter.py",
+        ROOT / "tools" / "loom-effectful-component-builder" / "Cargo.toml",
+        ROOT / "tools" / "loom-effectful-component-builder" / "Cargo.lock",
+        ROOT / "tools" / "loom-effectful-component-builder" / "src" / "main.rs",
+    ):
+        if not path.is_file():
+            raise SystemExit("docs parity: Effectful Adapter v1 implementation input is absent: " + str(path))
 
 
 def _check_component_release_attestation() -> None:
@@ -1870,6 +1918,7 @@ def main() -> int:
     _check_typed_wasi_capability_mapping()
     _check_component_bridge()
     _check_component_adapter()
+    _check_effectful_component_adapter()
     _check_component_release_attestation()
     _check_compiler_provenance_doc()
     _check_compiler_evidence_doc()

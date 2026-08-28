@@ -58,6 +58,7 @@ Exact imports:
 
 ```text
 wasi:cli/stdout@0.2.8
+wasi:io/error@0.2.8
 wasi:io/streams@0.2.8
 ```
 
@@ -118,6 +119,7 @@ package umbra:loom@0.4.0;
 
 world typed-wasi {
   import wasi:cli/stdout@0.2.8;
+  import wasi:io/error@0.2.8;
   import wasi:io/streams@0.2.8;
   import wasi:random/random@0.2.8;
 
@@ -135,7 +137,7 @@ The mapping identifies WASI release `0.2.8` and pins SHA-256 for the tagged
 official WIT inputs:
 
 - `WebAssembly/wasi-cli` `v0.2.8`: `wit/command.wit` and `wit/stdio.wit`;
-- `WebAssembly/wasi-io` `v0.2.8`: `wit/streams.wit`;
+- `WebAssembly/wasi-io` `v0.2.8`: `wit/error.wit` and `wit/streams.wit`;
 - `WebAssembly/wasi-random` `v0.2.8`: `wit/random.wit`.
 
 These pins identify the reviewed interface text. They are not package
@@ -157,13 +159,14 @@ Every valid mapping carries:
 
 `ambient_authority` is always false. Valid evidence does not instantiate a
 component, grant an import, satisfy an operator gate or authorize execution.
-A future effectful adapter must bind this exact mapping, lower each operation,
-prove no extra imports, and receive a separate host policy before runtime.
+Effectful Component Adapter v1 now binds this exact mapping, lowers each
+accepted operation, proves no extra imports, and binds a separate host policy.
+That artifact remains non-authorizing and still requires the operator Gate
+before a deployment may execute it.
 
 ## Honest next boundary
 
-The next step is not to broaden this table. It is an Effectful Component
-Adapter v1 that implements the three accepted dispositions, imports exactly the
-generated WIT set, proves resource cleanup and rejects every host import absent
-from this mapping. `Net` and `FFI` stay closed until their own typed semantics
-exist.
+The implemented [Effectful Component Adapter v1](effectful_component_adapter_v1.md)
+consumes this table without broadening it. The next step is to bind verified
+effectful artifacts into the existing claimed-execution lifecycle. `Net` and
+`FFI` stay closed until their own typed semantics exist.

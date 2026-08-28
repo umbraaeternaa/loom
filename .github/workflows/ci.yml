@@ -34,9 +34,11 @@ jobs:
           echo "ff4dcf239ce09315e531394c63c7f0e2cbe9856dfbbd1f5b2b4d267b4f09df95  .component-tools/wasm-tools/wasm-tools-1.257.1-x86_64-linux/wasm-tools" | sha256sum -c -
           echo "4fcabfd0e346761d32f250d4ce55706acef526495aaefb1eb8e6afe3bb0890c5  .component-tools/wasmtime/wasmtime-v48.0.0-x86_64-linux/wasmtime" | sha256sum -c -
           cargo build --locked --release --manifest-path tools/loom-component-builder/Cargo.toml
+          cargo build --locked --release --manifest-path tools/loom-effectful-component-builder/Cargo.toml
           echo "LOOM_WASM_TOOLS=${GITHUB_WORKSPACE}/.component-tools/wasm-tools/wasm-tools-1.257.1-x86_64-linux/wasm-tools" >> "$GITHUB_ENV"
           echo "LOOM_WASMTIME=${GITHUB_WORKSPACE}/.component-tools/wasmtime/wasmtime-v48.0.0-x86_64-linux/wasmtime" >> "$GITHUB_ENV"
           echo "LOOM_COMPONENT_BUILDER=${GITHUB_WORKSPACE}/tools/loom-component-builder/target/release/loom-component-builder" >> "$GITHUB_ENV"
+          echo "LOOM_EFFECTFUL_COMPONENT_BUILDER=${GITHUB_WORKSPACE}/tools/loom-effectful-component-builder/target/release/loom-effectful-component-builder" >> "$GITHUB_ENV"
           echo "LOOM_CARGO=$(rustup which --toolchain 1.93.0 cargo)" >> "$GITHUB_ENV"
           echo "LOOM_RUSTC=$(rustup which --toolchain 1.93.0 rustc)" >> "$GITHUB_ENV"
           echo "LOOM_COMPONENT_CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}" >> "$GITHUB_ENV"
@@ -87,9 +89,11 @@ jobs:
           echo "0caa33cff1a81fd1acd0a20a6cd955411c9932350ebbbe32ebae70708483e752  .component-tools/wasm-tools/wasm-tools-1.257.1-aarch64-macos/wasm-tools" | shasum -a 256 -c -
           echo "1b9185f271806517d7f838b7f9446ee870feb0b22ee9a104e4af334b8c52ccdd  .component-tools/wasmtime/wasmtime-v48.0.0-aarch64-macos/wasmtime" | shasum -a 256 -c -
           cargo build --locked --release --manifest-path tools/loom-component-builder/Cargo.toml
+          cargo build --locked --release --manifest-path tools/loom-effectful-component-builder/Cargo.toml
           echo "LOOM_WASM_TOOLS=${GITHUB_WORKSPACE}/.component-tools/wasm-tools/wasm-tools-1.257.1-aarch64-macos/wasm-tools" >> "$GITHUB_ENV"
           echo "LOOM_WASMTIME=${GITHUB_WORKSPACE}/.component-tools/wasmtime/wasmtime-v48.0.0-aarch64-macos/wasmtime" >> "$GITHUB_ENV"
           echo "LOOM_COMPONENT_BUILDER=${GITHUB_WORKSPACE}/tools/loom-component-builder/target/release/loom-component-builder" >> "$GITHUB_ENV"
+          echo "LOOM_EFFECTFUL_COMPONENT_BUILDER=${GITHUB_WORKSPACE}/tools/loom-effectful-component-builder/target/release/loom-effectful-component-builder" >> "$GITHUB_ENV"
           echo "LOOM_CARGO=$(rustup which --toolchain 1.93.0 cargo)" >> "$GITHUB_ENV"
           echo "LOOM_RUSTC=$(rustup which --toolchain 1.93.0 rustc)" >> "$GITHUB_ENV"
           echo "LOOM_COMPONENT_CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}" >> "$GITHUB_ENV"

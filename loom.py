@@ -897,6 +897,12 @@ import loom_component_adapter as _loom_component_adapter
 _COMPONENT_ADAPTER_FRONTEND = _loom_component_adapter.Frontend(
     verify_wit_component_boundary_v0,
     verify_wasm_component_bridge_v0_abi_v2,
+    verify_typed_wasi_capability_mapping_v0,
+    lambda source, **options: _loom_wasm.emit_wat(source, _WASM_FRONTEND, **options),
+    lambda source: _loom_wasm.compile_wasm(
+        source, _WASM_FRONTEND, _WASM_ABI_V2_VERSION,
+        effectful_component_v1=True,
+    ),
 )
 
 
@@ -921,6 +927,41 @@ def verify_component_adapter_artifact_v0(
     )
 
 
+def prepare_effectful_component_host_policy_v1(mapping, policy_id):
+    return _loom_component_adapter.prepare_effectful_component_host_policy_v1(
+        mapping, policy_id,
+    )
+
+
+def verify_effectful_component_host_policy_v1(policy, mapping, policy_id):
+    return _loom_component_adapter.verify_effectful_component_host_policy_v1(
+        policy, mapping, policy_id,
+    )
+
+
+def build_effectful_component_adapter_v1(
+    mapping, host_policy, program_src, wasm_bytes, package, world, exports=None, *,
+    builder_executable, wasm_tools_executable,
+):
+    return _loom_component_adapter.build_effectful_component_adapter_v1(
+        _COMPONENT_ADAPTER_FRONTEND, mapping, host_policy, program_src, wasm_bytes,
+        package, world, exports, builder_executable=builder_executable,
+        wasm_tools_executable=wasm_tools_executable,
+    )
+
+
+def verify_effectful_component_adapter_v1(
+    artifact, component_bytes, mapping, host_policy, program_src, wasm_bytes,
+    package, world, exports=None, *, wasm_tools_executable, wasmtime_executable,
+):
+    return _loom_component_adapter.verify_effectful_component_adapter_v1(
+        _COMPONENT_ADAPTER_FRONTEND, artifact, component_bytes, mapping, host_policy,
+        program_src, wasm_bytes, package, world, exports,
+        wasm_tools_executable=wasm_tools_executable,
+        wasmtime_executable=wasmtime_executable,
+    )
+
+
 # ---- CLI: turn the kernel into a usable TOOL. `python3 loom.py <check|run|build|audit> file.loom [call] [--target py|js|wat]` ----
 _CLI_FRONTEND = _loom_cli.Frontend(
     parse,
@@ -931,7 +972,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
     emit_wat,
     LoomError,
     metadata={
-        "citadel_checks": 504,
+        "citadel_checks": 505,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "wasm_abi_versions": [_WASM_ABI_VERSION, _WASM_ABI_V2_VERSION],
         "i31_bits": INT_BITS,

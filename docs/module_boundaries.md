@@ -111,6 +111,14 @@ It must expose no WASI/component import, mutate no Boundary v0 artifact, infer
 no authority, or silently fall back when its external oracle is absent. This
 host-only module is deliberately excluded from the standalone browser bundle.
 
+The same module owns Effectful Component Adapter v1 as an additive contract. It
+must consume an exactly reverified Typed WASI mapping and separately verified
+host policy, embed exactly four regenerated core modules, import no interface
+beyond the mapping, and lower only `IO`, `Rand`, and `Alloc`. Its repository
+owned Rust builder lives under `tools/loom-effectful-component-builder` and is
+source-tree/Cargo-lock pinned. `Net`, `FFI`, ambient authority, authorization,
+fallback tools, and browser publication remain forbidden.
+
 `loom_component_release.py` owns Signed Reproducible Component Release
 Attestation v0. It may run exact offline Cargo builds, inspect locked registry
 sources, invoke the Component builder/verifier, and verify an external DSSE

@@ -427,7 +427,7 @@ async function boot(){
     pyodide = await loadPyodide();
     setStatus("loading LOOM…");
     const bundleUrl = new URL("./loom.py", location.href);
-  bundleUrl.searchParams.set("v", "504-typed-wasi-capability-mapping-v0");
+  bundleUrl.searchParams.set("v", "505-effectful-component-adapter-v1");
     const response = await fetch(bundleUrl, {cache: "no-store"});
     if (!response.ok) throw new Error("LOOM bundle HTTP " + response.status);
     const code = await response.text();
