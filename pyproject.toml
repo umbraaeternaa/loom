@@ -44,6 +44,7 @@ py-modules = [
   "loom_component_adapter",
   "loom_component_release",
   "loom_evidence",
+  "loom_effectful_execution",
   "loom_executor",
   "loom_frontend",
   "loom_gate",

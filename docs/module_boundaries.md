@@ -33,6 +33,7 @@ Current stable boundaries:
 | `loom_evidence.py` | CI evidence collection |
 | `loom_approval.py` | signed one-use operator approval lifecycle |
 | `loom_executor.py` | claimed execution and process-attempt lifecycle |
+| `loom_effectful_execution.py` | exact Effectful Component resource-to-claimed-lifecycle binding |
 
 ## Gate boundary rule
 
@@ -118,6 +119,15 @@ beyond the mapping, and lower only `IO`, `Rand`, and `Alloc`. Its repository
 owned Rust builder lives under `tools/loom-effectful-component-builder` and is
 source-tree/Cargo-lock pinned. `Net`, `FFI`, ambient authority, authorization,
 fallback tools, and browser publication remain forbidden.
+
+`loom_effectful_execution.py` owns the additive bridge from that verified
+Effectful Component to Action Claim/Mediation state. It must independently
+reverify the Component, require operator-signed environment commitments for
+artifact/component/mapping/policy/export/request identities, measure the exact
+Component URI without following symlinks, and prove matching private ledger
+rows without consuming them. It grants no authority and must require a later
+executor to reverify Approval v2, remeasure the Component, and launch only an
+exact private snapshot.
 
 `loom_component_release.py` owns Signed Reproducible Component Release
 Attestation v0. It may run exact offline Cargo builds, inspect locked registry

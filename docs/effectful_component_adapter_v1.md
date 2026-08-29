@@ -94,6 +94,10 @@ mediation, execution authorization, or a capability grant. Runtime deployment
 must still bind the verified Component and policy into the separate operator
 Gate lifecycle.
 
+[Effectful Component Execution Binding v0](effectful_component_execution_binding_v0.md)
+now implements that non-authorizing bridge through exact precommitments and a
+claimed/mediated lifecycle. It deliberately stops before process launch.
+
 This API remains host-only and modular-only because it requires filesystem and
 process oracles. It is deliberately absent from `docs/loom.py` and the browser
 Playground.

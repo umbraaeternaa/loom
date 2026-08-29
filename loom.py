@@ -75,6 +75,7 @@ import loom_observer as _loom_observer
 import loom_evidence as _loom_evidence
 import loom_approval as _loom_approval
 import loom_executor as _loom_executor
+import loom_effectful_execution as _loom_effectful_execution
 
 _PARSE_FRONTEND = _loom_parse.Frontend(LoomError)
 
@@ -972,7 +973,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
     emit_wat,
     LoomError,
     metadata={
-        "citadel_checks": 505,
+        "citadel_checks": 506,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "wasm_abi_versions": [_WASM_ABI_VERSION, _WASM_ABI_V2_VERSION],
         "i31_bits": INT_BITS,
@@ -4359,6 +4360,137 @@ def execute_action_host_mediation_v0(
         wasm_bytes, builder_surface, builder_components, verifier_components,
         entrypoint, invocation, environment_values, now_unix_ms, public_key,
         _action_claim_ledger_path(),
+    )
+
+
+def _effectful_execution_verify_ledger(claim, mediation, ledger_path):
+    import sqlite3
+    connection = None
+    try:
+        connection = _action_execution_open_ledger(ledger_path)
+        claim_schema = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+            (_ACTION_CLAIM_LEDGER_TABLE,),
+        ).fetchone()
+        mediation_schema = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+            (_ACTION_MEDIATION_LEDGER_TABLE,),
+        ).fetchone()
+        if claim_schema != (_ACTION_CLAIM_LEDGER_SCHEMA,) or mediation_schema != (_ACTION_MEDIATION_LEDGER_SCHEMA,):
+            raise ValueError("Action Claim or Mediation ledger schema is not canonical")
+        if connection.execute(
+            "SELECT name FROM sqlite_master WHERE type IN ('trigger','view') LIMIT 1"
+        ).fetchone():
+            raise ValueError("Action ledger must not contain triggers or views")
+        stored_claim = connection.execute(
+            "SELECT approval_sha256,request_sha256,challenge_sha256,binding_sha256,capsule_sha256,"
+            "invocation_sha256,claimed_at_unix_ms,approval_expires_at_unix_ms,claim_sha256,status "
+            "FROM action_claims_v0 WHERE claim_sha256=?", (claim["claim_sha256"],),
+        ).fetchone()
+        stored_mediation = connection.execute(
+            "SELECT claim_sha256,approval_sha256,binding_sha256,invocation_sha256,host_measurement_sha256,"
+            "executable_sha256,environment_sha256,stdin_sha256,mediated_at_unix_ms,"
+            "approval_expires_at_unix_ms,mediation_sha256,status FROM action_mediations_v0 WHERE mediation_sha256=?",
+            (mediation["mediation_sha256"],),
+        ).fetchone()
+        if stored_claim != _action_execution_claim_row(claim):
+            raise ValueError("Action Claim does not match its private ledger row")
+        if stored_mediation != _action_execution_mediation_row(mediation):
+            raise ValueError("Action Mediation is absent or does not match its private ledger row")
+    except sqlite3.Error as error:
+        raise ValueError("Effectful execution ledger verification failed: " + str(error)) from error
+    finally:
+        if connection is not None:
+            try:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+            finally:
+                connection.close()
+
+
+def _effectful_execution_frontend(ledger_path):
+    return _loom_effectful_execution.Frontend(
+        verify_effectful_component_adapter_v1,
+        validate_action_approval_request_v2,
+        validate_action_host_mediation_v0,
+        _action_mediation_file_path,
+        _action_mediation_open_path,
+        _action_mediation_stat_identity,
+        lambda claim, mediation: _effectful_execution_verify_ledger(
+            claim, mediation, ledger_path,
+        ),
+    )
+
+
+def _build_effectful_component_execution_binding_v0(
+    artifact, component_bytes, mapping, host_policy, component_program_src,
+    component_wasm_bytes, package, world, request, claim, mediation,
+    environment_values, component_uri, component_request, export,
+    observed_at_unix_ms, ledger_path, *, wasm_tools_executable,
+    wasmtime_executable, exports=None,
+):
+    return _loom_effectful_execution.build_effectful_component_execution_binding_v0(
+        _effectful_execution_frontend(ledger_path), artifact, component_bytes,
+        mapping, host_policy, component_program_src, component_wasm_bytes,
+        package, world, request, claim, mediation, environment_values,
+        component_uri, component_request, export, observed_at_unix_ms,
+        wasm_tools_executable=wasm_tools_executable,
+        wasmtime_executable=wasmtime_executable,
+        exports=exports,
+    )
+
+
+def build_effectful_component_execution_binding_v0(
+    artifact, component_bytes, mapping, host_policy, component_program_src,
+    component_wasm_bytes, package, world, request, claim, mediation,
+    environment_values, component_uri, component_request, export,
+    observed_at_unix_ms, *, wasm_tools_executable, wasmtime_executable,
+    exports=None,
+):
+    """Bind a verified Effectful Component to one claimed, mediated Action without authorizing execution."""
+    return _build_effectful_component_execution_binding_v0(
+        artifact, component_bytes, mapping, host_policy, component_program_src,
+        component_wasm_bytes, package, world, request, claim, mediation,
+        environment_values, component_uri, component_request, export,
+        observed_at_unix_ms, _action_claim_ledger_path(),
+        wasm_tools_executable=wasm_tools_executable,
+        wasmtime_executable=wasmtime_executable,
+        exports=exports,
+    )
+
+
+def _verify_effectful_component_execution_binding_v0(
+    binding, artifact, component_bytes, mapping, host_policy,
+    component_program_src, component_wasm_bytes, package, world, request,
+    claim, mediation, environment_values, component_uri, component_request,
+    export, observed_at_unix_ms, ledger_path, *, wasm_tools_executable,
+    wasmtime_executable, exports=None,
+):
+    return _loom_effectful_execution.verify_effectful_component_execution_binding_v0(
+        _effectful_execution_frontend(ledger_path), binding, artifact,
+        component_bytes, mapping, host_policy, component_program_src,
+        component_wasm_bytes, package, world, request, claim, mediation,
+        environment_values, component_uri, component_request, export,
+        observed_at_unix_ms, wasm_tools_executable=wasm_tools_executable,
+        wasmtime_executable=wasmtime_executable, exports=exports,
+    )
+
+
+def verify_effectful_component_execution_binding_v0(
+    binding, artifact, component_bytes, mapping, host_policy,
+    component_program_src, component_wasm_bytes, package, world, request,
+    claim, mediation, environment_values, component_uri, component_request,
+    export, observed_at_unix_ms, *, wasm_tools_executable,
+    wasmtime_executable, exports=None,
+):
+    """Rebuild an Effectful execution binding from exact host and Action inputs."""
+    return _verify_effectful_component_execution_binding_v0(
+        binding, artifact, component_bytes, mapping, host_policy,
+        component_program_src, component_wasm_bytes, package, world, request,
+        claim, mediation, environment_values, component_uri,
+        component_request, export, observed_at_unix_ms,
+        _action_claim_ledger_path(), wasm_tools_executable=wasm_tools_executable,
+        wasmtime_executable=wasmtime_executable, exports=exports,
     )
 
 

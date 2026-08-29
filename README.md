@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 505 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 506 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 505/505 citadel checks
+PASS — 506/506 citadel checks
 ```
 
 ## The idea in one screen
@@ -225,6 +225,11 @@ then turns the closed `IO`/`Rand`/`Alloc` projection into a real one-shot
 Component. It binds a separate non-authorizing host policy, proves an exact
 minimal import set and four regenerated core modules, and executes real
 fixtures through pinned Wasmtime. `Net` and `FFI` remain fail-closed.
+[`Effectful Component Execution Binding v0`](docs/effectful_component_execution_binding_v0.md)
+then joins those exact Component, mapping, policy, request, runtime, and host
+resource identities to one already claimed and mediated Action lifecycle. The
+operator-signed invocation must precommit every identity; the binding reads the
+private ledger without consuming it and still grants no execution authority.
 
 Certified recursion can also use [`Proven Value Bounds v1`](docs/proven_value_bounds_v1.md):
 the checker derives conservative i31 and list-length upper bounds through
@@ -242,6 +247,7 @@ contract; higher-order and effectful arguments remain fail-closed.
 - [`loom_component.py`](loom_component.py) — evidence-carrying WIT component-boundary builder and verifier.
 - [`loom_wasi_capabilities.py`](loom_wasi_capabilities.py) — closed ABI v2 effect-to-WASI projection and verifier.
 - [`loom_component_adapter.py`](loom_component_adapter.py) — exact Pure v0 and effectful v1 Component builders/verifiers.
+- [`loom_effectful_execution.py`](loom_effectful_execution.py) — host-only claimed-lifecycle binding for exact effectful Components.
 - [`docs/component_bridge_v0.md`](docs/component_bridge_v0.md) — exact bridge metadata and bounded heap-ingress contract.
 - [`loom_provenance.py`](loom_provenance.py) — host-built modular/standalone compiler profiles.
 - [`run_tests.py`](run_tests.py) — the self-verifying suite: it accepts honest programs,
