@@ -85,16 +85,25 @@ fixed lifecycle. Its lifecycle is always:
 }
 ```
 
+## Host execution handoff
+
+[Effectful Component Host Execution v0](effectful_component_host_execution_v0.md)
+implements the required next transition. It treats this binding as evidence,
+not permission: Approval v2 and every original compiler/Action input are
+reverified again before the mediation can be consumed.
+
 ## Honest boundary
 
 This contract proves that the operator-approved invocation had precommitted the
 same identities later measured and independently verified. It does not consume
-the mediation or invoke Wasmtime. A future Effectful Component Host Execution
-v0 must reverify Approval v2 from every original compiler/action input, remeasure
-both runtime and Component at the spawn boundary, atomically reserve the ready
-mediation, execute only private exact-byte snapshots under the existing sandbox,
-and produce the existing terminal Result/Attestation chain.
+the mediation or invoke Wasmtime. The separate host executor reverifies
+Approval v2 from every original compiler/Action input, remeasures both runtime
+and Component at the spawn boundary, atomically reserves the ready mediation,
+executes only private exact-byte snapshots under the existing sandbox, and
+emits a host execution record whose nested Bounded Execution can enter the
+existing terminal Result/Attestation chain. A later Effectful Result Binding is
+still required to bind that legacy Result to the outer Component spawn record.
 
-The module is deliberately absent from the standalone browser bundle and
+This module is deliberately absent from the standalone browser bundle and
 Playground because browser loading has no private Action ledger or trusted host
 filesystem boundary.

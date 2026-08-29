@@ -76,6 +76,7 @@ import loom_evidence as _loom_evidence
 import loom_approval as _loom_approval
 import loom_executor as _loom_executor
 import loom_effectful_execution as _loom_effectful_execution
+import loom_effectful_host as _loom_effectful_host
 
 _PARSE_FRONTEND = _loom_parse.Frontend(LoomError)
 
@@ -973,7 +974,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
     emit_wat,
     LoomError,
     metadata={
-        "citadel_checks": 506,
+        "citadel_checks": 507,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "wasm_abi_versions": [_WASM_ABI_VERSION, _WASM_ABI_V2_VERSION],
         "i31_bits": INT_BITS,
@@ -4490,6 +4491,176 @@ def verify_effectful_component_execution_binding_v0(
         claim, mediation, environment_values, component_uri,
         component_request, export, observed_at_unix_ms,
         _action_claim_ledger_path(), wasm_tools_executable=wasm_tools_executable,
+        wasmtime_executable=wasmtime_executable, exports=exports,
+    )
+
+
+def _effectful_host_frontend():
+    return _loom_effectful_host.Frontend(
+        _action_mediation_file_path,
+        _action_mediation_open_path,
+        _action_mediation_stat_identity,
+    )
+
+
+def validate_effectful_component_host_execution_v0(execution):
+    """Validate a self-contained Effectful Component Host Execution v0 record."""
+    return _loom_effectful_host.validate_execution(
+        execution,
+        _loom_effectful_execution._structure_findings,
+        validate_action_bounded_execution_v0,
+    )
+
+
+def _effectful_host_cleanup_snapshot(directory, filename):
+    import os
+    if directory is None:
+        return
+    try:
+        os.unlink(os.path.join(directory, filename))
+    except OSError:
+        pass
+    try:
+        os.rmdir(directory)
+    except OSError:
+        pass
+
+
+def _execute_effectful_component_host_v0(
+    execution_binding, artifact, component_bytes, mapping, host_policy,
+    component_program_src, component_wasm_bytes, package, world,
+    component_uri, component_request, export,
+    approval, request, claim, mediation,
+    manifest, tool_binding, tool_input, program_src, wasm_bytes,
+    builder_surface, builder_components, verifier_components,
+    entrypoint, invocation, environment_values, now_unix_ms,
+    public_key_value, ledger_path, *, wasm_tools_executable,
+    wasmtime_executable, exports=None,
+):
+    approval_check = _verify_action_capsule_approval_v2(
+        approval, request, manifest, tool_binding, tool_input, program_src,
+        wasm_bytes, builder_surface, builder_components, verifier_components,
+        entrypoint, invocation, now_unix_ms, public_key_value,
+    )
+    if not approval_check["valid"]:
+        return _loom_effectful_host.result(None, approval_check["findings"])
+    claim_findings = _action_claim_findings(claim, approval_check, request, now_unix_ms)
+    if claim_findings:
+        return _loom_effectful_host.result(None, claim_findings)
+    mediation_findings = _action_execution_mediation_findings(
+        mediation, claim, approval_check, request, now_unix_ms,
+    )
+    if mediation_findings:
+        return _loom_effectful_host.result(None, mediation_findings)
+    observed_at = (
+        execution_binding.get("observed_at_unix_ms")
+        if isinstance(execution_binding, dict) else -1
+    )
+    binding_check = _verify_effectful_component_execution_binding_v0(
+        execution_binding, artifact, component_bytes, mapping, host_policy,
+        component_program_src, component_wasm_bytes, package, world, request,
+        claim, mediation, environment_values, component_uri, component_request,
+        export, observed_at, ledger_path,
+        wasm_tools_executable=wasm_tools_executable,
+        wasmtime_executable=wasmtime_executable, exports=exports,
+    )
+    if not binding_check["valid"]:
+        return _loom_effectful_host.result(None, binding_check["findings"])
+
+    runtime_snapshot_directory = None
+    component_snapshot_directory = None
+    action_execution = None
+    try:
+        sandbox, prefix = _action_execution_sandbox_provider()
+        _action_execution_probe_sandbox(prefix)
+        (
+            remeasurement, environment, stdin_bytes, cwd_path,
+            runtime_snapshot_directory, runtime_snapshot_path,
+        ) = _action_execution_remeasure(
+            request["binding"], tool_input, environment_values, mediation, ledger_path,
+        )
+        (
+            component_measurement, component_snapshot_directory,
+            component_snapshot_path,
+        ) = _loom_effectful_host.snapshot_component(
+            _effectful_host_frontend(), execution_binding, component_bytes,
+            component_uri, ledger_path.parent,
+        )
+        signed_argv = request["binding"]["invocation"]["argv"]
+        launch_argv = list(signed_argv[:-1]) + [component_snapshot_path]
+        _action_execution_reserve(
+            claim, mediation, remeasurement, now_unix_ms, ledger_path,
+        )
+        attempt = _action_execution_run(
+            prefix, runtime_snapshot_path, launch_argv, cwd_path, environment,
+            stdin_bytes, request["binding"]["invocation"]["timeout_ms"],
+            mediation, remeasurement, sandbox,
+        )
+        action_body = {
+            "schema": _ACTION_EXECUTION_SCHEMA,
+            "mediation_sha256": mediation["mediation_sha256"],
+            "claim_sha256": mediation["claim_sha256"],
+            "binding_sha256": mediation["binding_sha256"],
+            "host_remeasurement": remeasurement,
+            "host_remeasurement_sha256": remeasurement["host_remeasurement_sha256"],
+            "sandbox": sandbox,
+            "sandbox_sha256": sandbox["sandbox_sha256"],
+            "attempt": attempt,
+            "attempt_sha256": attempt["attempt_sha256"],
+            "executed_at_unix_ms": now_unix_ms,
+            "approval_expires_at_unix_ms": mediation["approval_expires_at_unix_ms"],
+            "status": attempt["result"],
+        }
+        action_body["execution_sha256"] = _binding_sha256(action_body)
+        action_execution = action_body
+        _action_execution_finish(
+            mediation, remeasurement, attempt, now_unix_ms, ledger_path,
+        )
+        execution = _loom_effectful_host.build_execution(
+            execution_binding, component_measurement, action_execution,
+            request["binding"]["invocation"],
+        )
+        return validate_effectful_component_host_execution_v0(execution)
+    except (KeyError, OSError, TypeError, ValueError) as error:
+        return _loom_effectful_host.result(action_execution, [{
+            "path": "host", "code": "effectful-component-host-execution-failed",
+            "message": str(error),
+        }])
+    finally:
+        _effectful_host_cleanup_snapshot(
+            component_snapshot_directory, "component.wasm",
+        )
+        _effectful_host_cleanup_snapshot(runtime_snapshot_directory, "adapter")
+
+
+def execute_effectful_component_host_v0(
+    execution_binding, artifact, component_bytes, mapping, host_policy,
+    component_program_src, component_wasm_bytes, package, world,
+    component_uri, component_request, export,
+    approval, request, claim, mediation,
+    manifest, tool_binding, tool_input, program_src, wasm_bytes,
+    builder_surface, builder_components, verifier_components,
+    entrypoint, invocation, environment_values, now_unix_ms, *,
+    wasm_tools_executable, wasmtime_executable, exports=None,
+):
+    """Execute one bound Effectful Component once through the Action lifecycle."""
+    try:
+        public_key = _action_approval_load_public_key()
+    except ValueError as error:
+        return _loom_effectful_host.result(None, [{
+            "path": "public_key", "code": "public-key-unavailable",
+            "message": str(error),
+        }])
+    return _execute_effectful_component_host_v0(
+        execution_binding, artifact, component_bytes, mapping, host_policy,
+        component_program_src, component_wasm_bytes, package, world,
+        component_uri, component_request, export,
+        approval, request, claim, mediation,
+        manifest, tool_binding, tool_input, program_src, wasm_bytes,
+        builder_surface, builder_components, verifier_components,
+        entrypoint, invocation, environment_values, now_unix_ms,
+        public_key, _action_claim_ledger_path(),
+        wasm_tools_executable=wasm_tools_executable,
         wasmtime_executable=wasmtime_executable, exports=exports,
     )
 

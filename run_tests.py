@@ -3066,7 +3066,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             "actions_observed": ["read", "write", "test", "git-commit"],
             "evidence": [
                 {"kind": "syntax", "status": "pass", "detail": "PASS syntax"},
-                {"kind": "citadel", "status": "pass", "detail": "506/506"},
+                {"kind": "citadel", "status": "pass", "detail": "507/507"},
                 {"kind": "docs-parity", "status": "pass", "detail": "PASS docs parity"},
                 {"kind": "git-clean", "status": "pass", "detail": "clean"},
                 {"kind": "git-sync", "status": "pass", "detail": "HEAD == origin/main"},
@@ -5441,10 +5441,16 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         ok += action_mediation_v0_ok
         print(f"  {'ok  ' if action_mediation_v0_ok else 'FAIL'} gate: Trusted Host Mediation v0")
 
+        effectful_host_execution_ok = True
         if not hasattr(_loom, "build_effectful_component_execution_binding_v0"):
             effectful_execution_binding_ok = (
                 Path(_loom.__file__).parent.name == "docs"
                 and not hasattr(_loom, "verify_effectful_component_execution_binding_v0")
+            )
+            effectful_host_execution_ok = (
+                Path(_loom.__file__).parent.name == "docs"
+                and not hasattr(_loom, "execute_effectful_component_host_v0")
+                and not hasattr(_loom, "validate_effectful_component_host_execution_v0")
             )
         elif effectful_execution_fixture is None:
             effectful_execution_binding_ok = True
@@ -5456,6 +5462,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             component_path = effectful_root / "effectful-component.wasm"
             component_path.write_bytes(fixture["build"]["component"])
             component_path.chmod(0o600)
+            original_component_stat = component_path.stat()
             component_request = {"args": [7]}
             component_request_bytes = canonical(component_request).encode()
             selected_wit_export = fixture["mapping"]["exports"][0]["wit_name"]
@@ -5563,6 +5570,10 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             rejected_effectful_resource_drift = bind_effectful()
             component_path.write_bytes(original_component_bytes)
             component_path.chmod(0o600)
+            os.utime(component_path, ns=(
+                original_component_stat.st_atime_ns,
+                original_component_stat.st_mtime_ns,
+            ))
             symlink_component = effectful_root / "effectful-component-link.wasm"
             symlink_component.symlink_to(component_path)
             rejected_effectful_symlink = bind_effectful(candidate_uri=symlink_component.as_uri())
@@ -5603,9 +5614,145 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                 and rejected_effectful_expired["valid"] is False
                 and execution_table_before == 0 and execution_table_after == 0
             )
+
+            def execute_effectful_host(candidate_binding=effectful_execution_binding,
+                                        candidate_component_bytes=fixture["build"]["component"],
+                                        now=action_issued + 4):
+                return _loom._execute_effectful_component_host_v0(
+                    candidate_binding, fixture["build"]["artifact"],
+                    candidate_component_bytes, fixture["mapping"], fixture["policy"],
+                    fixture["source"], fixture["core"], fixture["package"], fixture["world"],
+                    component_path.as_uri(), component_request, fixture["export"],
+                    effectful_approval, effectful_request, effectful_claim,
+                    effectful_mediation, semantics_manifest, semantics_tool,
+                    semantics_input, semantics_src, semantics_wasm, running_surface,
+                    compiler_components, compiler_components, "main", effectful_invocation,
+                    effectful_environment, now, test_key, effectful_ledger,
+                    wasm_tools_executable=fixture["wasm_tools"],
+                    wasmtime_executable=fixture["wasmtime"], exports=[fixture["export"]],
+                )
+
+            try:
+                effectful_host_provider, effectful_host_prefix = _loom._action_execution_sandbox_provider()
+                _loom._action_execution_probe_sandbox(effectful_host_prefix)
+                effectful_host_sandbox_available = True
+            except (OSError, ValueError):
+                effectful_host_provider = None
+                effectful_host_sandbox_available = False
+
+            tampered_host_binding = json.loads(json.dumps(effectful_execution_binding))
+            tampered_host_binding["lifecycle"]["authorization"] = "execute"
+            rejected_host_binding = execute_effectful_host(tampered_host_binding)
+            component_path.write_bytes(
+                original_component_bytes[:-1] + bytes([original_component_bytes[-1] ^ 1])
+            )
+            rejected_host_component_drift = execute_effectful_host()
+            component_path.write_bytes(original_component_bytes)
+            component_path.chmod(0o600)
+            os.utime(component_path, ns=(
+                original_component_stat.st_atime_ns,
+                original_component_stat.st_mtime_ns,
+            ))
+            effectful_host_execution = execute_effectful_host()
+            effectful_host_replay = execute_effectful_host()
+            with sqlite3.connect(effectful_ledger) as connection:
+                effectful_host_rows = connection.execute(
+                    "SELECT COUNT(*) FROM action_executions_v0",
+                ).fetchone()[0] if connection.execute(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='action_executions_v0'",
+                ).fetchone()[0] else 0
+            effectful_host_residue = (
+                list(effectful_ledger.parent.glob(".loom-exec-*"))
+                + list(effectful_ledger.parent.glob(".loom-effectful-component-*"))
+            )
+            if effectful_host_sandbox_available and effectful_host_execution["valid"]:
+                effectful_host_record = effectful_host_execution["execution"]
+                validated_effectful_host = _loom.validate_effectful_component_host_execution_v0(
+                    effectful_host_record,
+                )
+                tampered_effectful_host = json.loads(json.dumps(effectful_host_record))
+                tampered_effectful_host["component_spawn_measurement"]["snapshot_component_sha256"] = "0" * 64
+                rejected_effectful_host_record = _loom.validate_effectful_component_host_execution_v0(
+                    tampered_effectful_host,
+                )
+                rehashed_effectful_host = json.loads(json.dumps(effectful_host_record))
+                rehashed_invocation = rehashed_effectful_host["launch"]["signed_invocation"]
+                rehashed_invocation["argv"][0] = "tampered-run"
+                rehashed_invocation["invocation_sha256"] = _loom._binding_sha256({
+                    key: value for key, value in rehashed_invocation.items()
+                    if key != "invocation_sha256"
+                })
+                rehashed_effectful_host["launch"]["signed_invocation_sha256"] = (
+                    rehashed_invocation["invocation_sha256"]
+                )
+                rehashed_effectful_host["launch"]["launch_sha256"] = _loom._binding_sha256({
+                    key: value for key, value in rehashed_effectful_host["launch"].items()
+                    if key != "launch_sha256"
+                })
+                rehashed_effectful_host["launch_sha256"] = (
+                    rehashed_effectful_host["launch"]["launch_sha256"]
+                )
+                rehashed_effectful_host["execution_sha256"] = _loom._binding_sha256({
+                    key: value for key, value in rehashed_effectful_host.items()
+                    if key != "execution_sha256"
+                })
+                rejected_rehashed_effectful_host = _loom.validate_effectful_component_host_execution_v0(
+                    rehashed_effectful_host,
+                )
+                effectful_terminal_result = _loom._finalize_action_capsule_result_v0(
+                    effectful_approval, effectful_request, effectful_claim,
+                    effectful_mediation, effectful_host_record["action_execution"],
+                    semantics_manifest, semantics_tool, semantics_input, semantics_src,
+                    semantics_wasm, running_surface, compiler_components,
+                    compiler_components, "main", effectful_invocation,
+                    action_issued + 1000, test_key, effectful_ledger,
+                )
+                effectful_host_execution_ok = (
+                    rejected_host_binding["valid"] is False
+                    and rejected_host_component_drift["valid"] is False
+                    and effectful_host_execution["schema"]
+                    == "loom-effectful-component-host-execution-validation/v0"
+                    and effectful_host_execution["valid"] is True
+                    and effectful_host_execution["authorization"] == "terminal-result-required"
+                    and effectful_host_record["schema"]
+                    == "loom-effectful-component-host-execution/v0"
+                    and effectful_host_record["binding_sha256"]
+                    == effectful_execution_binding["binding_sha256"]
+                    and effectful_host_record["component_spawn_measurement"]["spawn_boundary"]
+                    == "private-component-snapshot"
+                    and effectful_host_record["component_spawn_measurement"]["snapshot_component_sha256"]
+                    == fixture["build"]["artifact"]["component"]["sha256"]
+                    and effectful_host_record["launch"]["path_substitution"]
+                    == "signed-component-uri-to-private-snapshot/v0"
+                    and effectful_host_record["action_execution"]["status"] == "completed"
+                    and effectful_host_record["lifecycle"]["effectful_result_binding_required"] is True
+                    and validated_effectful_host == effectful_host_execution
+                    and rejected_effectful_host_record["valid"] is False
+                    and rejected_rehashed_effectful_host["valid"] is False
+                    and any(
+                        item["code"] == "launch-link-mismatch"
+                        for item in rejected_rehashed_effectful_host["findings"]
+                    )
+                    and effectful_terminal_result["valid"] is True
+                    and effectful_host_replay["valid"] is False
+                    and effectful_host_rows == 1 and not effectful_host_residue
+                )
+            elif effectful_host_sandbox_available:
+                effectful_host_execution_ok = False
+            else:
+                effectful_host_execution_ok = (
+                    effectful_host_execution["valid"] is False
+                    and any(
+                        item["code"] == "effectful-component-host-execution-failed"
+                        for item in effectful_host_execution["findings"]
+                    )
+                    and effectful_host_rows == 0 and not effectful_host_residue
+                )
             effectful_temp.cleanup()
         ok += effectful_execution_binding_ok
         print(f"  {'ok  ' if effectful_execution_binding_ok else 'FAIL'} gate: Effectful Component Execution Binding v0")
+        ok += effectful_host_execution_ok
+        print(f"  {'ok  ' if effectful_host_execution_ok else 'FAIL'} gate: Effectful Component Host Execution v0")
 
         def execute_action_v0(ledger_path, candidate_approval, candidate_request, candidate_claim,
                               candidate_mediation, candidate_invocation, now=action_issued + 3):
@@ -6958,7 +7105,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == (500 if is_browser_bundle else 506)
+            and about_json["citadel_checks"] == (500 if is_browser_bundle else 507)
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["wasm_abi_versions"] == ([1] if is_browser_bundle else [1, 2])
             and about_json["i31_bits"] == 31
@@ -7188,7 +7335,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 506/506 citadel checks" in quick
+            and "PASS -- 507/507 citadel checks" in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
             and "loom examples" in quick
@@ -7298,7 +7445,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "506-effectful-component-execution-binding-v0")' in play
+            and 'bundleUrl.searchParams.set("v", "507-effectful-component-host-execution-v0")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -7920,7 +8067,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 506/506 citadel checks" in rdoc
+            and "PASS -- 507/507 citadel checks" in rdoc
             and "loom examples --format json" in rdoc
             and "loom doctor --dry-run --format json" in rdoc
             and "python3 verify_docs_parity.py" in rdoc
@@ -7984,7 +8131,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 153   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 154   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

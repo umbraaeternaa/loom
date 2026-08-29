@@ -427,7 +427,7 @@ async function boot(){
     pyodide = await loadPyodide();
     setStatus("loading LOOM…");
     const bundleUrl = new URL("./loom.py", location.href);
-  bundleUrl.searchParams.set("v", "506-effectful-component-execution-binding-v0");
+  bundleUrl.searchParams.set("v", "507-effectful-component-host-execution-v0");
     const response = await fetch(bundleUrl, {cache: "no-store"});
     if (!response.ok) throw new Error("LOOM bundle HTTP " + response.status);
     const code = await response.text();

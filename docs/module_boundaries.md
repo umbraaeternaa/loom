@@ -129,6 +129,15 @@ rows without consuming them. It grants no authority and must require a later
 executor to reverify Approval v2, remeasure the Component, and launch only an
 exact private snapshot.
 
+`loom_effectful_host.py` owns Component spawn measurement and the closed
+Effectful Component Host Execution v0 record. It may copy only the already
+bound Component into a current-user-private, read-only snapshot, bind the exact
+signed-to-private argv substitution, and validate the resulting links to one
+ordinary Bounded Execution v0. `loom.py` remains the trusted host orchestrator
+for Approval re-verification, runtime remeasurement, sandbox probing, atomic
+mediation reservation, process launch, ledger finalization, and snapshot
+cleanup. The module is host-only and absent from the browser bundle.
+
 `loom_component_release.py` owns Signed Reproducible Component Release
 Attestation v0. It may run exact offline Cargo builds, inspect locked registry
 sources, invoke the Component builder/verifier, and verify an external DSSE
