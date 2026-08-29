@@ -70,10 +70,12 @@ The `loom-effectful-component-host-execution/v0` record embeds:
 
 The embedded ordinary Action execution is intentionally compatible with the
 existing Action Capsule Result and Result Attestation chain. The legacy Result
-does not include the outer Effectful host execution hash, so it is not yet a
-closed end-to-end Component receipt. A later Effectful Result Binding must bind
-the two artifacts. A successful process exit is not a new authorization and is
-not itself a trusted semantic claim about the program output.
+does not include the outer Effectful host execution hash by itself. The
+implemented [Effectful Component Result Binding v0](effectful_component_result_binding_v0.md)
+now verifies the host record, terminal Result, and signed DSSE attestation, then
+content-addresses their exact shared execution and evidence links. A successful
+process exit is not a new authorization and is not itself a trusted semantic
+claim about the program output.
 
 ## Refusal surface
 

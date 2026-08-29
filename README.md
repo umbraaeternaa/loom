@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 507 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 508 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 507/507 citadel checks
+PASS — 508/508 citadel checks
 ```
 
 ## The idea in one screen
@@ -236,8 +236,12 @@ rebuilds the execution binding, remeasures Wasmtime and the Component, executes
 only private exact-byte snapshots under the existing network-denied sandbox,
 and atomically consumes the mediation once. Its self-contained execution record
 embeds a Bounded Execution that the existing terminal Action Result can consume;
-a later Effectful Result Binding must still bind that Result back to the outer
-Component spawn record.
+[`Effectful Component Result Binding v0`](docs/effectful_component_result_binding_v0.md)
+then verifies that Host Execution, terminal Action Result, signed DSSE
+attestation, and Gate Receipt all close over the same exact Action execution.
+Its content-addressed cross-links bind the Component spawn measurement and
+private launch to the signed terminal outcome without granting authority or
+repeating execution.
 
 Certified recursion can also use [`Proven Value Bounds v1`](docs/proven_value_bounds_v1.md):
 the checker derives conservative i31 and list-length upper bounds through

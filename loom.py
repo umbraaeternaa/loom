@@ -77,6 +77,7 @@ import loom_approval as _loom_approval
 import loom_executor as _loom_executor
 import loom_effectful_execution as _loom_effectful_execution
 import loom_effectful_host as _loom_effectful_host
+import loom_effectful_result as _loom_effectful_result
 
 _PARSE_FRONTEND = _loom_parse.Frontend(LoomError)
 
@@ -974,7 +975,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
     emit_wat,
     LoomError,
     metadata={
-        "citadel_checks": 507,
+        "citadel_checks": 508,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "wasm_abi_versions": [_WASM_ABI_VERSION, _WASM_ABI_V2_VERSION],
         "i31_bits": INT_BITS,
@@ -5367,6 +5368,59 @@ def verify_action_result_attestation_v0(
     return _action_attestation_validation(
         statement, envelope, expected["attester_key_sha256"], [],
     )
+
+
+def _effectful_component_result_checks_v0(
+    host_execution, action_result, action_result_attestation,
+    manifest, observation, program_src, wasm_bytes,
+    builder_surface, builder_components, verifier_components,
+    approval_public_key, attester_public_key,
+):
+    host_check = validate_effectful_component_host_execution_v0(host_execution)
+    result_check = validate_action_capsule_result_v0(action_result, approval_public_key)
+    attestation_check = verify_action_result_attestation_v0(
+        action_result_attestation, manifest, observation, program_src, wasm_bytes,
+        builder_surface, builder_components, verifier_components,
+        approval_public_key, attester_public_key,
+    )
+    return host_check, result_check, attestation_check
+
+
+def build_effectful_component_result_binding_v0(
+    host_execution, action_result, action_result_attestation,
+    manifest, observation, program_src, wasm_bytes,
+    builder_surface, builder_components, verifier_components,
+    approval_public_key, attester_public_key,
+):
+    """Bind one Component host execution to its signed terminal Action Result."""
+    checks = _effectful_component_result_checks_v0(
+        host_execution, action_result, action_result_attestation,
+        manifest, observation, program_src, wasm_bytes,
+        builder_surface, builder_components, verifier_components,
+        approval_public_key, attester_public_key,
+    )
+    return _loom_effectful_result.build_binding(*checks)
+
+
+def validate_effectful_component_result_binding_v0(
+    binding, manifest, observation, program_src, wasm_bytes,
+    builder_surface, builder_components, verifier_components,
+    approval_public_key, attester_public_key,
+):
+    """Validate a terminal Effectful Component evidence chain without host execution."""
+    if isinstance(binding, dict):
+        host_execution = binding.get("host_execution")
+        action_result = binding.get("action_result")
+        action_result_attestation = binding.get("action_result_attestation")
+    else:
+        host_execution = action_result = action_result_attestation = None
+    checks = _effectful_component_result_checks_v0(
+        host_execution, action_result, action_result_attestation,
+        manifest, observation, program_src, wasm_bytes,
+        builder_surface, builder_components, verifier_components,
+        approval_public_key, attester_public_key,
+    )
+    return _loom_effectful_result.validate_binding(binding, *checks)
 
 
 import loom_component_release as _loom_component_release

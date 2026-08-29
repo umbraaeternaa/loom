@@ -101,8 +101,10 @@ Approval v2 from every original compiler/Action input, remeasures both runtime
 and Component at the spawn boundary, atomically reserves the ready mediation,
 executes only private exact-byte snapshots under the existing sandbox, and
 emits a host execution record whose nested Bounded Execution can enter the
-existing terminal Result/Attestation chain. A later Effectful Result Binding is
-still required to bind that legacy Result to the outer Component spawn record.
+existing terminal Result/Attestation chain. The implemented
+[Effectful Component Result Binding v0](effectful_component_result_binding_v0.md)
+now closes that terminal Result and its signed evidence back to the outer
+Component spawn record.
 
 This module is deliberately absent from the standalone browser bundle and
 Playground because browser loading has no private Action ledger or trusted host

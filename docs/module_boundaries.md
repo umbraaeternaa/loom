@@ -34,6 +34,8 @@ Current stable boundaries:
 | `loom_approval.py` | signed one-use operator approval lifecycle |
 | `loom_executor.py` | claimed execution and process-attempt lifecycle |
 | `loom_effectful_execution.py` | exact Effectful Component resource-to-claimed-lifecycle binding |
+| `loom_effectful_host.py` | private Component spawn and sandboxed Action execution evidence |
+| `loom_effectful_result.py` | terminal Component-to-signed-Action-result evidence binding |
 
 ## Gate boundary rule
 
@@ -137,6 +139,14 @@ ordinary Bounded Execution v0. `loom.py` remains the trusted host orchestrator
 for Approval re-verification, runtime remeasurement, sandbox probing, atomic
 mediation reservation, process launch, ledger finalization, and snapshot
 cleanup. The module is host-only and absent from the browser bundle.
+
+`loom_effectful_result.py` owns Effectful Component Result Binding v0. It
+accepts only outputs already checked by the Host Execution, Action Result, and
+DSSE Attestation validators; proves that all three share one exact Bounded
+Execution; and emits a bounded canonical record joining Component measurement,
+private launch, terminal outcome, Gate Receipt, operator Approval, and attester
+identity. It performs no host IO, does not repeat execution, grants no
+authority, and remains absent from the browser bundle.
 
 `loom_component_release.py` owns Signed Reproducible Component Release
 Attestation v0. It may run exact offline Cargo builds, inspect locked registry

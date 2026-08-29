@@ -6,7 +6,7 @@ experimental, and what LOOM does not claim yet.
 
 ## Current public baseline
 
-- Canonical self-verification: `PASS -- 507/507 citadel checks`.
+- Canonical self-verification: `PASS -- 508/508 citadel checks`.
 - Published browser bundle parity is required before release:
   `python3 verify_docs_parity.py`.
 - The public compatibility surface is `loom.py`; module boundaries are pinned in
@@ -81,9 +81,13 @@ experimental, and what LOOM does not claim yet.
   atomically consumes mediation once, and launches through the existing
   shell-denied/network-denied Bounded Execution sandbox. Its content-addressed
   wrapper embeds the ordinary Action execution consumed by the existing
-  terminal Result and Attestation chain. That legacy Result does not yet bind
-  the outer Component spawn record, so a separate Effectful Result Binding
-  remains required before claiming a closed end-to-end Component receipt.
+  terminal Result and Attestation chain.
+- Effectful Component Result Binding v0 independently validates that host
+  execution, terminal Action Result, signed DSSE Action Result Attestation, and
+  Gate Receipt v4 close over the same exact Bounded Execution. Its bounded,
+  content-addressed record links the Component spawn measurement and private
+  launch to signed terminal evidence without executing again, granting
+  authority, or claiming semantic correctness of the output.
 - Signed Reproducible Component Release Attestation v0 resolves the active
   host graph with locked offline Cargo metadata, performs two clean frozen
   offline builds from exact active locked crate archives, requires
@@ -227,10 +231,10 @@ python3 loom.py about --format json
 
 Expected public markers:
 
-- `run_tests.py` prints `PASS -- 507/507 citadel checks`.
+- `run_tests.py` prints `PASS -- 508/508 citadel checks`.
 - `verify_docs_parity.py` prints that the published bundle is standalone and
   citadel-green.
-- `loom.py about --format json` reports `citadel_checks: 507`, the default
+- `loom.py about --format json` reports `citadel_checks: 508`, the default
   WASM ABI version, all supported WASM ABI versions, and the backend list.
 - An installed checkout exposes `loom` as the same CLI surface as
   `python3 loom.py`.
