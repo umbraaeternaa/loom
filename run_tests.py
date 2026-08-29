@@ -3066,7 +3066,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             "actions_observed": ["read", "write", "test", "git-commit"],
             "evidence": [
                 {"kind": "syntax", "status": "pass", "detail": "PASS syntax"},
-                {"kind": "citadel", "status": "pass", "detail": "508/508"},
+                {"kind": "citadel", "status": "pass", "detail": "509/509"},
                 {"kind": "docs-parity", "status": "pass", "detail": "PASS docs parity"},
                 {"kind": "git-clean", "status": "pass", "detail": "clean"},
                 {"kind": "git-sync", "status": "pass", "detail": "HEAD == origin/main"},
@@ -5443,6 +5443,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
 
         effectful_host_execution_ok = True
         effectful_result_binding_ok = True
+        effectful_execution_attestation_ok = True
         if not hasattr(_loom, "build_effectful_component_execution_binding_v0"):
             effectful_execution_binding_ok = (
                 Path(_loom.__file__).parent.name == "docs"
@@ -5457,6 +5458,12 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                 Path(_loom.__file__).parent.name == "docs"
                 and not hasattr(_loom, "build_effectful_component_result_binding_v0")
                 and not hasattr(_loom, "validate_effectful_component_result_binding_v0")
+            )
+            effectful_execution_attestation_ok = (
+                Path(_loom.__file__).parent.name == "docs"
+                and not hasattr(_loom, "prepare_effectful_component_execution_attestation_v0")
+                and not hasattr(_loom, "build_effectful_component_execution_attestation_v0")
+                and not hasattr(_loom, "verify_effectful_component_execution_attestation_v0")
             )
         elif effectful_execution_fixture is None:
             effectful_execution_binding_ok = True
@@ -5891,6 +5898,178 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                         for item in rejected_invalid_unicode_effectful_binding["findings"]
                     )
                 )
+                execution_attested_at = effectful_attested_at + 1
+                prepared_execution_attestation = (
+                    _loom.prepare_effectful_component_execution_attestation_v0(
+                        result_binding_record, semantics_manifest,
+                        effectful_observation, semantics_src, semantics_wasm,
+                        running_surface, compiler_components, compiler_components,
+                        test_key, test_key, test_key, execution_attested_at,
+                    )
+                )
+                if not prepared_execution_attestation["valid"]:
+                    raise ValueError(
+                        "Effectful Component Execution Attestation fixture rejected: "
+                        + repr(prepared_execution_attestation["findings"])
+                    )
+                execution_attestation_signature = base64.b64encode(sign_bytes(
+                    base64.b64decode(prepared_execution_attestation["signing_bytes"]),
+                )).decode("ascii")
+                execution_attestation = (
+                    _loom.build_effectful_component_execution_attestation_v0(
+                        result_binding_record, semantics_manifest,
+                        effectful_observation, semantics_src, semantics_wasm,
+                        running_surface, compiler_components, compiler_components,
+                        test_key, test_key, test_key, execution_attested_at,
+                        execution_attestation_signature,
+                    )
+                )
+                if not execution_attestation["valid"]:
+                    raise ValueError(
+                        "Effectful Component Execution Attestation build rejected: "
+                        + repr(execution_attestation["findings"])
+                    )
+                verified_execution_attestation = (
+                    _loom.verify_effectful_component_execution_attestation_v0(
+                        execution_attestation["envelope"], result_binding_record,
+                        semantics_manifest, effectful_observation, semantics_src,
+                        semantics_wasm, running_surface, compiler_components,
+                        compiler_components, test_key, test_key, test_key,
+                    )
+                )
+                tampered_execution_envelope = json.loads(json.dumps(
+                    execution_attestation["envelope"],
+                ))
+                tampered_execution_payload = bytearray(base64.b64decode(
+                    tampered_execution_envelope["payload"],
+                ))
+                tampered_execution_payload[-2] ^= 1
+                tampered_execution_envelope["payload"] = base64.b64encode(
+                    bytes(tampered_execution_payload),
+                ).decode("ascii")
+                rejected_tampered_execution_attestation = (
+                    _loom.verify_effectful_component_execution_attestation_v0(
+                        tampered_execution_envelope, result_binding_record,
+                        semantics_manifest, effectful_observation, semantics_src,
+                        semantics_wasm, running_surface, compiler_components,
+                        compiler_components, test_key, test_key, test_key,
+                    )
+                )
+                signed_bad_execution_statement = json.loads(json.dumps(
+                    prepared_execution_attestation["statement"],
+                ))
+                signed_bad_execution_statement["predicate"]["result_binding"]["cross_links"][
+                    "component_sha256"
+                ] = "0" * 64
+                signed_bad_execution_payload = canonical(
+                    signed_bad_execution_statement,
+                ).encode("utf-8")
+                signed_bad_execution_pae = _loom._action_attestation_pae(
+                    "application/vnd.in-toto+json", signed_bad_execution_payload,
+                )
+                signed_bad_execution_envelope = {
+                    "payloadType": "application/vnd.in-toto+json",
+                    "payload": base64.b64encode(signed_bad_execution_payload).decode("ascii"),
+                    "signatures": [{
+                        "keyid": prepared_execution_attestation["attester_key_sha256"],
+                        "sig": base64.b64encode(sign_bytes(signed_bad_execution_pae)).decode("ascii"),
+                    }],
+                }
+                rejected_signed_bad_execution_attestation = (
+                    _loom.verify_effectful_component_execution_attestation_v0(
+                        signed_bad_execution_envelope, result_binding_record,
+                        semantics_manifest, effectful_observation, semantics_src,
+                        semantics_wasm, running_surface, compiler_components,
+                        compiler_components, test_key, test_key, test_key,
+                    )
+                )
+                extended_execution_envelope = json.loads(json.dumps(
+                    execution_attestation["envelope"],
+                ))
+                extended_execution_envelope["extension"] = "unsigned"
+                rejected_extended_execution_attestation = (
+                    _loom.verify_effectful_component_execution_attestation_v0(
+                        extended_execution_envelope, result_binding_record,
+                        semantics_manifest, effectful_observation, semantics_src,
+                        semantics_wasm, running_surface, compiler_components,
+                        compiler_components, test_key, test_key, test_key,
+                    )
+                )
+                rejected_early_execution_attestation = (
+                    _loom.prepare_effectful_component_execution_attestation_v0(
+                        result_binding_record, semantics_manifest,
+                        effectful_observation, semantics_src, semantics_wasm,
+                        running_surface, compiler_components, compiler_components,
+                        test_key, test_key, test_key, effectful_attested_at - 1,
+                    )
+                )
+                rejected_rebound_execution_attestation = (
+                    _loom.verify_effectful_component_execution_attestation_v0(
+                        execution_attestation["envelope"], tampered_effectful_result_link,
+                        semantics_manifest, effectful_observation, semantics_src,
+                        semantics_wasm, running_surface, compiler_components,
+                        compiler_components, test_key, test_key, test_key,
+                    )
+                )
+                execution_statement = prepared_execution_attestation["statement"]
+                execution_predicate = execution_statement["predicate"]
+                effectful_execution_attestation_ok = (
+                    execution_attestation["valid"]
+                    and execution_attestation["authorization"] == "none"
+                    and verified_execution_attestation == execution_attestation
+                    and execution_statement["_type"]
+                    == "https://in-toto.io/Statement/v1"
+                    and execution_statement["predicateType"]
+                    == "https://umbraaeternaa.github.io/loom/attestation/effectful-component-execution/v0"
+                    and [item["name"] for item in execution_statement["subject"]] == [
+                        "loom-effectful-component-result-binding-v0.json",
+                        "loom-effectful-component-host-execution-v0.json",
+                        "loom-action-result.json", "loom-effectful-component.wasm",
+                        "loom-gate-receipt-v4.json",
+                    ]
+                    and execution_predicate["result_binding_sha256"]
+                    == result_binding_record["binding_sha256"]
+                    and execution_predicate["cross_links"]["component_sha256"]
+                    == fixture["build"]["artifact"]["component"]["sha256"]
+                    and execution_predicate["lifecycle"] == {
+                        "schema": "loom-effectful-component-execution-attestation-lifecycle/v0",
+                        "terminal": True,
+                        "evidence": "signed-effectful-component-execution",
+                        "authorization": "none", "execution_repeated": False,
+                        "nested_signature_verified": True,
+                        "portable_verification": True,
+                        "independent_attester_claim": False,
+                        "slsa_level_claim": "none",
+                    }
+                    and rejected_tampered_execution_attestation["valid"] is False
+                    and any(
+                        item["code"] == "invalid-effectful-execution-signature"
+                        for item in rejected_tampered_execution_attestation["findings"]
+                    )
+                    and rejected_signed_bad_execution_attestation["valid"] is False
+                    and any(
+                        item["code"] == "effectful-execution-statement-mismatch"
+                        for item in rejected_signed_bad_execution_attestation["findings"]
+                    )
+                    and rejected_extended_execution_attestation["valid"] is False
+                    and any(
+                        item["code"] == "closed-envelope-mismatch"
+                        for item in rejected_extended_execution_attestation["findings"]
+                    )
+                    and rejected_early_execution_attestation["valid"] is False
+                    and any(
+                        item["code"] == "attestation-before-evidence"
+                        for item in rejected_early_execution_attestation["findings"]
+                    )
+                    and rejected_rebound_execution_attestation["valid"] is False
+                    and any(
+                        item["code"] in {
+                            "effectful-component-result-binding-mismatch",
+                            "invalid-effectful-result-binding",
+                        }
+                        for item in rejected_rebound_execution_attestation["findings"]
+                    )
+                )
                 effectful_host_execution_ok = (
                     rejected_host_binding["valid"] is False
                     and rejected_host_component_drift["valid"] is False
@@ -5939,6 +6118,8 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         print(f"  {'ok  ' if effectful_host_execution_ok else 'FAIL'} gate: Effectful Component Host Execution v0")
         ok += effectful_result_binding_ok
         print(f"  {'ok  ' if effectful_result_binding_ok else 'FAIL'} gate: Effectful Component Result Binding v0")
+        ok += effectful_execution_attestation_ok
+        print(f"  {'ok  ' if effectful_execution_attestation_ok else 'FAIL'} gate: Effectful Component Execution Attestation v0")
 
         def execute_action_v0(ledger_path, candidate_approval, candidate_request, candidate_claim,
                               candidate_mediation, candidate_invocation, now=action_issued + 3):
@@ -7291,7 +7472,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == (500 if is_browser_bundle else 508)
+            and about_json["citadel_checks"] == (500 if is_browser_bundle else 509)
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["wasm_abi_versions"] == ([1] if is_browser_bundle else [1, 2])
             and about_json["i31_bits"] == 31
@@ -7521,7 +7702,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 508/508 citadel checks" in quick
+            and "PASS -- 509/509 citadel checks" in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
             and "loom examples" in quick
@@ -7631,7 +7812,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "508-effectful-component-result-binding-v0")' in play
+            and 'bundleUrl.searchParams.set("v", "509-effectful-component-execution-attestation-v0")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -8253,7 +8434,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 508/508 citadel checks" in rdoc
+            and "PASS -- 509/509 citadel checks" in rdoc
             and "loom examples --format json" in rdoc
             and "loom doctor --dry-run --format json" in rdoc
             and "python3 verify_docs_parity.py" in rdoc
@@ -8317,7 +8498,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 155   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 156   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

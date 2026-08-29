@@ -78,6 +78,7 @@ import loom_executor as _loom_executor
 import loom_effectful_execution as _loom_effectful_execution
 import loom_effectful_host as _loom_effectful_host
 import loom_effectful_result as _loom_effectful_result
+import loom_effectful_attestation as _loom_effectful_attestation
 
 _PARSE_FRONTEND = _loom_parse.Frontend(LoomError)
 
@@ -975,7 +976,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
     emit_wat,
     LoomError,
     metadata={
-        "citadel_checks": 508,
+        "citadel_checks": 509,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "wasm_abi_versions": [_WASM_ABI_VERSION, _WASM_ABI_V2_VERSION],
         "i31_bits": INT_BITS,
@@ -5421,6 +5422,87 @@ def validate_effectful_component_result_binding_v0(
         approval_public_key, attester_public_key,
     )
     return _loom_effectful_result.validate_binding(binding, *checks)
+
+
+_EFFECTFUL_EXECUTION_ATTESTATION_FRONTEND = _loom_effectful_attestation.Frontend(
+    _action_approval_validate_public_key,
+    _action_approval_rsa_verify,
+)
+
+
+def _effectful_component_execution_attestation_checks_v0(
+    binding, manifest, observation, program_src, wasm_bytes,
+    builder_surface, builder_components, verifier_components,
+    approval_public_key, result_attester_public_key,
+):
+    if isinstance(binding, dict):
+        host_execution = binding.get("host_execution")
+        action_result = binding.get("action_result")
+        action_result_attestation = binding.get("action_result_attestation")
+    else:
+        host_execution = action_result = action_result_attestation = None
+    nested_checks = _effectful_component_result_checks_v0(
+        host_execution, action_result, action_result_attestation,
+        manifest, observation, program_src, wasm_bytes,
+        builder_surface, builder_components, verifier_components,
+        approval_public_key, result_attester_public_key,
+    )
+    binding_check = _loom_effectful_result.validate_binding(binding, *nested_checks)
+    return binding_check, nested_checks[2]
+
+
+def prepare_effectful_component_execution_attestation_v0(
+    binding, manifest, observation, program_src, wasm_bytes,
+    builder_surface, builder_components, verifier_components,
+    approval_public_key, result_attester_public_key,
+    execution_attester_public_key, attested_at_unix_ms,
+):
+    """Prepare canonical in-toto/DSSE bytes for one terminal Component execution."""
+    checks = _effectful_component_execution_attestation_checks_v0(
+        binding, manifest, observation, program_src, wasm_bytes,
+        builder_surface, builder_components, verifier_components,
+        approval_public_key, result_attester_public_key,
+    )
+    return _loom_effectful_attestation.prepare_attestation(
+        _EFFECTFUL_EXECUTION_ATTESTATION_FRONTEND, *checks,
+        execution_attester_public_key, attested_at_unix_ms,
+    )
+
+
+def build_effectful_component_execution_attestation_v0(
+    binding, manifest, observation, program_src, wasm_bytes,
+    builder_surface, builder_components, verifier_components,
+    approval_public_key, result_attester_public_key,
+    execution_attester_public_key, attested_at_unix_ms, signature,
+):
+    """Build a closed DSSE envelope from an externally produced signature."""
+    checks = _effectful_component_execution_attestation_checks_v0(
+        binding, manifest, observation, program_src, wasm_bytes,
+        builder_surface, builder_components, verifier_components,
+        approval_public_key, result_attester_public_key,
+    )
+    return _loom_effectful_attestation.build_attestation(
+        _EFFECTFUL_EXECUTION_ATTESTATION_FRONTEND, *checks,
+        execution_attester_public_key, attested_at_unix_ms, signature,
+    )
+
+
+def verify_effectful_component_execution_attestation_v0(
+    envelope, binding, manifest, observation, program_src, wasm_bytes,
+    builder_surface, builder_components, verifier_components,
+    approval_public_key, result_attester_public_key,
+    execution_attester_public_key,
+):
+    """Verify one signed terminal Component execution statement without host IO."""
+    checks = _effectful_component_execution_attestation_checks_v0(
+        binding, manifest, observation, program_src, wasm_bytes,
+        builder_surface, builder_components, verifier_components,
+        approval_public_key, result_attester_public_key,
+    )
+    return _loom_effectful_attestation.verify_attestation(
+        _EFFECTFUL_EXECUTION_ATTESTATION_FRONTEND, envelope, *checks,
+        execution_attester_public_key,
+    )
 
 
 import loom_component_release as _loom_component_release

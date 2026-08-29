@@ -46,7 +46,7 @@ jobs:
       - name: Install package build tooling
         run: python -m pip install "setuptools>=61" wheel
       - name: Compile Python sources
-        run: python -m py_compile loom.py loom_parse.py loom_checker.py loom_bounds.py loom_frontend.py loom_recursion.py loom_runtime.py loom_cli.py loom_gate.py loom_observer.py loom_evidence.py loom_approval.py loom_codegen.py loom_wasm.py loom_component.py loom_wasi_capabilities.py loom_component_adapter.py loom_effectful_execution.py loom_effectful_host.py loom_effectful_result.py loom_component_release.py loom_provenance.py verify_docs_parity.py docs/loom.py run_tests.py fuzz_tests.py tools/verify_component_federation_ci.py
+        run: python -m py_compile loom.py loom_parse.py loom_checker.py loom_bounds.py loom_frontend.py loom_recursion.py loom_runtime.py loom_cli.py loom_gate.py loom_observer.py loom_evidence.py loom_approval.py loom_codegen.py loom_wasm.py loom_component.py loom_wasi_capabilities.py loom_component_adapter.py loom_effectful_execution.py loom_effectful_host.py loom_effectful_result.py loom_effectful_attestation.py loom_component_release.py loom_provenance.py verify_docs_parity.py docs/loom.py run_tests.py fuzz_tests.py tools/verify_component_federation_ci.py
       - name: Run citadel
         run: python run_tests.py
       - name: Upload Linux Component witness
@@ -101,7 +101,7 @@ jobs:
       - name: Install package build tooling
         run: python -m pip install "setuptools>=61" wheel
       - name: Compile federation surfaces
-        run: python -m py_compile loom.py loom_wasi_capabilities.py loom_component_adapter.py loom_effectful_execution.py loom_effectful_host.py loom_effectful_result.py loom_component_release.py run_tests.py tools/verify_component_federation_ci.py
+        run: python -m py_compile loom.py loom_wasi_capabilities.py loom_component_adapter.py loom_effectful_execution.py loom_effectful_host.py loom_effectful_result.py loom_effectful_attestation.py loom_component_release.py run_tests.py tools/verify_component_federation_ci.py
       - name: Run macOS Component citadel
         run: python run_tests.py
       - name: Upload macOS Component witness

@@ -101,3 +101,9 @@ outcome was observed, and which attester signed that exact terminal Result.
 The API is absent from `docs/loom.py` and the Playground. Browser code has no
 operator verification boundary, private Action ledger, host sandbox, or reason
 to construct production execution receipts.
+
+For portable authenticated export, the additive
+[Effectful Component Execution Attestation v0](effectful_component_execution_attestation_v0.md)
+signs this exact terminal binding as an external DSSE/in-toto Statement. The
+binding remains complete without that optional export; the outer attestation
+adds signer-authenticated distribution, not execution authority.
