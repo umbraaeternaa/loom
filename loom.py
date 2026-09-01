@@ -79,6 +79,7 @@ import loom_effectful_execution as _loom_effectful_execution
 import loom_effectful_host as _loom_effectful_host
 import loom_effectful_result as _loom_effectful_result
 import loom_effectful_attestation as _loom_effectful_attestation
+import loom_execution_bundle as _loom_execution_bundle
 
 _PARSE_FRONTEND = _loom_parse.Frontend(LoomError)
 
@@ -976,7 +977,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
     emit_wat,
     LoomError,
     metadata={
-        "citadel_checks": 509,
+        "citadel_checks": 510,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "wasm_abi_versions": [_WASM_ABI_VERSION, _WASM_ABI_V2_VERSION],
         "i31_bits": INT_BITS,
@@ -1003,6 +1004,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
             "gate-attempt",
             "gate-process-attempt",
             "gate-process-finish",
+            "execution-verify",
         ],
     },
 )
@@ -5503,6 +5505,41 @@ def verify_effectful_component_execution_attestation_v0(
         _EFFECTFUL_EXECUTION_ATTESTATION_FRONTEND, envelope, *checks,
         execution_attester_public_key,
     )
+
+
+_EXECUTION_EVIDENCE_BUNDLE_FRONTEND = _loom_execution_bundle.Frontend(
+    verify_effectful_component_execution_attestation_v0,
+)
+
+
+def build_effectful_component_execution_evidence_bundle_v0(
+    envelope, binding, manifest, observation, program_src, wasm_bytes,
+    builder_surface, builder_components, verifier_components,
+    approval_public_key, result_attester_public_key,
+    execution_attester_public_key,
+):
+    """Build one self-contained, content-addressed execution evidence package."""
+    return _loom_execution_bundle.build_bundle(
+        _EXECUTION_EVIDENCE_BUNDLE_FRONTEND, envelope, binding, manifest,
+        observation, program_src, wasm_bytes, builder_surface,
+        builder_components, verifier_components, approval_public_key,
+        result_attester_public_key, execution_attester_public_key,
+    )
+
+
+def verify_effectful_component_execution_evidence_bundle_v0(
+    bundle, expected_execution_attester_key_sha256,
+):
+    """Verify a portable execution package against an external key pin, without IO."""
+    return _loom_execution_bundle.verify_bundle(
+        _EXECUTION_EVIDENCE_BUNDLE_FRONTEND, bundle,
+        expected_execution_attester_key_sha256,
+    )
+
+
+_CLI_FRONTEND.metadata["execution_bundle_verifier"] = (
+    verify_effectful_component_execution_evidence_bundle_v0
+)
 
 
 import loom_component_release as _loom_component_release

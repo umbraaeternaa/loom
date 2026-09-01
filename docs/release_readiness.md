@@ -6,7 +6,7 @@ experimental, and what LOOM does not claim yet.
 
 ## Current public baseline
 
-- Canonical self-verification: `PASS -- 509/509 citadel checks`.
+- Canonical self-verification: `PASS -- 510/510 citadel checks`.
 - Published browser bundle parity is required before release:
   `python3 verify_docs_parity.py`.
 - The public compatibility surface is `loom.py`; module boundaries are pinned in
@@ -94,6 +94,11 @@ experimental, and what LOOM does not claim yet.
   Gate Receipt v4. Verification checks signature bytes before parsing and then
   rebuilds the statement from independently verified evidence. It explicitly
   claims neither independent attester quorum nor a SLSA level.
+- Portable Execution Evidence Bundle v0 packages that signed envelope with the
+  exact source/WASM bytes, compiler surfaces, nested evidence, and public keys
+  needed for bounded offline verification. Its CLI requires an external
+  execution-attester key pin, performs no execution, grants no authority, and
+  treats embedded keys as evidence rather than identity.
 - Signed Reproducible Component Release Attestation v0 resolves the active
   host graph with locked offline Cargo metadata, performs two clean frozen
   offline builds from exact active locked crate archives, requires
@@ -237,10 +242,10 @@ python3 loom.py about --format json
 
 Expected public markers:
 
-- `run_tests.py` prints `PASS -- 509/509 citadel checks`.
+- `run_tests.py` prints `PASS -- 510/510 citadel checks`.
 - `verify_docs_parity.py` prints that the published bundle is standalone and
   citadel-green.
-- `loom.py about --format json` reports `citadel_checks: 509`, the default
+- `loom.py about --format json` reports `citadel_checks: 510`, the default
   WASM ABI version, all supported WASM ABI versions, and the backend list.
 - An installed checkout exposes `loom` as the same CLI surface as
   `python3 loom.py`.

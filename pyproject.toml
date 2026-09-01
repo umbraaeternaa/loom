@@ -48,6 +48,7 @@ py-modules = [
   "loom_effectful_host",
   "loom_effectful_result",
   "loom_effectful_attestation",
+  "loom_execution_bundle",
   "loom_executor",
   "loom_frontend",
   "loom_gate",

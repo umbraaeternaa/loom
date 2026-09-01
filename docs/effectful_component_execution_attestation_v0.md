@@ -115,3 +115,9 @@ level.
 This API is absent from `docs/loom.py` and the Playground. It belongs to the
 trusted host evidence lane, while browser LOOM remains an execution and
 inspection surface without operator key custody.
+
+For transfer to another machine, the additive
+[Portable Execution Evidence Bundle v0](effectful_component_execution_evidence_bundle_v0.md)
+packages this envelope with every exact verification input. Its verifier still
+requires an independently obtained execution-attester key pin; embedded keys
+alone never establish identity.

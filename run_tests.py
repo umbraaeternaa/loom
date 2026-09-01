@@ -11,6 +11,8 @@ import subprocess
 import tempfile
 import shutil
 import zipfile
+import io
+import contextlib
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import loom as _loom
@@ -3066,7 +3068,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             "actions_observed": ["read", "write", "test", "git-commit"],
             "evidence": [
                 {"kind": "syntax", "status": "pass", "detail": "PASS syntax"},
-                {"kind": "citadel", "status": "pass", "detail": "509/509"},
+                {"kind": "citadel", "status": "pass", "detail": "510/510"},
                 {"kind": "docs-parity", "status": "pass", "detail": "PASS docs parity"},
                 {"kind": "git-clean", "status": "pass", "detail": "clean"},
                 {"kind": "git-sync", "status": "pass", "detail": "HEAD == origin/main"},
@@ -5444,6 +5446,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         effectful_host_execution_ok = True
         effectful_result_binding_ok = True
         effectful_execution_attestation_ok = True
+        effectful_execution_bundle_ok = True
         if not hasattr(_loom, "build_effectful_component_execution_binding_v0"):
             effectful_execution_binding_ok = (
                 Path(_loom.__file__).parent.name == "docs"
@@ -5464,6 +5467,11 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                 and not hasattr(_loom, "prepare_effectful_component_execution_attestation_v0")
                 and not hasattr(_loom, "build_effectful_component_execution_attestation_v0")
                 and not hasattr(_loom, "verify_effectful_component_execution_attestation_v0")
+            )
+            effectful_execution_bundle_ok = (
+                Path(_loom.__file__).parent.name == "docs"
+                and not hasattr(_loom, "build_effectful_component_execution_evidence_bundle_v0")
+                and not hasattr(_loom, "verify_effectful_component_execution_evidence_bundle_v0")
             )
         elif effectful_execution_fixture is None:
             effectful_execution_binding_ok = True
@@ -6013,6 +6021,190 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                 )
                 execution_statement = prepared_execution_attestation["statement"]
                 execution_predicate = execution_statement["predicate"]
+                execution_key_sha256 = execution_attestation["attester_key_sha256"]
+                execution_bundle = (
+                    _loom.build_effectful_component_execution_evidence_bundle_v0(
+                        execution_attestation["envelope"], result_binding_record,
+                        semantics_manifest, effectful_observation, semantics_src,
+                        semantics_wasm, running_surface, compiler_components,
+                        compiler_components, test_key, test_key, test_key,
+                    )
+                )
+                if not execution_bundle["valid"]:
+                    raise ValueError(
+                        "Portable Execution Evidence Bundle fixture rejected: "
+                        + repr(execution_bundle["findings"])
+                    )
+                execution_bundle_record = execution_bundle["bundle"]
+                verified_execution_bundle = (
+                    _loom.verify_effectful_component_execution_evidence_bundle_v0(
+                        execution_bundle_record, execution_key_sha256,
+                    )
+                )
+                rejected_unpinned_execution_bundle = (
+                    _loom.verify_effectful_component_execution_evidence_bundle_v0(
+                        execution_bundle_record, None,
+                    )
+                )
+                rejected_wrong_pin_execution_bundle = (
+                    _loom.verify_effectful_component_execution_evidence_bundle_v0(
+                        execution_bundle_record, "0" * 64,
+                    )
+                )
+                tampered_execution_bundle = json.loads(json.dumps(execution_bundle_record))
+                tampered_execution_bundle["evidence"]["program"]["source_sha256"] = "0" * 64
+                rejected_tampered_execution_bundle = (
+                    _loom.verify_effectful_component_execution_evidence_bundle_v0(
+                        tampered_execution_bundle, execution_key_sha256,
+                    )
+                )
+
+                def rehash_execution_bundle(candidate):
+                    core = {key: value for key, value in candidate.items() if key != "bundle_sha256"}
+                    candidate["bundle_sha256"] = hashlib.sha256(
+                        canonical(core).encode("utf-8"),
+                    ).hexdigest()
+                    return candidate
+
+                rebound_execution_bundle = json.loads(json.dumps(execution_bundle_record))
+                rebound_source = base64.b64decode(
+                    rebound_execution_bundle["evidence"]["program"]["source_base64"],
+                ) + b"\n"
+                rebound_execution_bundle["evidence"]["program"]["source_base64"] = (
+                    base64.b64encode(rebound_source).decode("ascii")
+                )
+                rebound_execution_bundle["evidence"]["program"]["source_sha256"] = (
+                    hashlib.sha256(rebound_source).hexdigest()
+                )
+                rejected_rebound_execution_bundle = (
+                    _loom.verify_effectful_component_execution_evidence_bundle_v0(
+                        rehash_execution_bundle(rebound_execution_bundle),
+                        execution_key_sha256,
+                    )
+                )
+                malleable_execution_bundle = json.loads(json.dumps(execution_bundle_record))
+                malleable_source_base64 = (
+                    malleable_execution_bundle["evidence"]["program"]["source_base64"]
+                )
+                base64_alphabet = (
+                    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+                )
+                if not malleable_source_base64.endswith("="):
+                    raise ValueError("execution bundle source fixture lost Base64 padding")
+                padding_index = -3 if malleable_source_base64.endswith("==") else -2
+                canonical_digit = base64_alphabet.index(
+                    malleable_source_base64[padding_index]
+                )
+                malleable_execution_bundle["evidence"]["program"]["source_base64"] = (
+                    malleable_source_base64[:padding_index]
+                    + base64_alphabet[canonical_digit + 1]
+                    + malleable_source_base64[padding_index + 1:]
+                )
+                rejected_malleable_execution_bundle = (
+                    _loom.verify_effectful_component_execution_evidence_bundle_v0(
+                        rehash_execution_bundle(malleable_execution_bundle),
+                        execution_key_sha256,
+                    )
+                )
+                extended_execution_bundle = json.loads(json.dumps(execution_bundle_record))
+                extended_execution_bundle["extension"] = "unsigned"
+                rejected_extended_execution_bundle = (
+                    _loom.verify_effectful_component_execution_evidence_bundle_v0(
+                        extended_execution_bundle, execution_key_sha256,
+                    )
+                )
+                with tempfile.TemporaryDirectory(prefix="loom-execution-bundle-cli-") as cli_td:
+                    bundle_path = Path(cli_td) / "execution-bundle.json"
+                    duplicate_path = Path(cli_td) / "duplicate-bundle.json"
+                    bundle_text = canonical(execution_bundle_record)
+                    bundle_path.write_text(bundle_text)
+                    duplicate_path.write_text('{"schema":"duplicate",' + bundle_text[1:])
+                    cli_json_out = io.StringIO()
+                    with contextlib.redirect_stdout(cli_json_out):
+                        cli_bundle_code = _loom._cli([
+                            "execution-verify", str(bundle_path),
+                            "--execution-key-sha256", execution_key_sha256,
+                            "--format=json",
+                        ])
+                    cli_bundle_json = json.loads(cli_json_out.getvalue())
+                    cli_text_out = io.StringIO()
+                    with contextlib.redirect_stdout(cli_text_out):
+                        cli_bundle_text_code = _loom._cli([
+                            "execution-verify", str(bundle_path),
+                            "--execution-key-sha256", execution_key_sha256,
+                        ])
+                    cli_missing_pin_out = io.StringIO()
+                    with contextlib.redirect_stdout(cli_missing_pin_out):
+                        cli_missing_pin_code = _loom._cli([
+                            "execution-verify", str(bundle_path),
+                        ])
+                    cli_duplicate_out = io.StringIO()
+                    with contextlib.redirect_stdout(cli_duplicate_out):
+                        cli_duplicate_code = _loom._cli([
+                            "execution-verify", str(duplicate_path),
+                            "--execution-key-sha256", execution_key_sha256,
+                        ])
+                bundle_program = execution_bundle_record["evidence"]["program"]
+                bundle_lifecycle = execution_bundle_record["lifecycle"]
+                effectful_execution_bundle_ok = (
+                    execution_bundle["valid"] is True
+                    and execution_bundle["identity_trusted"] is False
+                    and execution_bundle["trust_anchor"] is None
+                    and verified_execution_bundle["valid"] is True
+                    and verified_execution_bundle["identity_trusted"] is True
+                    and verified_execution_bundle["trust_anchor"]
+                    == "external-execution-attester-key-pin"
+                    and verified_execution_bundle["bundle_sha256"]
+                    == execution_bundle_record["bundle_sha256"]
+                    and execution_bundle_record["schema"]
+                    == "loom-effectful-component-execution-evidence-bundle/v0"
+                    and bundle_program["source_sha256"]
+                    == hashlib.sha256(semantics_src.encode("utf-8")).hexdigest()
+                    and bundle_program["wasm_sha256"]
+                    == hashlib.sha256(semantics_wasm).hexdigest()
+                    and bundle_lifecycle["external_execution_key_pin_required"] is True
+                    and bundle_lifecycle["private_key_material"] is False
+                    and bundle_lifecycle["embedded_key_identity_claim"] is False
+                    and bundle_lifecycle["authorization"] == "none"
+                    and rejected_unpinned_execution_bundle["valid"] is False
+                    and any(
+                        item["code"] == "external-key-pin-required"
+                        for item in rejected_unpinned_execution_bundle["findings"]
+                    )
+                    and rejected_wrong_pin_execution_bundle["valid"] is False
+                    and any(
+                        item["code"] == "external-key-pin-mismatch"
+                        for item in rejected_wrong_pin_execution_bundle["findings"]
+                    )
+                    and rejected_tampered_execution_bundle["valid"] is False
+                    and any(
+                        item["code"] == "bundle-hash-mismatch"
+                        for item in rejected_tampered_execution_bundle["findings"]
+                    )
+                    and rejected_rebound_execution_bundle["valid"] is False
+                    and any(
+                        item["code"] == "invalid-trust-receipt"
+                        for item in rejected_rebound_execution_bundle["findings"]
+                    )
+                    and rejected_malleable_execution_bundle["valid"] is False
+                    and any(
+                        item["code"] == "non-canonical-base64"
+                        for item in rejected_malleable_execution_bundle["findings"]
+                    )
+                    and rejected_extended_execution_bundle["valid"] is False
+                    and any(
+                        item["code"] == "closed-object-mismatch"
+                        for item in rejected_extended_execution_bundle["findings"]
+                    )
+                    and cli_bundle_code == cli_bundle_text_code == 0
+                    and cli_bundle_json["valid"] is True
+                    and cli_bundle_json["identity_trusted"] is True
+                    and "portable evidence accepted" in cli_text_out.getvalue()
+                    and cli_missing_pin_code == 2
+                    and "--execution-key-sha256" in cli_missing_pin_out.getvalue()
+                    and cli_duplicate_code == 2
+                    and "duplicate JSON key" in cli_duplicate_out.getvalue()
+                )
                 effectful_execution_attestation_ok = (
                     execution_attestation["valid"]
                     and execution_attestation["authorization"] == "none"
@@ -6120,6 +6312,8 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         print(f"  {'ok  ' if effectful_result_binding_ok else 'FAIL'} gate: Effectful Component Result Binding v0")
         ok += effectful_execution_attestation_ok
         print(f"  {'ok  ' if effectful_execution_attestation_ok else 'FAIL'} gate: Effectful Component Execution Attestation v0")
+        ok += effectful_execution_bundle_ok
+        print(f"  {'ok  ' if effectful_execution_bundle_ok else 'FAIL'} gate/cli: Portable Execution Evidence Bundle v0")
 
         def execute_action_v0(ledger_path, candidate_approval, candidate_request, candidate_claim,
                               candidate_mediation, candidate_invocation, now=action_issued + 3):
@@ -7472,7 +7666,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == (500 if is_browser_bundle else 509)
+            and about_json["citadel_checks"] == (500 if is_browser_bundle else 510)
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["wasm_abi_versions"] == ([1] if is_browser_bundle else [1, 2])
             and about_json["i31_bits"] == 31
@@ -7484,6 +7678,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "doctor" in about_json["commands"]
             and "gate-workflow" in about_json["commands"]
             and "gate-workflow-v3" in about_json["commands"]
+            and (("execution-verify" not in about_json["commands"]) if is_browser_bundle else ("execution-verify" in about_json["commands"]))
         )
         ok += about_contract_ok
         print(f"  {'ok  ' if about_contract_ok else 'FAIL'} cli/api: machine-readable about contract v1")
@@ -7702,7 +7897,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 509/509 citadel checks" in quick
+            and "PASS -- 510/510 citadel checks" in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
             and "loom examples" in quick
@@ -7812,7 +8007,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "509-effectful-component-execution-attestation-v0")' in play
+            and 'bundleUrl.searchParams.set("v", "510-portable-execution-evidence-bundle-v0")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -8434,7 +8629,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 509/509 citadel checks" in rdoc
+            and "PASS -- 510/510 citadel checks" in rdoc
             and "loom examples --format json" in rdoc
             and "loom doctor --dry-run --format json" in rdoc
             and "python3 verify_docs_parity.py" in rdoc
@@ -8498,7 +8693,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 156   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 157   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, Portable Execution Evidence Bundle v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

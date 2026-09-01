@@ -60,7 +60,7 @@ python3 loom.py about --format json
 The expected public baseline is:
 
 ```console
-PASS -- 509/509 citadel checks
+PASS -- 510/510 citadel checks
 ```
 
 The CLI help is also pinned:
@@ -70,6 +70,14 @@ loom --help
 loom help quickstart
 loom examples
 loom doctor --dry-run
+```
+
+To verify a terminal Component execution bundle offline, use an
+execution-attester key SHA-256 pin obtained outside the bundle:
+
+```console
+loom execution-verify execution-bundle.json \
+  --execution-key-sha256 EXPECTED_LOWERCASE_SHA256
 ```
 
 ## 4. See the trust gate

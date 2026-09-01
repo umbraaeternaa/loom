@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 509 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 510 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 509/509 citadel checks
+PASS — 510/510 citadel checks
 ```
 
 ## The idea in one screen
@@ -247,6 +247,11 @@ then exports that complete terminal chain as a canonical externally signed
 DSSE/in-toto Statement. It signs Result Binding, Host Execution, Action Result,
 executed Component bytes, and Gate Receipt together, while explicitly claiming
 neither independent attester quorum nor a SLSA level.
+[`Portable Execution Evidence Bundle v0`](docs/effectful_component_execution_evidence_bundle_v0.md)
+then packages that signature with exact source, WASM, compiler surfaces, nested
+evidence, and public keys for bounded offline verification on another machine.
+Its CLI requires an independently obtained execution-attester key SHA-256 pin;
+the embedded key is never treated as an identity claim.
 
 Certified recursion can also use [`Proven Value Bounds v1`](docs/proven_value_bounds_v1.md):
 the checker derives conservative i31 and list-length upper bounds through
@@ -265,6 +270,7 @@ contract; higher-order and effectful arguments remain fail-closed.
 - [`loom_wasi_capabilities.py`](loom_wasi_capabilities.py) — closed ABI v2 effect-to-WASI projection and verifier.
 - [`loom_component_adapter.py`](loom_component_adapter.py) — exact Pure v0 and effectful v1 Component builders/verifiers.
 - [`loom_effectful_execution.py`](loom_effectful_execution.py) — host-only claimed-lifecycle binding for exact effectful Components.
+- [`loom_execution_bundle.py`](loom_execution_bundle.py) — portable terminal evidence packaging and externally pinned offline verification.
 - [`docs/component_bridge_v0.md`](docs/component_bridge_v0.md) — exact bridge metadata and bounded heap-ingress contract.
 - [`loom_provenance.py`](loom_provenance.py) — host-built modular/standalone compiler profiles.
 - [`run_tests.py`](run_tests.py) — the self-verifying suite: it accepts honest programs,

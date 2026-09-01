@@ -48,6 +48,7 @@ ACTION_CAPSULE_RESULT_V0_DOC = ROOT / "docs" / "action_capsule_result_v0.md"
 ACTION_RESULT_ATTESTATION_V0_DOC = ROOT / "docs" / "action_result_attestation_v0.md"
 EFFECTFUL_COMPONENT_RESULT_BINDING_DOC = ROOT / "docs" / "effectful_component_result_binding_v0.md"
 EFFECTFUL_COMPONENT_EXECUTION_ATTESTATION_DOC = ROOT / "docs" / "effectful_component_execution_attestation_v0.md"
+EFFECTFUL_COMPONENT_EXECUTION_BUNDLE_DOC = ROOT / "docs" / "effectful_component_execution_evidence_bundle_v0.md"
 WASM_ARTIFACT_DOC = ROOT / "docs" / "gate_wasm_artifact_v1.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
 
@@ -56,7 +57,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "509-effectful-component-execution-attestation-v0")',
+        'bundleUrl.searchParams.set("v", "510-portable-execution-evidence-bundle-v0")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -158,10 +159,12 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "509 self-verifying checks",
-        ">509</div>",
+        "510 self-verifying checks",
+        ">510</div>",
     )
     forbidden = (
+        "509 self-verifying checks",
+        ">509</div>",
         "508 self-verifying checks",
         ">508</div>",
         "507 self-verifying checks",
@@ -869,6 +872,44 @@ def _check_effectful_component_execution_attestation() -> None:
         )
     if not (ROOT / "loom_effectful_attestation.py").is_file():
         raise SystemExit("docs parity: Effectful Component Execution Attestation implementation is absent")
+
+
+def _check_effectful_component_execution_bundle() -> None:
+    words = " ".join(EFFECTFUL_COMPONENT_EXECUTION_BUNDLE_DOC.read_text().split())
+    required = (
+        "LOOM Portable Execution Evidence Bundle v0",
+        "loom.build_effectful_component_execution_evidence_bundle_v0(",
+        "loom.verify_effectful_component_execution_evidence_bundle_v0(",
+        "loom-effectful-component-execution-evidence-bundle/v0",
+        "loom execution-verify",
+        "--execution-key-sha256",
+        "external execution-attester key pin",
+        '"embedded_key_identity_claim": false',
+        '"private_key_material": false',
+        "absent from `docs/loom.py` and the Playground",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit(
+            "docs parity: Portable Execution Evidence Bundle v0 drift: missing "
+            + ", ".join(missing)
+        )
+    import loom as modular
+    spec = importlib.util.spec_from_file_location("loom_execution_bundle_standalone", DOCS_LOOM)
+    if spec is None or spec.loader is None:
+        raise SystemExit("docs parity: could not load standalone Execution Bundle boundary")
+    standalone = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(standalone)
+    names = (
+        "build_effectful_component_execution_evidence_bundle_v0",
+        "verify_effectful_component_execution_evidence_bundle_v0",
+    )
+    if any(not hasattr(modular, name) for name in names):
+        raise SystemExit("docs parity: modular Portable Execution Evidence Bundle v0 surface is incomplete")
+    if any(hasattr(standalone, name) for name in names):
+        raise SystemExit("docs parity: host-only Portable Execution Evidence Bundle leaked into standalone")
+    if not (ROOT / "loom_execution_bundle.py").is_file():
+        raise SystemExit("docs parity: Portable Execution Evidence Bundle implementation is absent")
 
 
 def _check_component_release_attestation() -> None:
@@ -2013,6 +2054,7 @@ def main() -> int:
     _check_effectful_component_adapter()
     _check_effectful_component_result_binding()
     _check_effectful_component_execution_attestation()
+    _check_effectful_component_execution_bundle()
     _check_component_release_attestation()
     _check_compiler_provenance_doc()
     _check_compiler_evidence_doc()

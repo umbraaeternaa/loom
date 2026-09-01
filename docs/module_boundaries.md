@@ -37,6 +37,7 @@ Current stable boundaries:
 | `loom_effectful_host.py` | private Component spawn and sandboxed Action execution evidence |
 | `loom_effectful_result.py` | terminal Component-to-signed-Action-result evidence binding |
 | `loom_effectful_attestation.py` | externally signed portable terminal Component execution evidence |
+| `loom_execution_bundle.py` | bounded portable packaging and externally pinned offline verification of terminal execution evidence |
 
 ## Gate boundary rule
 
@@ -156,6 +157,14 @@ RSA signature, and rebuilds the exact five-subject statement during
 verification. It holds no private key, performs no host IO, grants no authority,
 claims neither independent attester quorum nor a SLSA level, and remains absent
 from the browser bundle.
+
+`loom_execution_bundle.py` owns Portable Execution Evidence Bundle v0. It
+packages the exact signed envelope, source/WASM bytes, compiler surfaces,
+nested evidence, and public verification keys under closed bounded schemas.
+Verification must receive an external execution-attester key SHA-256 pin;
+embedded keys never establish identity. The module performs no execution,
+contains no private key material, grants no authority, and remains absent from
+the browser bundle.
 
 `loom_component_release.py` owns Signed Reproducible Component Release
 Attestation v0. It may run exact offline Cargo builds, inspect locked registry

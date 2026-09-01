@@ -40,6 +40,7 @@ _COMMANDS = (
     "gate-attempt",
     "gate-process-attempt",
     "gate-process-finish",
+    "execution-verify",
 )
 
 _EXAMPLES = (
@@ -78,7 +79,8 @@ def _usage():
     return (
         "usage: python3 loom.py <"
         + "|".join(_COMMANDS)
-        + "> FILE... [call] [--target py|js|wat] [--format text|json] [--nonce HEX64] [--dry-run]"
+        + "> FILE... [call] [--target py|js|wat] [--format text|json] [--nonce HEX64]"
+        + " [--execution-key-sha256 HEX64] [--dry-run]"
     )
 
 
@@ -132,6 +134,9 @@ def _help(frontend, topic=None):
     print("  gate, gate-workflow, gate-workflow-v3, gate-request, gate-claim, gate-finish")
     print("  gate-plan, gate-exec-finish, gate-attempt, gate-process-attempt, gate-process-finish")
     print("")
+    print("Portable evidence:")
+    print("  execution-verify FILE verify a terminal execution bundle against an external key pin")
+    print("")
     print(_usage())
     return 0
 
@@ -157,6 +162,12 @@ def _parse_flags(argv):
             index += 2
         elif arg.startswith("--nonce="):
             flags["nonce"] = arg.split("=", 1)[1]
+            index += 1
+        elif arg == "--execution-key-sha256" and index + 1 < len(argv):
+            flags["execution_key_sha256"] = argv[index + 1]
+            index += 2
+        elif arg.startswith("--execution-key-sha256="):
+            flags["execution_key_sha256"] = arg.split("=", 1)[1]
             index += 1
         elif arg == "--dry-run":
             flags["dry_run"] = True
@@ -581,6 +592,68 @@ def _load_json_file(path, label):
         return None, f"invalid {label} JSON: {err}"
 
 
+def _load_strict_json_file(path, label):
+    def closed_object(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("duplicate JSON key: " + key)
+            value[key] = item
+        return value
+
+    try:
+        file_path = Path(path)
+        payload = file_path.read_bytes()
+        if len(payload) > 64 * 1024 * 1024:
+            return None, f"invalid {label}: file exceeds 64 MiB"
+        return json.loads(
+            payload.decode("utf-8", "strict"),
+            object_pairs_hook=closed_object,
+            parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)),
+        ), None
+    except OSError as err:
+        return None, f"cannot read {label}: {err}"
+    except (UnicodeError, ValueError, json.JSONDecodeError, RecursionError) as err:
+        return None, f"invalid {label} JSON: {err}"
+
+
+def _execution_verify(frontend, paths, expected_key_sha256, output_format="text"):
+    if len(paths) != 1 or not expected_key_sha256:
+        print(
+            "usage: python3 loom.py execution-verify BUNDLE_JSON "
+            "--execution-key-sha256 HEX64 [--format text|json]"
+        )
+        return 2
+    verifier = (getattr(frontend, "metadata", {}) or {}).get("execution_bundle_verifier")
+    if not callable(verifier):
+        print("portable execution verification is unavailable in this runtime")
+        return 2
+    bundle, error = _load_strict_json_file(paths[0], "execution evidence bundle")
+    if error:
+        print(error)
+        return 2
+    result = verifier(bundle, expected_key_sha256)
+    if output_format == "json":
+        _emit_json(result)
+        return 0 if result["valid"] else 1
+    if not result["valid"]:
+        print("LOOM EXECUTION VERIFY - refused")
+        for item in result["findings"]:
+            print(f"  [{item['code']}] {item['path']}: {item['message']}")
+        return 1
+    statement = result["execution_attestation"]["statement"]
+    predicate = statement["predicate"]
+    print("LOOM EXECUTION VERIFY - portable evidence accepted")
+    print("bundle_sha256: " + result["bundle_sha256"])
+    print("execution_attester_key_sha256: " + result["execution_attestation"]["attester_key_sha256"])
+    print("result_binding_sha256: " + predicate["result_binding_sha256"])
+    print("component_sha256: " + predicate["cross_links"]["component_sha256"])
+    print("identity_trusted: yes (external execution-key pin)")
+    print("authorization: none")
+    print("execution_repeated: false")
+    return 0
+
+
 def _emit_validation_result(result, success_key, title, output_format):
     if output_format == "json":
         _emit_json(result)
@@ -863,6 +936,10 @@ def cli(argv, frontend):
         return _gate_process_attempt(frontend, pos[1:], output_format)
     if cmd == "gate-process-finish":
         return _gate_process_finish(frontend, pos[1:], output_format)
+    if cmd == "execution-verify":
+        return _execution_verify(
+            frontend, pos[1:], flags.get("execution_key_sha256"), output_format,
+        )
     path = pos[1]
     call = pos[2] if len(pos) > 2 else "(main)"
     try:
