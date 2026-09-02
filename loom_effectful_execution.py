@@ -50,6 +50,39 @@ def _finding(path, code, message):
     return {"path": path, "code": code, "message": message}
 
 
+def _linked_validation_findings(boundary, validation):
+    nested = validation.get("findings") if isinstance(validation, dict) else None
+    if not isinstance(nested, list) or not nested:
+        return [_finding(
+            "binding." + boundary,
+            boundary + "-validation-rejected",
+            boundary + " validation failed without structured findings",
+        )]
+    findings = []
+    for index, item in enumerate(nested):
+        if not isinstance(item, dict):
+            findings.append(_finding(
+                f"binding.{boundary}.findings[{index}]",
+                boundary + "-invalid-finding",
+                boundary + " validation returned a non-object finding",
+            ))
+            continue
+        path = item.get("path")
+        code = item.get("code")
+        message = item.get("message")
+        if not all(isinstance(value, str) and value for value in (path, code, message)):
+            findings.append(_finding(
+                f"binding.{boundary}.findings[{index}]",
+                boundary + "-invalid-finding",
+                boundary + " validation returned a malformed finding",
+            ))
+            continue
+        findings.append(_finding(
+            "binding." + boundary + "." + path, code, message,
+        ))
+    return findings
+
+
 def _result(binding=None, findings=()):
     valid = not findings
     return {
@@ -159,10 +192,10 @@ def _committed_environment(invocation, environment_values, expected):
 def _action_links(frontend, request, claim, mediation, observed_at_unix_ms):
     request_check = frontend.validate_request(request)
     if not request_check.get("valid"):
-        raise ValueError("Action Approval request is not structurally valid")
+        return None, _linked_validation_findings("request", request_check)
     mediation_check = frontend.validate_mediation(mediation)
     if not mediation_check.get("valid"):
-        raise ValueError("Action Host Mediation is not structurally valid")
+        return None, _linked_validation_findings("mediation", mediation_check)
     if not isinstance(claim, dict):
         raise ValueError("Action Claim must be an object")
     claim_keys = {
@@ -210,7 +243,7 @@ def _action_links(frontend, request, claim, mediation, observed_at_unix_ms):
     if observed_at_unix_ms >= mediation.get("approval_expires_at_unix_ms", -1):
         raise ValueError("operator approval expired before Effectful binding")
     frontend.verify_ledger(claim, mediation)
-    return binding
+    return binding, []
 
 
 def _structure_findings(binding):
@@ -289,9 +322,11 @@ def build_effectful_component_execution_binding_v0(
 ):
     findings = []
     try:
-        action_binding = _action_links(
+        action_binding, action_findings = _action_links(
             frontend, request, claim, mediation, observed_at_unix_ms,
         )
+        if action_findings:
+            return _result(None, action_findings)
         invocation = action_binding["invocation"]
         if invocation.get("shell") != "denied" or invocation.get("network") != "denied":
             raise ValueError("Effectful Component invocation must deny shell and network")

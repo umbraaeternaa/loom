@@ -58,7 +58,7 @@ Before touching mediation state, the implementation:
 4. traverses every path component descriptor-relatively with `O_NOFOLLOW`,
    `O_DIRECTORY`, and `O_CLOEXEC`, so a symlink in the final component or any
    ancestor is refused;
-5. streams at most 64 MiB of exact executable bytes through SHA-256, verifies a
+5. streams at most 128 MiB of exact executable bytes through SHA-256, verifies a
    stable regular-file identity before and after the read, and rejects a
    group/world-writable executable;
 6. verifies that the working directory is a non-symlink directory and is not

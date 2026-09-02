@@ -1873,7 +1873,7 @@ def _check_action_host_mediation_v0_doc() -> None:
         'authorization: "bounded-execution-required"',
         "explicit trusted-host input",
         "descriptor-relatively with `O_NOFOLLOW`, `O_DIRECTORY`, and `O_CLOEXEC`",
-        "at most 64 MiB",
+        "at most 128 MiB",
         "stores no raw value",
         "SQLite `BEGIN IMMEDIATE`",
         "exact canonical `action_mediations_v0` schema",

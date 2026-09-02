@@ -5709,7 +5709,7 @@ def _action_execution_sandbox_provider():
                 break
             total += len(chunk)
             if total > _ACTION_MEDIATION_MAX_EXECUTABLE_BYTES:
-                raise ValueError("network sandbox provider exceeds the 64 MiB trust limit")
+                raise ValueError("network sandbox provider exceeds the 128 MiB trust limit")
             digest.update(chunk)
         after = os.fstat(fd)
         if any(getattr(before, key) != getattr(after, key) for key in ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns")):
@@ -5778,7 +5778,7 @@ def _action_execution_snapshot(executable_fd, expected_sha256, parent):
                 break
             total += len(chunk)
             if total > _ACTION_MEDIATION_MAX_EXECUTABLE_BYTES:
-                raise ValueError("execution snapshot exceeds the 64 MiB limit")
+                raise ValueError("execution snapshot exceeds the 128 MiB limit")
             digest.update(chunk)
             view = memoryview(chunk)
             while view:
@@ -7527,7 +7527,7 @@ _ACTION_MEDIATION_OBLIGATIONS = (
     "deny-shell",
     "deny-network",
 )
-_ACTION_MEDIATION_MAX_EXECUTABLE_BYTES = 64 * 1024 * 1024
+_ACTION_MEDIATION_MAX_EXECUTABLE_BYTES = 128 * 1024 * 1024
 _ACTION_EXECUTION_SCHEMA = "loom-action-bounded-execution/v0"
 _ACTION_EXECUTION_VALIDATION_SCHEMA = "loom-action-bounded-execution-validation/v0"
 _ACTION_EXECUTION_ATTEMPT_SCHEMA = "loom-action-process-attempt/v0"
@@ -9361,7 +9361,7 @@ def _action_mediation_measure_host(binding, tool_input, environment_values):
         if before.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
             raise ValueError("host adapter executable must not be group/world-writable")
         if before.st_size > _ACTION_MEDIATION_MAX_EXECUTABLE_BYTES:
-            raise ValueError("host adapter executable exceeds the 64 MiB mediation limit")
+            raise ValueError("host adapter executable exceeds the 128 MiB mediation limit")
         digest = hashlib.sha256()
         total = 0
         while True:

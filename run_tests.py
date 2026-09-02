@@ -5349,6 +5349,23 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                 trigger_ledger, host_approval, host_request, trigger_claim, host_invocation,
             )
 
+            oversized_executable = mediation_root / "oversized-adapter"
+            with oversized_executable.open("wb") as stream:
+                stream.truncate(_loom._ACTION_MEDIATION_MAX_EXECUTABLE_BYTES + 1)
+            oversized_executable.chmod(0o700)
+            _, oversized_invocation, _, oversized_request, oversized_approval = build_host_action(
+                mediation_root, executable_path=oversized_executable,
+            )
+            oversized_ledger = mediation_root / "oversized" / "operator_approvals.sqlite3"
+            oversized_claim = claim_action_v0(
+                oversized_ledger, candidate_approval=oversized_approval,
+                candidate_request=oversized_request, candidate_invocation=oversized_invocation,
+            )["claim"]
+            rejected_oversized_executable = mediate_action_v0(
+                oversized_ledger, oversized_approval, oversized_request,
+                oversized_claim, oversized_invocation,
+            )
+
             concurrent_mediation_ledger = mediation_root / "concurrent" / "operator_approvals.sqlite3"
             concurrent_mediation_claim = claim_action_v0(
                 concurrent_mediation_ledger, candidate_approval=host_approval,
@@ -5436,6 +5453,14 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and any(item["code"] == "approval-expired" for item in rejected_expired_mediation["findings"])
             and rejected_symlink_host["valid"] is False
             and rejected_trigger_ledger["valid"] is False
+            and _loom._ACTION_MEDIATION_MAX_EXECUTABLE_BYTES == 128 * 1024 * 1024
+            and _loom._ACTION_MEDIATION_MAX_EXECUTABLE_BYTES > 70674768
+            and rejected_oversized_executable["valid"] is False
+            and any(
+                item["code"] == "action-host-mediation-failed"
+                and "128 MiB mediation limit" in item["message"]
+                for item in rejected_oversized_executable["findings"]
+            )
             and sum(result["valid"] for result in concurrent_mediations) == 1
             and concurrent_mediation_rows == 1
             and public_mediation["valid"] is True
@@ -5533,22 +5558,29 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                 candidate_request=effectful_request,
                 candidate_invocation=effectful_invocation,
             )["claim"]
-            effectful_mediation = mediate_action_v0(
+            effectful_mediation_result = mediate_action_v0(
                 effectful_ledger, effectful_approval, effectful_request,
                 effectful_claim, effectful_invocation, effectful_environment,
-            )["mediation"]
+            )
+            if not effectful_mediation_result["valid"]:
+                raise ValueError(
+                    "Effectful Component host mediation fixture rejected: "
+                    + repr(effectful_mediation_result["findings"])
+                )
+            effectful_mediation = effectful_mediation_result["mediation"]
             with sqlite3.connect(effectful_ledger) as connection:
                 execution_table_before = connection.execute(
                     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='action_executions_v0'"
                 ).fetchone()[0]
 
             def bind_effectful(candidate_environment=effectful_environment, candidate_uri=component_path.as_uri(),
-                               candidate_ledger=effectful_ledger, now=action_issued + 3):
+                               candidate_ledger=effectful_ledger, now=action_issued + 3,
+                               candidate_mediation=effectful_mediation):
                 return _loom._build_effectful_component_execution_binding_v0(
                     fixture["build"]["artifact"], fixture["build"]["component"],
                     fixture["mapping"], fixture["policy"], fixture["source"], fixture["core"],
                     fixture["package"], fixture["world"], effectful_request,
-                    effectful_claim, effectful_mediation, candidate_environment,
+                    effectful_claim, candidate_mediation, candidate_environment,
                     candidate_uri, component_request, fixture["export"], now,
                     candidate_ledger, wasm_tools_executable=fixture["wasm_tools"],
                     wasmtime_executable=fixture["wasmtime"], exports=[fixture["export"]],
@@ -5602,6 +5634,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                 candidate_ledger=effectful_root / "absent-effectful-ledger.sqlite3",
             )
             rejected_effectful_expired = bind_effectful(now=action_approval_body["expires_at_unix_ms"])
+            rejected_effectful_mediation_diagnostics = bind_effectful(candidate_mediation=None)
             with sqlite3.connect(effectful_ledger) as connection:
                 execution_table_after = connection.execute(
                     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='action_executions_v0'"
@@ -5633,6 +5666,16 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                 and rejected_effectful_symlink["valid"] is False
                 and rejected_effectful_missing_ledger["valid"] is False
                 and rejected_effectful_expired["valid"] is False
+                and rejected_effectful_mediation_diagnostics["valid"] is False
+                and any(
+                    item["path"] == "binding.mediation.mediation"
+                    and item["code"] == "expected-object"
+                    for item in rejected_effectful_mediation_diagnostics["findings"]
+                )
+                and all(
+                    item["code"] != "effectful-component-execution-binding-rejected"
+                    for item in rejected_effectful_mediation_diagnostics["findings"]
+                )
                 and execution_table_before == 0 and execution_table_after == 0
             )
 
@@ -5720,14 +5763,24 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                 rejected_rehashed_effectful_host = _loom.validate_effectful_component_host_execution_v0(
                     rehashed_effectful_host,
                 )
+                effectful_action_execution = effectful_host_record["action_execution"]
+                effectful_finalized_at = (
+                    effectful_action_execution["executed_at_unix_ms"]
+                    + effectful_action_execution["attempt"]["duration_ms"] + 1
+                )
                 effectful_terminal_result = _loom._finalize_action_capsule_result_v0(
                     effectful_approval, effectful_request, effectful_claim,
-                    effectful_mediation, effectful_host_record["action_execution"],
+                    effectful_mediation, effectful_action_execution,
                     semantics_manifest, semantics_tool, semantics_input, semantics_src,
                     semantics_wasm, running_surface, compiler_components,
                     compiler_components, "main", effectful_invocation,
-                    action_issued + 1000, test_key, effectful_ledger,
+                    effectful_finalized_at, test_key, effectful_ledger,
                 )
+                if not effectful_terminal_result["valid"]:
+                    raise ValueError(
+                        "Effectful Component terminal Result fixture rejected: "
+                        + repr(effectful_terminal_result["findings"])
+                    )
                 effectful_observation = {
                     "schema": "loom-gate-observation/v1",
                     "result": "completed",
