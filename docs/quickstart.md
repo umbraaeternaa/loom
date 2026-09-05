@@ -60,7 +60,7 @@ python3 loom.py about --format json
 The expected public baseline is:
 
 ```console
-PASS -- 510/510 citadel checks
+PASS -- 511/511 citadel checks
 ```
 
 The CLI help is also pinned:
@@ -79,6 +79,17 @@ execution-attester key SHA-256 pin obtained outside the bundle:
 loom execution-verify execution-bundle.json \
   --execution-key-sha256 EXPECTED_LOWERCASE_SHA256
 ```
+
+To use LOOM itself as a bounded advisory judge for a local development
+candidate, run the four-backend Dogfooding v1 policy:
+
+```console
+loom dogfood examples/dogfood_release_policy.loom "(main 3)"
+```
+
+The `3` is an operator-supplied, unverified quorum fact. The command proves the
+Pure policy and requires exact interpreter/Python/JavaScript/WebAssembly
+agreement; it does not verify the external fact or authorize a host action.
 
 ## 4. See the trust gate
 

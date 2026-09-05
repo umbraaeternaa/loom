@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 510 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 511 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 510/510 citadel checks
+PASS — 511/511 citadel checks
 ```
 
 ## The idea in one screen
@@ -253,6 +253,14 @@ evidence, and public keys for bounded offline verification on another machine.
 Its CLI requires an independently obtained execution-attester key SHA-256 pin;
 the embedded key is never treated as an identity claim.
 
+[`Dogfooding v1`](docs/dogfooding_v1.md) now uses LOOM as a real development
+policy runner for LOOM itself. One bounded Pure policy must produce the same
+binary decision through the interpreter, generated Python, generated
+JavaScript, and WebAssembly before LOOM issues a content-addressed advisory
+receipt. Inputs remain explicitly operator-supplied and unverified; the runner
+grants no authority and executes no requested host action. Policy role tags are
+static declarations, not signatures or external identity evidence.
+
 Certified recursion can also use [`Proven Value Bounds v1`](docs/proven_value_bounds_v1.md):
 the checker derives conservative i31 and list-length upper bounds through
 lexical `let`, safe pure expressions, and guarded paths. Unknown values and
@@ -271,6 +279,7 @@ contract; higher-order and effectful arguments remain fail-closed.
 - [`loom_component_adapter.py`](loom_component_adapter.py) — exact Pure v0 and effectful v1 Component builders/verifiers.
 - [`loom_effectful_execution.py`](loom_effectful_execution.py) — host-only claimed-lifecycle binding for exact effectful Components.
 - [`loom_execution_bundle.py`](loom_execution_bundle.py) — portable terminal evidence packaging and externally pinned offline verification.
+- [`loom_dogfood.py`](loom_dogfood.py) — four-backend Pure policy agreement and content-addressed development receipts.
 - [`docs/component_bridge_v0.md`](docs/component_bridge_v0.md) — exact bridge metadata and bounded heap-ingress contract.
 - [`loom_provenance.py`](loom_provenance.py) — host-built modular/standalone compiler profiles.
 - [`run_tests.py`](run_tests.py) — the self-verifying suite: it accepts honest programs,
@@ -375,6 +384,7 @@ loom run   examples/first.loom                      # => 42
 loom help quickstart                                # terminal first-run guide
 loom examples                                       # list bundled proof programs
 loom doctor --dry-run                               # lightweight checkout health check
+loom dogfood examples/dogfood_release_policy.loom "(main 3)"  # four-backend development-policy receipt
 python3 loom.py check examples/demo.loom            # prove every effect is honest (else REJECTED)
 python3 loom.py run   examples/demo.loom            # => [1, 4, 9, 16, 25]
 python3 loom.py build examples/demo.loom --target js   # compile the checked program to JavaScript

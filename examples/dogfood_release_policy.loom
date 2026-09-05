@@ -1,0 +1,13 @@
+; Dogfooding v1: LOOM decides whether one local candidate has all three
+; operator-supplied facts required by our development discipline.
+;
+; The role quorum is checker-enforced. The input facts are deliberately not
+; called verified: an external evidence adapter must establish them later.
+
+(defx main () (fn (evidence_quorum)
+  (if (= evidence_quorum 3)
+    (trust (roles code spec proof)
+      (by code developer
+        (by spec operator
+          (by proof citadel 1))))
+    0)))

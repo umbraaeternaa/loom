@@ -3068,7 +3068,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             "actions_observed": ["read", "write", "test", "git-commit"],
             "evidence": [
                 {"kind": "syntax", "status": "pass", "detail": "PASS syntax"},
-                {"kind": "citadel", "status": "pass", "detail": "510/510"},
+                {"kind": "citadel", "status": "pass", "detail": "511/511"},
                 {"kind": "docs-parity", "status": "pass", "detail": "PASS docs parity"},
                 {"kind": "git-clean", "status": "pass", "detail": "clean"},
                 {"kind": "git-sync", "status": "pass", "detail": "HEAD == origin/main"},
@@ -7719,7 +7719,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == (500 if is_browser_bundle else 510)
+            and about_json["citadel_checks"] == (500 if is_browser_bundle else 511)
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["wasm_abi_versions"] == ([1] if is_browser_bundle else [1, 2])
             and about_json["i31_bits"] == 31
@@ -7732,11 +7732,135 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "gate-workflow" in about_json["commands"]
             and "gate-workflow-v3" in about_json["commands"]
             and (("execution-verify" not in about_json["commands"]) if is_browser_bundle else ("execution-verify" in about_json["commands"]))
+            and (("dogfood" not in about_json["commands"]) if is_browser_bundle else ("dogfood" in about_json["commands"]))
         )
         ok += about_contract_ok
         print(f"  {'ok  ' if about_contract_ok else 'FAIL'} cli/api: machine-readable about contract v1")
     except Exception as e:
         print(f"  FAIL cli/api about contract: {e}")
+    try:                                               # Dogfooding v1 makes one Pure LOOM policy vote through four exact backend observables
+        import contextlib, io
+        is_browser_bundle = Path(_loom.__file__).parent.name == "docs"
+        if is_browser_bundle:
+            dogfood_ok = not hasattr(_loom, "evaluate_dogfood_policy_v1")
+        else:
+            import loom_dogfood as dogfood_impl
+            source_path = Path(__file__).with_name("examples").joinpath("dogfood_release_policy.loom")
+            source = source_path.read_text()
+            accepted = _loom.evaluate_dogfood_policy_v1(source, "(main 3)")
+            repeated = _loom.evaluate_dogfood_policy_v1(source, "(main 3)")
+            refused = _loom.evaluate_dogfood_policy_v1(source, "(main 2)")
+            effectful = _loom.evaluate_dogfood_policy_v1(
+                '(defx main (Net) (fn (x) (net x)))', "(main 1)",
+            )
+            recursive = _loom.evaluate_dogfood_policy_v1(
+                '(defx main () (fn (x) (if (= x 0) 1 (main (- x 1)))))', "(main 1)",
+            )
+            dynamic = _loom.evaluate_dogfood_policy_v1(
+                '(defx main () (fn (f) (f 1)))', "(main 1)",
+            )
+            extra_top_level = _loom.evaluate_dogfood_policy_v1(
+                '(defx main () (fn () 1)) 0', "(main)",
+            )
+            multiple_inputs = _loom.evaluate_dogfood_policy_v1(
+                '(defx main () (fn (left right) (= left right)))', "(main 1 1)",
+            )
+            out_of_range = _loom.evaluate_dogfood_policy_v1(
+                '(defx main () (fn (value) 1))', "(main 1073741824)",
+            )
+            wrong_entry = _loom.evaluate_dogfood_policy_v1(
+                '(defx main () (fn (x) x))', "(other 1)",
+            )
+            non_binary = _loom.evaluate_dogfood_policy_v1(
+                '(defx main () (fn () 2))', "(main)",
+            )
+            mismatch_frontend = dogfood_impl.Frontend(
+                _loom.parse, _loom.build_verdict, _loom.run_call, _loom.run_compiled,
+                lambda src, call: (0, []), _loom.run_wasm, _loom.LoomError,
+            )
+            disagreement = dogfood_impl.evaluate_policy_v1(
+                mismatch_frontend, '(defx main () (fn () 1))', "(main)",
+            )
+            output_frontend = dogfood_impl.Frontend(
+                _loom.parse, _loom.build_verdict,
+                lambda src, call: (1, ["unexpected"]),
+                lambda src, call: (1, ["unexpected"]),
+                lambda src, call: (1, ["unexpected"]),
+                lambda src, call: (1, ["unexpected"]),
+                _loom.LoomError,
+            )
+            output_rejected = dogfood_impl.evaluate_policy_v1(
+                output_frontend, '(defx main () (fn () 1))', "(main)",
+            )
+            cli_out = io.StringIO()
+            with contextlib.redirect_stdout(cli_out):
+                cli_code = _loom._loom_cli.cli(
+                    ["dogfood", str(source_path), "(main 3)", "--format=json"],
+                    _loom._CLI_FRONTEND,
+                )
+            cli_result = json.loads(cli_out.getvalue())
+            refuse_out = io.StringIO()
+            with contextlib.redirect_stdout(refuse_out):
+                refuse_code = _loom._loom_cli.cli(
+                    ["dogfood", str(source_path), "(main 2)", "--format=json"],
+                    _loom._CLI_FRONTEND,
+                )
+            cli_refusal = json.loads(refuse_out.getvalue())
+            receipt = accepted.get("receipt") or {}
+            verified_receipt = _loom.verify_dogfood_policy_receipt_v1(
+                receipt, source, "(main 3)",
+            )
+            tampered_receipt = json.loads(json.dumps(receipt))
+            tampered_receipt["executions"][0]["value"] = 0
+            rejected_receipt = _loom.verify_dogfood_policy_receipt_v1(
+                tampered_receipt, source, "(main 3)",
+            )
+            extra_receipt = json.loads(json.dumps(receipt)); extra_receipt["ambient_authority"] = True
+            rejected_extra = _loom.verify_dogfood_policy_receipt_v1(
+                extra_receipt, source, "(main 3)",
+            )
+            receipt_body = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+            receipt_hash = hashlib.sha256(json.dumps(
+                receipt_body, ensure_ascii=True, sort_keys=True,
+                separators=(",", ":"), allow_nan=False,
+            ).encode("utf-8")).hexdigest()
+            dogfood_ok = (
+                accepted["valid"] is True and accepted["accepted"] is True
+                and accepted["decision"] == "accept" and accepted["findings"] == []
+                and repeated == accepted
+                and verified_receipt == accepted
+                and not rejected_receipt["valid"] and any(item["code"] == "receipt-mismatch" for item in rejected_receipt["findings"])
+                and not rejected_extra["valid"] and any(item["code"] == "closed-object-mismatch" for item in rejected_extra["findings"])
+                and receipt.get("schema") == "loom-dogfood-receipt/v1"
+                and receipt.get("receipt_sha256") == receipt_hash == accepted["receipt_sha256"]
+                and receipt.get("call", {}).get("input_provenance") == "operator-supplied-unverified"
+                and receipt.get("agreement", {}).get("backends")
+                == ["interpreter", "python", "javascript", "webassembly"]
+                and receipt.get("agreement", {}).get("exact") is True
+                and len({item["observable_sha256"] for item in receipt.get("executions", [])}) == 1
+                and all(item["value"] == 1 and item["output"] == [] for item in receipt.get("executions", []))
+                and receipt.get("lifecycle", {}).get("authorization") == "none"
+                and receipt.get("lifecycle", {}).get("host_actions_executed") is False
+                and receipt.get("lifecycle", {}).get("external_input_identity_verified") is False
+                and refused["valid"] is True and refused["accepted"] is False
+                and refused["decision"] == "refuse" and refused["receipt"] is not None
+                and not effectful["valid"] and any(item["code"] == "pure-policy-required" for item in effectful["findings"])
+                and not recursive["valid"] and any(item["code"] == "recursion-forbidden" for item in recursive["findings"])
+                and not dynamic["valid"] and any(item["code"] == "dynamic-call-forbidden" for item in dynamic["findings"])
+                and not extra_top_level["valid"] and any(item["code"] == "single-main-required" for item in extra_top_level["findings"])
+                and not multiple_inputs["valid"] and any(item["code"] == "single-input-profile-required" for item in multiple_inputs["findings"])
+                and not out_of_range["valid"] and any(item["code"] == "i31-input-out-of-range" for item in out_of_range["findings"])
+                and not wrong_entry["valid"] and any(item["code"] == "main-call-required" for item in wrong_entry["findings"])
+                and not non_binary["valid"] and any(item["code"] == "binary-decision-required" for item in non_binary["findings"])
+                and not disagreement["valid"] and any(item["code"] == "backend-disagreement" for item in disagreement["findings"])
+                and not output_rejected["valid"] and any(item["code"] == "observable-output-forbidden" for item in output_rejected["findings"])
+                and cli_code == 0 and cli_result == accepted
+                and refuse_code == 1 and cli_refusal == refused
+            )
+        ok += dogfood_ok
+        print(f"  {'ok  ' if dogfood_ok else 'FAIL'} dogfood: four-backend Pure policy receipt v1")
+    except Exception as e:
+        print(f"  FAIL dogfood policy receipt: {e}")
     try:                                               # help must be a real onboarding surface, not an error-shaped usage dump
         import io, contextlib
         help_out = io.StringIO()
@@ -7885,7 +8009,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                     wheel_names = set(archive.namelist())
                 wheel_code = (
                     "import sys;sys.path.insert(0," + repr(str(wheel_paths[0])) + ");"
-                    "import loom,loom_bounds,loom_recursion,loom_component,loom_component_adapter,loom_wasi_capabilities,loom_provenance;"
+                    "import loom,loom_bounds,loom_recursion,loom_component,loom_component_adapter,loom_wasi_capabilities,loom_provenance,loom_dogfood;"
                     "w=loom.compile_wasm('(defx main () (fn () 42))');"
                     "assert w[:4]==b'\\x00asm'"
                 )
@@ -7950,7 +8074,8 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 510/510 citadel checks" in quick
+            and "PASS -- 511/511 citadel checks" in quick
+            and 'loom dogfood examples/dogfood_release_policy.loom "(main 3)"' in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
             and "loom examples" in quick
@@ -8060,7 +8185,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "510-portable-execution-evidence-bundle-v0")' in play
+            and 'bundleUrl.searchParams.set("v", "511-dogfooding-v1")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -8682,7 +8807,8 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 510/510 citadel checks" in rdoc
+            and "PASS -- 511/511 citadel checks" in rdoc
+            and "Dogfooding v1 evaluates one bounded first-order Pure LOOM policy" in rdoc
             and "loom examples --format json" in rdoc
             and "loom doctor --dry-run --format json" in rdoc
             and "python3 verify_docs_parity.py" in rdoc
@@ -8746,7 +8872,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 157   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, Portable Execution Evidence Bundle v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 158   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, Portable Execution Evidence Bundle v0, Dogfooding v1, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

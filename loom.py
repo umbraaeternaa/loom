@@ -80,6 +80,7 @@ import loom_effectful_host as _loom_effectful_host
 import loom_effectful_result as _loom_effectful_result
 import loom_effectful_attestation as _loom_effectful_attestation
 import loom_execution_bundle as _loom_execution_bundle
+import loom_dogfood as _loom_dogfood
 
 _PARSE_FRONTEND = _loom_parse.Frontend(LoomError)
 
@@ -977,7 +978,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
     emit_wat,
     LoomError,
     metadata={
-        "citadel_checks": 510,
+        "citadel_checks": 511,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "wasm_abi_versions": [_WASM_ABI_VERSION, _WASM_ABI_V2_VERSION],
         "i31_bits": INT_BITS,
@@ -1005,6 +1006,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
             "gate-process-attempt",
             "gate-process-finish",
             "execution-verify",
+            "dogfood",
         ],
     },
 )
@@ -1013,6 +1015,34 @@ _CLI_FRONTEND = _loom_cli.Frontend(
 def build_verdict(program_src):
     """Return the stable JSON-safe checker verdict used by LOOM Gate clients."""
     return _loom_cli.build_verdict(_CLI_FRONTEND, program_src)
+
+
+_DOGFOOD_FRONTEND = _loom_dogfood.Frontend(
+    parse,
+    build_verdict,
+    run_call,
+    run_compiled,
+    run_js,
+    run_wasm,
+    LoomError,
+)
+
+
+def evaluate_dogfood_policy_v1(program_src, call_src="(main)"):
+    """Evaluate one bounded Pure LOOM policy through four independent backends."""
+    return _loom_dogfood.evaluate_policy_v1(
+        _DOGFOOD_FRONTEND, program_src, call_src,
+    )
+
+
+def verify_dogfood_policy_receipt_v1(receipt, program_src, call_src="(main)"):
+    """Re-evaluate and byte-logically verify one Dogfooding v1 receipt."""
+    return _loom_dogfood.verify_policy_receipt_v1(
+        _DOGFOOD_FRONTEND, receipt, program_src, call_src,
+    )
+
+
+_CLI_FRONTEND.metadata["dogfood_runner"] = evaluate_dogfood_policy_v1
 
 
 def build_about():

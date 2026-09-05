@@ -41,6 +41,7 @@ _COMMANDS = (
     "gate-process-attempt",
     "gate-process-finish",
     "execution-verify",
+    "dogfood",
 )
 
 _EXAMPLES = (
@@ -136,6 +137,7 @@ def _help(frontend, topic=None):
     print("")
     print("Portable evidence:")
     print("  execution-verify FILE verify a terminal execution bundle against an external key pin")
+    print("  dogfood FILE [CALL]  run one bounded Pure policy through four agreeing backends")
     print("")
     print(_usage())
     return 0
@@ -654,6 +656,30 @@ def _execution_verify(frontend, paths, expected_key_sha256, output_format="text"
     return 0
 
 
+def _dogfood(frontend, source, call, output_format="text"):
+    runner = (getattr(frontend, "metadata", {}) or {}).get("dogfood_runner")
+    if not callable(runner):
+        print("LOOM Dogfooding v1 is unavailable in this runtime")
+        return 2
+    result = runner(source, call)
+    if output_format == "json":
+        _emit_json(result)
+        return 0 if result["accepted"] else 1
+    if not result["valid"]:
+        print("LOOM DOGFOOD - invalid policy")
+        for item in result["findings"]:
+            print(f"  [{item['code']}] {item['path']}: {item['message']}")
+        return 1
+    receipt = result["receipt"]
+    print("LOOM DOGFOOD - policy " + result["decision"])
+    print("receipt_sha256: " + receipt["receipt_sha256"])
+    print("source_sha256: " + receipt["source"]["sha256"])
+    print("backends: " + ", ".join(receipt["agreement"]["backends"]))
+    print("input_provenance: operator-supplied-unverified")
+    print("authorization: none")
+    return 0 if result["accepted"] else 1
+
+
 def _emit_validation_result(result, success_key, title, output_format):
     if output_format == "json":
         _emit_json(result)
@@ -940,6 +966,9 @@ def cli(argv, frontend):
         return _execution_verify(
             frontend, pos[1:], flags.get("execution_key_sha256"), output_format,
         )
+    if cmd == "dogfood" and len(pos) > 3:
+        print("dogfood accepts one source path and one quoted call expression")
+        return 2
     path = pos[1]
     call = pos[2] if len(pos) > 2 else "(main)"
     try:
@@ -967,6 +996,8 @@ def cli(argv, frontend):
             print(line)
         print("=> " + repr(value))
         return 0
+    if cmd == "dogfood":
+        return _dogfood(frontend, src, call, output_format)
     if cmd == "build":
         target = flags.get("target", "py")
         try:
