@@ -6493,7 +6493,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                     _, net_invocation, _, net_request, net_approval = build_host_action(
                         execution_root, executable_path=python_path,
                         cwd_path=execution_root / "net-work", adapter_bytes=python_path.read_bytes(),
-                        argv=["-c", probe_code], timeout_ms=1000,
+                        argv=["-c", probe_code], timeout_ms=5000,
                     )
                     net_ledger = execution_root / "net-ledger" / "operator_approvals.sqlite3"
                     net_claim = claim_action_v0(
@@ -6507,7 +6507,11 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                     net_execution = execute_action_v0(
                         net_ledger, net_approval, net_request, net_claim, net_mediation, net_invocation,
                     )
-                    network_denied_ok = net_execution["valid"] and net_execution["execution"]["status"] == "completed"
+                    network_denied_ok = (
+                        net_execution["valid"]
+                        and net_execution["execution"]["status"] == "completed"
+                        and net_execution["execution"]["attempt"]["exit_code"] == 0
+                    )
 
                 concurrent_ledger = execution_root / "concurrent-exec" / "operator_approvals.sqlite3"
                 concurrent_claim = claim_action_v0(
