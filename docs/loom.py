@@ -3979,7 +3979,7 @@ def compile_wasm(program_src):
             code = case
         return code
     def _sec(sid, c): return bytes([sid]) + _leb_u(len(c)) + c
-    ar = sorted(set(apply_arities) | {a for _, a, _, _, _ in funcs} | {a for _, a, _, _, _, _ in lambda_funcs} | {1, 2, 3})  # add helper arities
+    ar = sorted(set(apply_arities) | {arity + 1 for arity in apply_arities} | {a for _, a, _, _, _ in funcs} | {a for _, a, _, _, _, _ in lambda_funcs} | {1, 2, 3})  # apply helpers add the closure parameter
     ti = {a: i for i, a in enumerate(ar)}   # arity-2 type covers $cons/get; arity-3 covers $rec
     tc = _leb_u(len(ar)) + b"".join(b"\x60" + _leb_u(a) + b"\x7f" * a + b"\x01\x7f" for a in ar)   # type: (i32*)->i32
     bridge_base = helper_base + 12 + len(apply_arities)

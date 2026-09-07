@@ -1611,6 +1611,23 @@ console.log('__M__'+JSON.stringify({errors:_errors,unwind:_unwind}));
         print(f"  {'ok  ' if r_wasm_closure else 'FAIL'} backend(WASM): closures capture + apply2 => {wv} / {rv}")
     except Exception as e:
         print(f"  FAIL backend(WASM) closures: {e}")
+    try:                                               # applyN carries one hidden closure parameter in addition to N explicit arguments
+        direct3 = '(defx tri () (fn (a b c) (+ (+ a b) c)))'
+        closure3 = '(defx t () (fn () (let (f (fn (a b c) (+ (+ a b) c))) (f 1 2 3))))'
+        arity_runners = [('abi-v1', run_wasm)]
+        if Path(_loom.__file__).parent.name != "docs":
+            arity_runners.append(('abi-v2', _loom.run_wasm_v2))
+        arity_results = []
+        for abi, runner in arity_runners:
+            arity_results.append((abi, runner(direct3, '(tri 1 2 3)'), runner(closure3, '(t)')))
+        multi_arity_ok = (
+            all(direct == closure == (6, []) for _, direct, closure in arity_results)
+            and "call $apply3" in emit_wat(closure3)
+        )
+        ok += multi_arity_ok
+        print(f"  {'ok  ' if multi_arity_ok else 'FAIL'} backend(WASM): direct/apply3 type parity across available ABIs => {arity_results}")
+    except Exception as e:
+        print(f"  FAIL backend(WASM) multi-argument type parity: {e}")
     try:                                               # closure frontier: capture count no longer capped at 8
         prog = CAPTURE9_PROGRAM
         wv, _ = run_wasm(prog, "(t)")
@@ -7723,7 +7740,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == (500 if is_browser_bundle else 511)
+            and about_json["citadel_checks"] == (500 if is_browser_bundle else 512)
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["wasm_abi_versions"] == ([1] if is_browser_bundle else [1, 2])
             and about_json["i31_bits"] == 31
@@ -8078,7 +8095,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 511/511 citadel checks" in quick
+            and "PASS -- 512/512 citadel checks" in quick
             and 'loom dogfood examples/dogfood_release_policy.loom "(main 3)"' in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
@@ -8189,7 +8206,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "511-dogfooding-v1")' in play
+            and 'bundleUrl.searchParams.set("v", "512-wasm-multi-argument-parity")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -8811,7 +8828,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 511/511 citadel checks" in rdoc
+            and "PASS -- 512/512 citadel checks" in rdoc
             and "Dogfooding v1 evaluates one bounded first-order Pure LOOM policy" in rdoc
             and "loom examples --format json" in rdoc
             and "loom doctor --dry-run --format json" in rdoc
@@ -8876,7 +8893,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 158   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, Portable Execution Evidence Bundle v0, Dogfooding v1, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, and the WASM seam/resource frontier
+    total = len(CASES) + 159   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, Portable Execution Evidence Bundle v0, Dogfooding v1, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, WASM direct/applyN type parity, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

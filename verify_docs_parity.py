@@ -58,7 +58,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "511-dogfooding-v1")',
+        'bundleUrl.searchParams.set("v", "512-wasm-multi-argument-parity")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -160,10 +160,12 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "511 self-verifying checks",
-        ">511</div>",
+        "512 self-verifying checks",
+        ">512</div>",
     )
     forbidden = (
+        "511 self-verifying checks",
+        ">511</div>",
         "510 self-verifying checks",
         ">510</div>",
         "509 self-verifying checks",
