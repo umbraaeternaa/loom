@@ -60,7 +60,7 @@ python3 loom.py about --format json
 The expected public baseline is:
 
 ```console
-PASS -- 512/512 citadel checks
+PASS -- 513/513 citadel checks
 ```
 
 The CLI help is also pinned:
@@ -90,6 +90,20 @@ loom dogfood examples/dogfood_release_policy.loom "(main 3)"
 The `3` is an operator-supplied, unverified quorum fact. The command proves the
 Pure policy and requires exact interpreter/Python/JavaScript/WebAssembly
 agreement; it does not verify the external fact or authorize a host action.
+
+For an evidence-fed decision, first bind an exact canonical GitHub CI run into
+a review request, have the external operator issuer sign that request, then run
+Dogfooding v2:
+
+```console
+loom dogfood-review-request policy.loom manifest.json observation.json RUN_ID \
+  --nonce HEX64 --format json
+loom dogfood-v2 policy.loom manifest.json observation.json RUN_ID \
+  request.json review.json --format json
+```
+
+This path derives the quorum from reverified Git, CI and pinned-key review
+evidence. It remains advisory and performs no requested host action.
 
 ## 4. See the trust gate
 

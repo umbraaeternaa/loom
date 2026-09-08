@@ -38,7 +38,7 @@ Current stable boundaries:
 | `loom_effectful_result.py` | terminal Component-to-signed-Action-result evidence binding |
 | `loom_effectful_attestation.py` | externally signed portable terminal Component execution evidence |
 | `loom_execution_bundle.py` | bounded portable packaging and externally pinned offline verification of terminal execution evidence |
-| `loom_dogfood.py` | bounded four-backend execution and content-addressed receipts for Pure LOOM development policies |
+| `loom_dogfood.py` | bounded four-backend Pure policy execution plus evidence-fed Git/CI and signed-review receipts |
 
 ## Gate boundary rule
 
@@ -167,12 +167,15 @@ embedded keys never establish identity. The module performs no execution,
 contains no private key material, grants no authority, and remains absent from
 the browser bundle.
 
-`loom_dogfood.py` owns Dogfooding v1. It accepts only one finite, first-order,
+`loom_dogfood.py` owns Dogfooding v1 and Evidence-fed Dogfooding v2. V1 accepts only one finite, first-order,
 Pure `main` policy with zero or one i31 input, executes it through the interpreter,
 generated Python, generated JavaScript and WebAssembly, and issues a receipt
 only after exact observable agreement. Inputs remain explicitly
 operator-supplied and unverified; the runner performs no requested host action,
 grants no authority, and remains absent from the standalone browser bundle.
+V2 keeps that policy profile unchanged, derives the input from freshly
+reverified canonical Git/CI evidence and an exact pinned-key operator review,
+and issues a second closed receipt without executing or authorizing an action.
 
 `loom_component_release.py` owns Signed Reproducible Component Release
 Attestation v0. It may run exact offline Cargo builds, inspect locked registry

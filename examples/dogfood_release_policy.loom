@@ -1,8 +1,8 @@
-; Dogfooding v1: LOOM decides whether one local candidate has all three
-; operator-supplied facts required by our development discipline.
+; Dogfooding v1/v2: LOOM decides whether one candidate has all three facts
+; required by our development discipline.
 ;
-; The role quorum is checker-enforced. The input facts are deliberately not
-; called verified: an external evidence adapter must establish them later.
+; The role quorum is checker-enforced. V1 accepts an unverified manual count;
+; v2 pins this exact source and derives the count from Git, CI and signed review.
 
 (defx main () (fn (evidence_quorum)
   (if (= evidence_quorum 3)

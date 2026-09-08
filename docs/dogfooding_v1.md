@@ -63,6 +63,7 @@ authorization and executes no requested host action. The Pure policy is
 statically forbidden from requesting network access. Dogfooding v1 does not
 replace Gate approval, signed execution evidence or an independent attester.
 
-The next additive step is Evidence-fed Dogfooding v2: replace manually supplied
-input facts with exact, externally anchored test, Git and review receipts while
-keeping the LOOM policy itself unchanged.
+Evidence-fed Dogfooding v2 is now implemented as an additive host-only layer.
+It replaces the manually supplied quorum with exact Git/CI evidence and one
+signed operator review while keeping this Pure LOOM policy unchanged. See
+[`dogfooding_v2.md`](dogfooding_v2.md).

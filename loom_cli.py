@@ -42,6 +42,8 @@ _COMMANDS = (
     "gate-process-finish",
     "execution-verify",
     "dogfood",
+    "dogfood-review-request",
+    "dogfood-v2",
 )
 
 _EXAMPLES = (
@@ -138,6 +140,8 @@ def _help(frontend, topic=None):
     print("Portable evidence:")
     print("  execution-verify FILE verify a terminal execution bundle against an external key pin")
     print("  dogfood FILE [CALL]  run one bounded Pure policy through four agreeing backends")
+    print("  dogfood-review-request POLICY MANIFEST OBSERVATION RUN_ID --nonce HEX64")
+    print("  dogfood-v2 POLICY MANIFEST OBSERVATION RUN_ID REQUEST REVIEW")
     print("")
     print(_usage())
     return 0
@@ -680,6 +684,102 @@ def _dogfood(frontend, source, call, output_format="text"):
     return 0 if result["accepted"] else 1
 
 
+def _dogfood_review_request(frontend, paths, nonce, output_format="text"):
+    if len(paths) != 4 or not nonce:
+        print(
+            "usage: python3 loom.py dogfood-review-request POLICY MANIFEST "
+            "OBSERVATION RUN_ID --nonce HEX64 [--format text|json]"
+        )
+        return 2
+    builder = (getattr(frontend, "metadata", {}) or {}).get(
+        "dogfood_review_request_builder"
+    )
+    if not callable(builder):
+        print("LOOM Dogfooding v2 review requests are unavailable in this runtime")
+        return 2
+    try:
+        source = Path(paths[0]).read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        print("cannot read policy: " + str(error))
+        return 2
+    manifest, error = _load_strict_json_file(paths[1], "Dogfooding manifest")
+    if error:
+        print(error)
+        return 2
+    observation, error = _load_strict_json_file(paths[2], "Dogfooding observation")
+    if error:
+        print(error)
+        return 2
+    result = builder(source, manifest, observation, paths[3], nonce)
+    if output_format == "json":
+        _emit_json(result)
+        return 0 if result["valid"] else 1
+    if not result["valid"]:
+        print("LOOM DOGFOOD REVIEW REQUEST - refused")
+        for item in result["findings"]:
+            print(f"  [{item['code']}] {item['path']}: {item['message']}")
+        return 1
+    request = result["request"]
+    print("LOOM DOGFOOD REVIEW REQUEST - evidence bound")
+    print("request_sha256: " + request["request_sha256"])
+    print("after_head: " + request["gate"]["after_head"])
+    print("ci_run_id: " + str(request["ci"]["run_id"]))
+    print("ci_collection_sha256: " + request["ci"]["collection_sha256"])
+    print("authorization: none")
+    return 0
+
+
+def _dogfood_v2(frontend, paths, output_format="text"):
+    if len(paths) != 6:
+        print(
+            "usage: python3 loom.py dogfood-v2 POLICY MANIFEST OBSERVATION "
+            "RUN_ID REQUEST REVIEW [--format text|json]"
+        )
+        return 2
+    runner = (getattr(frontend, "metadata", {}) or {}).get("dogfood_v2_runner")
+    if not callable(runner):
+        print("LOOM Dogfooding v2 is unavailable in this runtime")
+        return 2
+    try:
+        source = Path(paths[0]).read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        print("cannot read policy: " + str(error))
+        return 2
+    manifest, error = _load_strict_json_file(paths[1], "Dogfooding manifest")
+    if error:
+        print(error)
+        return 2
+    observation, error = _load_strict_json_file(paths[2], "Dogfooding observation")
+    if error:
+        print(error)
+        return 2
+    request, error = _load_strict_json_file(paths[4], "Dogfooding review request")
+    if error:
+        print(error)
+        return 2
+    review, error = _load_strict_json_file(paths[5], "Dogfooding review")
+    if error:
+        print(error)
+        return 2
+    result = runner(source, manifest, observation, paths[3], request, review)
+    if output_format == "json":
+        _emit_json(result)
+        return 0 if result["accepted"] else 1
+    if not result["valid"]:
+        print("LOOM DOGFOOD V2 - invalid evidence or policy")
+        for item in result["findings"]:
+            print(f"  [{item['code']}] {item['path']}: {item['message']}")
+        return 1
+    receipt = result["receipt"]
+    print("LOOM DOGFOOD V2 - policy " + result["decision"])
+    print("receipt_sha256: " + receipt["receipt_sha256"])
+    print("after_head: " + receipt["evidence_input"]["after_head"])
+    print("ci_run_id: " + str(receipt["evidence_input"]["ci_run_id"]))
+    print("input_provenance: " + receipt["call"]["input_provenance"])
+    print("authorization: none")
+    return 0 if result["accepted"] else 1
+
+
 def _emit_validation_result(result, success_key, title, output_format):
     if output_format == "json":
         _emit_json(result)
@@ -966,6 +1066,12 @@ def cli(argv, frontend):
         return _execution_verify(
             frontend, pos[1:], flags.get("execution_key_sha256"), output_format,
         )
+    if cmd == "dogfood-review-request":
+        return _dogfood_review_request(
+            frontend, pos[1:], flags.get("nonce"), output_format,
+        )
+    if cmd == "dogfood-v2":
+        return _dogfood_v2(frontend, pos[1:], output_format)
     if cmd == "dogfood" and len(pos) > 3:
         print("dogfood accepts one source path and one quoted call expression")
         return 2

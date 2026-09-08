@@ -7740,7 +7740,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == (500 if is_browser_bundle else 512)
+            and about_json["citadel_checks"] == (500 if is_browser_bundle else 513)
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["wasm_abi_versions"] == ([1] if is_browser_bundle else [1, 2])
             and about_json["i31_bits"] == 31
@@ -7754,6 +7754,8 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "gate-workflow-v3" in about_json["commands"]
             and (("execution-verify" not in about_json["commands"]) if is_browser_bundle else ("execution-verify" in about_json["commands"]))
             and (("dogfood" not in about_json["commands"]) if is_browser_bundle else ("dogfood" in about_json["commands"]))
+            and (("dogfood-v2" not in about_json["commands"]) if is_browser_bundle else ("dogfood-v2" in about_json["commands"]))
+            and (("dogfood-review-request" not in about_json["commands"]) if is_browser_bundle else ("dogfood-review-request" in about_json["commands"]))
         )
         ok += about_contract_ok
         print(f"  {'ok  ' if about_contract_ok else 'FAIL'} cli/api: machine-readable about contract v1")
@@ -7882,6 +7884,179 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         print(f"  {'ok  ' if dogfood_ok else 'FAIL'} dogfood: four-backend Pure policy receipt v1")
     except Exception as e:
         print(f"  FAIL dogfood policy receipt: {e}")
+    try:                                               # Dogfooding v2 derives quorum from exact CI/Git evidence and a pinned-key review
+        import contextlib, io
+        is_browser_bundle = Path(_loom.__file__).parent.name == "docs"
+        if is_browser_bundle:
+            dogfood_v2_ok = all(not hasattr(_loom, name) for name in (
+                "build_dogfood_review_request_v1", "verify_dogfood_review_v1",
+                "evaluate_dogfood_policy_v2", "verify_dogfood_policy_receipt_v2",
+            ))
+        else:
+            source_path = Path(__file__).with_name("examples").joinpath("dogfood_release_policy.loom")
+            source = source_path.read_text()
+            before_head = "4" * 40
+            after_head = "7" * 40
+            run_id = 34101127262
+            manifest = gate_manifest(
+                "ci", "trace", ["/Users/macbook/Projects/loom"], [],
+                ["read", "test"], ["citadel", "docs-parity", "fuzz", "git-sync", "syntax"],
+                [{"root": "/Users/macbook/Projects/loom", "expected_head": before_head, "require_clean": True}],
+            )
+            observation = {
+                "schema": "loom-gate-observation/v1", "result": "completed",
+                "repositories": [{"root": "/Users/macbook/Projects/loom", "before_head": before_head, "after_head": after_head}],
+                "files_changed": ["/Users/macbook/Projects/loom/loom_dogfood.py"],
+                "actions_observed": ["read", "test"], "evidence": [],
+            }
+            run_payload = {
+                "repository": {"full_name": "umbraaeternaa/loom"},
+                "name": "LOOM Citadel", "status": "completed", "conclusion": "success", "head_sha": after_head,
+            }
+            step_names = (
+                "Compile Python sources", "Run citadel", "Verify published docs parity",
+                "Run extended deterministic fuzz seeds",
+            )
+            steps = [{"name": name, "status": "completed", "conclusion": "success"} for name in step_names]
+            jobs_payload = {"jobs": [{
+                "name": "verify", "status": "completed", "conclusion": "success", "steps": steps,
+            }]}
+            payloads = {"run": run_payload, "jobs": jobs_payload, "branch": {"commit": {"sha": after_head}}}
+            def dogfood_v2_fetch(path):
+                if path.endswith("/jobs?per_page=100"):
+                    return payloads["jobs"]
+                return payloads["branch"] if path == "/branches/main" else payloads["run"]
+            evidence_impl = _loom._loom_evidence
+            approval_impl = _loom._loom_approval
+            dogfood_frontend = _loom._DOGFOOD_FRONTEND
+            original_fetch = evidence_impl._fetch_json
+            original_frontend_load_key = dogfood_frontend.load_public_key
+            evidence_impl._fetch_json = dogfood_v2_fetch
+            dogfood_frontend.load_public_key = lambda: test_key
+            try:
+                nonce = "5" * 64
+                request_result = _loom.build_dogfood_review_request_v1(source, manifest, observation, run_id, nonce)
+                request = request_result["request"]
+                review_body = {
+                    "schema": "loom-dogfood-review/v1", "request_sha256": request["request_sha256"],
+                    "reviewer": "operator", "decision": "approve",
+                    "key_sha256": approval_impl._key_sha256(test_key),
+                }
+                review = dict(review_body)
+                review["signature"] = sign_bytes(json.dumps(
+                    review_body, ensure_ascii=True, sort_keys=True,
+                    separators=(",", ":"), allow_nan=False,
+                ).encode("utf-8")).hex()
+                verified_review = _loom.verify_dogfood_review_v1(
+                    request, review, source, manifest, observation, run_id, nonce,
+                )
+                accepted_v2 = _loom.evaluate_dogfood_policy_v2(
+                    source, manifest, observation, run_id, request, review,
+                )
+                repeated_v2 = _loom.evaluate_dogfood_policy_v2(
+                    source, manifest, observation, run_id, request, review,
+                )
+                verified_v2 = _loom.verify_dogfood_policy_receipt_v2(
+                    accepted_v2["receipt"], source, manifest, observation, run_id, request, review,
+                )
+                unknown_request = json.loads(json.dumps(request)); unknown_request["authority"] = "ambient"
+                rejected_request = _loom.evaluate_dogfood_policy_v2(
+                    source, manifest, observation, run_id, unknown_request, review,
+                )
+                changed_review = json.loads(json.dumps(review)); changed_review["decision"] = "refuse"
+                rejected_review = _loom.evaluate_dogfood_policy_v2(
+                    source, manifest, observation, run_id, request, changed_review,
+                )
+                caller_evidence = json.loads(json.dumps(observation))
+                caller_evidence["evidence"] = [{"kind": "citadel", "status": "pass", "detail": "caller supplied"}]
+                rejected_caller_evidence = _loom.build_dogfood_review_request_v1(
+                    source, manifest, caller_evidence, run_id, nonce,
+                )
+                tampered_receipt = json.loads(json.dumps(accepted_v2["receipt"]))
+                tampered_receipt["evidence_input"]["derived_value"] = 2
+                rejected_receipt = _loom.verify_dogfood_policy_receipt_v2(
+                    tampered_receipt, source, manifest, observation, run_id, request, review,
+                )
+                extra_receipt = json.loads(json.dumps(accepted_v2["receipt"])); extra_receipt["authorization"] = "granted"
+                rejected_extra_receipt = _loom.verify_dogfood_policy_receipt_v2(
+                    extra_receipt, source, manifest, observation, run_id, request, review,
+                )
+                invalid_nonce = _loom.build_dogfood_review_request_v1(source, manifest, observation, run_id, "short")
+                changed_policy = _loom.build_dogfood_review_request_v1(
+                    source + "\n", manifest, observation, run_id, nonce,
+                )
+                payloads["jobs"] = {"jobs": [{
+                    "name": "verify", "status": "completed", "conclusion": "success", "steps": steps[:-1],
+                }]}
+                missing_ci = _loom.build_dogfood_review_request_v1(source, manifest, observation, run_id, nonce)
+                payloads["jobs"] = jobs_payload
+                with tempfile.TemporaryDirectory() as td:
+                    td = Path(td)
+                    policy_file = td / "policy.loom"; policy_file.write_text(source)
+                    manifest_file = td / "manifest.json"; manifest_file.write_text(json.dumps(manifest))
+                    observation_file = td / "observation.json"; observation_file.write_text(json.dumps(observation))
+                    request_file = td / "request.json"; request_file.write_text(json.dumps(request))
+                    review_file = td / "review.json"; review_file.write_text(json.dumps(review))
+                    request_out = io.StringIO()
+                    with contextlib.redirect_stdout(request_out):
+                        request_code = _loom._loom_cli.cli([
+                            "dogfood-review-request", str(policy_file), str(manifest_file), str(observation_file),
+                            str(run_id), "--nonce=" + nonce, "--format=json",
+                        ], _loom._CLI_FRONTEND)
+                    cli_request = json.loads(request_out.getvalue())
+                    v2_out = io.StringIO()
+                    with contextlib.redirect_stdout(v2_out):
+                        v2_code = _loom._loom_cli.cli([
+                            "dogfood-v2", str(policy_file), str(manifest_file), str(observation_file),
+                            str(run_id), str(request_file), str(review_file), "--format=json",
+                        ], _loom._CLI_FRONTEND)
+                    cli_v2 = json.loads(v2_out.getvalue())
+            finally:
+                evidence_impl._fetch_json = original_fetch
+                dogfood_frontend.load_public_key = original_frontend_load_key
+            receipt = accepted_v2.get("receipt") or {}
+            receipt_body = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+            receipt_hash = hashlib.sha256(json.dumps(
+                receipt_body, ensure_ascii=True, sort_keys=True,
+                separators=(",", ":"), allow_nan=False,
+            ).encode("utf-8")).hexdigest()
+            dogfood_v2_ok = (
+                request_result["valid"] is True
+                and request["schema"] == "loom-dogfood-review-request/v1"
+                and request["gate"]["after_head"] == after_head and request["ci"]["run_id"] == run_id
+                and request["policy"]["derived_call"] == "(main 3)"
+                and request["lifecycle"]["private_key_required_by_loom"] is False
+                and verified_review["valid"] is True
+                and verified_review["evidence"]["identity"] == "pinned-operator-public-key"
+                and accepted_v2["valid"] is True and accepted_v2["accepted"] is True
+                and accepted_v2["decision"] == "accept" and repeated_v2 == accepted_v2
+                and verified_v2 == accepted_v2
+                and receipt["schema"] == "loom-dogfood-receipt/v2"
+                and receipt["receipt_sha256"] == receipt_hash == accepted_v2["receipt_sha256"]
+                and receipt["call"]["expression"] == "(main 3)"
+                and receipt["call"]["input_provenance"] == "derived-from-reverified-ci-git-and-signed-review"
+                and receipt["evidence_input"]["quorum"] == 3
+                and receipt["evidence_input"]["derived_value"] == 3
+                and receipt["evidence_input"]["manual_value_accepted"] is False
+                and [item["kind"] for item in receipt["evidence_input"]["facts"]] == ["git", "review", "tests"]
+                and receipt["lifecycle"]["authorization"] == "none"
+                and receipt["lifecycle"]["host_actions_executed"] is False
+                and receipt["lifecycle"]["external_evidence_reverified"] is True
+                and not rejected_request["valid"] and any(item["code"] == "unknown-field" for item in rejected_request["findings"])
+                and not rejected_review["valid"] and any(item["code"] in {"not-approved", "invalid-signature"} for item in rejected_review["findings"])
+                and not rejected_caller_evidence["valid"] and any(item["code"] == "caller-evidence-forbidden" for item in rejected_caller_evidence["findings"])
+                and not rejected_receipt["valid"] and any(item["code"] == "receipt-mismatch" for item in rejected_receipt["findings"])
+                and not rejected_extra_receipt["valid"] and any(item["code"] == "closed-object-mismatch" for item in rejected_extra_receipt["findings"])
+                and not invalid_nonce["valid"] and any(item["code"] == "invalid-nonce" for item in invalid_nonce["findings"])
+                and not changed_policy["valid"] and any(item["code"] == "policy-source-mismatch" for item in changed_policy["findings"])
+                and not missing_ci["valid"] and any(item["code"] == "required-step-not-successful" for item in missing_ci["findings"])
+                and request_code == 0 and cli_request == request_result
+                and v2_code == 0 and cli_v2 == accepted_v2
+            )
+        ok += dogfood_v2_ok
+        print(f"  {'ok  ' if dogfood_v2_ok else 'FAIL'} dogfood: evidence-fed CI/Git/review policy receipt v2")
+    except Exception as e:
+        print(f"  FAIL evidence-fed dogfood policy receipt v2: {e}")
     try:                                               # help must be a real onboarding surface, not an error-shaped usage dump
         import io, contextlib
         help_out = io.StringIO()
@@ -8095,7 +8270,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 512/512 citadel checks" in quick
+            and "PASS -- 513/513 citadel checks" in quick
             and 'loom dogfood examples/dogfood_release_policy.loom "(main 3)"' in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
@@ -8206,7 +8381,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "512-wasm-multi-argument-parity")' in play
+            and 'bundleUrl.searchParams.set("v", "513-evidence-fed-dogfooding-v2")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -8828,8 +9003,9 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 512/512 citadel checks" in rdoc
+            and "PASS -- 513/513 citadel checks" in rdoc
             and "Dogfooding v1 evaluates one bounded first-order Pure LOOM policy" in rdoc
+            and "Evidence-fed Dogfooding v2 replaces the manual quorum" in rdoc
             and "loom examples --format json" in rdoc
             and "loom doctor --dry-run --format json" in rdoc
             and "python3 verify_docs_parity.py" in rdoc
@@ -8893,7 +9069,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 159   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, Portable Execution Evidence Bundle v0, Dogfooding v1, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, WASM direct/applyN type parity, and the WASM seam/resource frontier
+    total = len(CASES) + 160   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, Portable Execution Evidence Bundle v0, Dogfooding v1, Evidence-fed Dogfooding v2, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, WASM direct/applyN type parity, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

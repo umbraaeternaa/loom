@@ -50,6 +50,7 @@ EFFECTFUL_COMPONENT_RESULT_BINDING_DOC = ROOT / "docs" / "effectful_component_re
 EFFECTFUL_COMPONENT_EXECUTION_ATTESTATION_DOC = ROOT / "docs" / "effectful_component_execution_attestation_v0.md"
 EFFECTFUL_COMPONENT_EXECUTION_BUNDLE_DOC = ROOT / "docs" / "effectful_component_execution_evidence_bundle_v0.md"
 DOGFOOD_DOC = ROOT / "docs" / "dogfooding_v1.md"
+DOGFOOD_V2_DOC = ROOT / "docs" / "dogfooding_v2.md"
 WASM_ARTIFACT_DOC = ROOT / "docs" / "gate_wasm_artifact_v1.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
 
@@ -58,7 +59,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "512-wasm-multi-argument-parity")',
+        'bundleUrl.searchParams.set("v", "513-evidence-fed-dogfooding-v2")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -160,10 +161,12 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "512 self-verifying checks",
-        ">512</div>",
+        "513 self-verifying checks",
+        ">513</div>",
     )
     forbidden = (
+        "512 self-verifying checks",
+        ">512</div>",
         "511 self-verifying checks",
         ">511</div>",
         "510 self-verifying checks",
@@ -958,6 +961,52 @@ def _check_dogfooding_v1() -> None:
         raise SystemExit("docs parity: host-only Dogfooding v1 leaked into standalone")
     if not (ROOT / "loom_dogfood.py").is_file():
         raise SystemExit("docs parity: Dogfooding v1 implementation is absent")
+
+
+def _check_dogfooding_v2() -> None:
+    words = " ".join(DOGFOOD_V2_DOC.read_text().split())
+    required = (
+        "LOOM Evidence-fed Dogfooding v2",
+        "loom dogfood-review-request policy.loom manifest.json observation.json RUN_ID",
+        "loom dogfood-v2 policy.loom manifest.json observation.json RUN_ID",
+        "loom-dogfood-review-request/v1",
+        "loom-dogfood-review/v1",
+        "loom-dogfood-validation/v2",
+        "loom-dogfood-receipt/v2",
+        "loom.build_dogfood_review_request_v1(source, manifest, observation, run_id, nonce)",
+        "loom.verify_dogfood_review_v1(request, review, source, manifest, observation, run_id, nonce)",
+        "loom.evaluate_dogfood_policy_v2(source, manifest, observation, run_id, request, review)",
+        "loom.verify_dogfood_policy_receipt_v2(receipt, source, manifest, observation, run_id, request, review)",
+        "derived-from-reverified-ci-git-and-signed-review",
+        "manual_value_accepted` is always false",
+        "pins the exact canonical policy source by SHA-256",
+        "grants no authorization",
+        "executes no requested host action",
+        "GitHub API adapter and TLS connection are external oracles",
+        "browser bundle exposes none of these host-only APIs",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: Dogfooding v2 drift: missing " + ", ".join(missing))
+    landing = INDEX_HTML.read_text()
+    if not all(needle in landing for needle in (
+        "Dogfooding v2:", "exact Git, CI and signed operator-review evidence",
+    )):
+        raise SystemExit("docs parity: public site does not expose Dogfooding v2")
+    import loom as modular
+    spec = importlib.util.spec_from_file_location("loom_dogfood_v2_standalone", DOCS_LOOM)
+    if spec is None or spec.loader is None:
+        raise SystemExit("docs parity: could not load standalone Dogfooding v2 boundary")
+    standalone = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(standalone)
+    names = (
+        "build_dogfood_review_request_v1", "verify_dogfood_review_v1",
+        "evaluate_dogfood_policy_v2", "verify_dogfood_policy_receipt_v2",
+    )
+    if any(not hasattr(modular, name) for name in names):
+        raise SystemExit("docs parity: modular Dogfooding v2 surface is incomplete")
+    if any(hasattr(standalone, name) for name in names):
+        raise SystemExit("docs parity: host-only Dogfooding v2 leaked into standalone")
 
 
 def _check_component_release_attestation() -> None:
@@ -2104,6 +2153,7 @@ def main() -> int:
     _check_effectful_component_execution_attestation()
     _check_effectful_component_execution_bundle()
     _check_dogfooding_v1()
+    _check_dogfooding_v2()
     _check_component_release_attestation()
     _check_compiler_provenance_doc()
     _check_compiler_evidence_doc()

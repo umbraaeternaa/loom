@@ -978,7 +978,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
     emit_wat,
     LoomError,
     metadata={
-        "citadel_checks": 512,
+        "citadel_checks": 513,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "wasm_abi_versions": [_WASM_ABI_VERSION, _WASM_ABI_V2_VERSION],
         "i31_bits": INT_BITS,
@@ -1007,6 +1007,8 @@ _CLI_FRONTEND = _loom_cli.Frontend(
             "gate-process-finish",
             "execution-verify",
             "dogfood",
+            "dogfood-review-request",
+            "dogfood-v2",
         ],
     },
 )
@@ -1025,6 +1027,13 @@ _DOGFOOD_FRONTEND = _loom_dogfood.Frontend(
     run_js,
     run_wasm,
     LoomError,
+    _loom_evidence.collect_ci_evidence,
+    _loom_gate.validate_manifest,
+    _loom_gate._validate_observation,
+    _loom_approval._load_public_key,
+    _loom_approval._validate_public_key,
+    _loom_approval._key_sha256,
+    _loom_approval._rsa_verify,
 )
 
 
@@ -1042,7 +1051,48 @@ def verify_dogfood_policy_receipt_v1(receipt, program_src, call_src="(main)"):
     )
 
 
+def build_dogfood_review_request_v1(
+    program_src, manifest, observation, run_id, nonce,
+):
+    """Bind one policy to exact Git/CI evidence for external operator review."""
+    return _loom_dogfood.build_review_request_v1(
+        _DOGFOOD_FRONTEND, program_src, manifest, observation, run_id, nonce,
+    )
+
+
+def verify_dogfood_review_v1(
+    request, review, program_src, manifest, observation, run_id, nonce,
+):
+    """Recollect evidence and verify one pinned-key operator review."""
+    return _loom_dogfood.verify_review_v1(
+        _DOGFOOD_FRONTEND, request, review, program_src, manifest,
+        observation, run_id, nonce,
+    )
+
+
+def evaluate_dogfood_policy_v2(
+    program_src, manifest, observation, run_id, request, review,
+):
+    """Derive a Pure LOOM policy input from CI, Git, and signed review evidence."""
+    return _loom_dogfood.evaluate_policy_v2(
+        _DOGFOOD_FRONTEND, program_src, manifest, observation, run_id,
+        request, review,
+    )
+
+
+def verify_dogfood_policy_receipt_v2(
+    receipt, program_src, manifest, observation, run_id, request, review,
+):
+    """Recollect every external fact and verify one Dogfooding v2 receipt."""
+    return _loom_dogfood.verify_policy_receipt_v2(
+        _DOGFOOD_FRONTEND, receipt, program_src, manifest, observation,
+        run_id, request, review,
+    )
+
+
 _CLI_FRONTEND.metadata["dogfood_runner"] = evaluate_dogfood_policy_v1
+_CLI_FRONTEND.metadata["dogfood_review_request_builder"] = build_dogfood_review_request_v1
+_CLI_FRONTEND.metadata["dogfood_v2_runner"] = evaluate_dogfood_policy_v2
 
 
 def build_about():

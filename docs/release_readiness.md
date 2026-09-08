@@ -6,7 +6,7 @@ experimental, and what LOOM does not claim yet.
 
 ## Current public baseline
 
-- Canonical self-verification: `PASS -- 512/512 citadel checks`.
+- Canonical self-verification: `PASS -- 513/513 citadel checks`.
 - Published browser bundle parity is required before release:
   `python3 verify_docs_parity.py`.
 - The public compatibility surface is `loom.py`; module boundaries are pinned in
@@ -104,6 +104,10 @@ experimental, and what LOOM does not claim yet.
   emits a content-addressed receipt only after exact observable agreement.
   Inputs remain operator-supplied and unverified; the runner executes no
   requested host action and grants no authority.
+- Evidence-fed Dogfooding v2 replaces the manual quorum with exact canonical
+  Git/CI evidence and one signed review bound to a pinned operator key. It
+  recollects every fact during verification, keeps the Pure policy unchanged,
+  remains advisory, executes no requested host action, and grants no authority.
 - Signed Reproducible Component Release Attestation v0 resolves the active
   host graph with locked offline Cargo metadata, performs two clean frozen
   offline builds from exact active locked crate archives, requires
@@ -247,10 +251,10 @@ python3 loom.py about --format json
 
 Expected public markers:
 
-- `run_tests.py` prints `PASS -- 512/512 citadel checks`.
+- `run_tests.py` prints `PASS -- 513/513 citadel checks`.
 - `verify_docs_parity.py` prints that the published bundle is standalone and
   citadel-green.
-- `loom.py about --format json` reports `citadel_checks: 512`, the default
+- `loom.py about --format json` reports `citadel_checks: 513`, the default
   WASM ABI version, all supported WASM ABI versions, and the backend list.
 - An installed checkout exposes `loom` as the same CLI surface as
   `python3 loom.py`.
