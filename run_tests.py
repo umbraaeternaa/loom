@@ -6694,7 +6694,6 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
 
             execution_artifact_validation_ok = True
             action_result = action_result_replay = timeout_result = None
-            concurrent_terminal_result = None
             result_schema = result_row = result_claim_status = None
             result_artifact_validation_ok = result_concurrency_ok = result_timeout_ok = True
             if execution_sandbox_available:
@@ -6813,9 +6812,6 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                         ),
                         range(4),
                     ))
-                concurrent_terminal_result = next(
-                    item["result"] for item in concurrent_results if item["valid"]
-                )
                 with sqlite3.connect(concurrent_ledger) as connection:
                     concurrent_result_rows = connection.execute(
                         "SELECT COUNT(*) FROM action_results_v0",
@@ -6957,7 +6953,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                 stopped_multi_action_plan,
                 {
                     "first": action_result["result"],
-                    "second": concurrent_terminal_result,
+                    "second": timeout_result["result"],
                 },
                 test_key,
             )
