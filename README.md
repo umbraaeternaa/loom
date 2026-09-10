@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 513 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 515 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 513/513 citadel checks
+PASS — 515/515 citadel checks
 ```
 
 ## The idea in one screen
@@ -183,6 +183,13 @@ that terminal Result with the exact Compiler Receipt v4 and WASM artifact in a
 canonical in-toto Statement v1. An external issuer signs DSSE PAE bytes; LOOM
 holds no private key, verifies the signature before parsing, and grants no new
 execution authority.
+[`Multi-Action Plan v0`](docs/multi_action_plan_v0.md) composes existing Action
+Capsules into a bounded closed DAG without creating a scheduler or plan-wide
+authority. Every node preserves its exact Capsule and effect row behind a
+non-shareable approval boundary; cycles, dependency drift, effect escalation,
+reused approvals and out-of-order terminal Results fail closed. Its aggregate
+receipt records completed, failed and skipped steps but grants no further
+execution.
 
 [`WIT Component Boundary v0`](docs/wit_component_boundary_v0.md) begins the
 Component Model path without relabeling LOOM's tagged core-WASM ABI as a
@@ -286,6 +293,7 @@ contract; higher-order and effectful arguments remain fail-closed.
 - [`loom_effectful_execution.py`](loom_effectful_execution.py) — host-only claimed-lifecycle binding for exact effectful Components.
 - [`loom_execution_bundle.py`](loom_execution_bundle.py) — portable terminal evidence packaging and externally pinned offline verification.
 - [`loom_dogfood.py`](loom_dogfood.py) — four-backend Pure policy agreement plus externally evidenced, signed-review development receipts.
+- [`loom_multi_action.py`](loom_multi_action.py) — bounded Action Capsule DAGs and non-authorizing aggregate terminal receipts.
 - [`docs/component_bridge_v0.md`](docs/component_bridge_v0.md) — exact bridge metadata and bounded heap-ingress contract.
 - [`loom_provenance.py`](loom_provenance.py) — host-built modular/standalone compiler profiles.
 - [`run_tests.py`](run_tests.py) — the self-verifying suite: it accepts honest programs,

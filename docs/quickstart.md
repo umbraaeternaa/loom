@@ -60,7 +60,7 @@ python3 loom.py about --format json
 The expected public baseline is:
 
 ```console
-PASS -- 513/513 citadel checks
+PASS -- 515/515 citadel checks
 ```
 
 The CLI help is also pinned:
@@ -104,6 +104,20 @@ loom dogfood-v2 policy.loom manifest.json observation.json RUN_ID \
 
 This path derives the quorum from reverified Git, CI and pinned-key review
 evidence. It remains advisory and performs no requested host action.
+
+To compose several existing Action Capsules without granting plan-wide
+authority, use the host-only Multi-Action API:
+
+```python
+plan = loom.build_multi_action_plan_v0([
+    {"id": "compile", "depends_on": [], "capsule": compile_capsule},
+    {"id": "test", "depends_on": ["compile"], "capsule": test_capsule},
+])
+```
+
+Each step still requires its own Invocation Binding, operator Approval, Claim,
+Mediation, Bounded Execution, and terminal Result. See
+[`multi_action_plan_v0.md`](multi_action_plan_v0.md).
 
 ## 4. See the trust gate
 

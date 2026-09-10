@@ -51,6 +51,8 @@ EFFECTFUL_COMPONENT_EXECUTION_ATTESTATION_DOC = ROOT / "docs" / "effectful_compo
 EFFECTFUL_COMPONENT_EXECUTION_BUNDLE_DOC = ROOT / "docs" / "effectful_component_execution_evidence_bundle_v0.md"
 DOGFOOD_DOC = ROOT / "docs" / "dogfooding_v1.md"
 DOGFOOD_V2_DOC = ROOT / "docs" / "dogfooding_v2.md"
+MULTI_ACTION_DOC = ROOT / "docs" / "multi_action_plan_v0.md"
+RELEASE_READINESS_DOC = ROOT / "docs" / "release_readiness.md"
 WASM_ARTIFACT_DOC = ROOT / "docs" / "gate_wasm_artifact_v1.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
 
@@ -59,7 +61,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "513-evidence-fed-dogfooding-v2")',
+        'bundleUrl.searchParams.set("v", "515-multi-action-plan-v0")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -161,8 +163,8 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "513 self-verifying checks",
-        ">513</div>",
+        "515 self-verifying checks",
+        ">515</div>",
     )
     forbidden = (
         "512 self-verifying checks",
@@ -1007,6 +1009,53 @@ def _check_dogfooding_v2() -> None:
         raise SystemExit("docs parity: modular Dogfooding v2 surface is incomplete")
     if any(hasattr(standalone, name) for name in names):
         raise SystemExit("docs parity: host-only Dogfooding v2 leaked into standalone")
+
+
+def _check_multi_action_plan_v0() -> None:
+    words = " ".join(MULTI_ACTION_DOC.read_text().split())
+    required = (
+        "LOOM Multi-Action Plan v0",
+        "loom.build_multi_action_plan_v0(",
+        "loom.validate_multi_action_plan_v0(",
+        "loom.build_multi_action_receipt_v0(",
+        "loom.verify_multi_action_receipt_v0(",
+        "loom-multi-action-plan/v0",
+        "loom-multi-action-receipt/v0",
+        "all-success-before-start",
+        "skip-transitive-dependents",
+        "effect_escalation",
+        "approval_inheritance",
+        "authorization: none",
+        "does not provide: - a scheduler or host executor",
+        "absent from the browser Playground",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: Multi-Action Plan v0 drift: missing " + ", ".join(missing))
+    landing = INDEX_HTML.read_text()
+    if not all(needle in landing for needle in (
+        "Multi-Action Plan v0:", "separate effect and approval boundary for every step",
+    )):
+        raise SystemExit("docs parity: public site does not expose Multi-Action Plan v0")
+    import loom as modular
+    spec = importlib.util.spec_from_file_location("loom_multi_action_standalone", DOCS_LOOM)
+    if spec is None or spec.loader is None:
+        raise SystemExit("docs parity: could not load standalone Multi-Action boundary")
+    standalone = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(standalone)
+    names = (
+        "build_multi_action_plan_v0", "validate_multi_action_plan_v0",
+        "build_multi_action_receipt_v0", "verify_multi_action_receipt_v0",
+    )
+    if any(not hasattr(modular, name) for name in names):
+        raise SystemExit("docs parity: modular Multi-Action surface is incomplete")
+    if any(hasattr(standalone, name) for name in names):
+        raise SystemExit("docs parity: host-only Multi-Action surface leaked into standalone")
+    if not (ROOT / "loom_multi_action.py").is_file():
+        raise SystemExit("docs parity: Multi-Action implementation is absent")
+    readiness = RELEASE_READINESS_DOC.read_text()
+    if "`citadel_checks: 515`" not in readiness or "`citadel_checks: 513`" in readiness:
+        raise SystemExit("docs parity: release-readiness about count drift")
 
 
 def _check_component_release_attestation() -> None:
@@ -2154,6 +2203,7 @@ def main() -> int:
     _check_effectful_component_execution_bundle()
     _check_dogfooding_v1()
     _check_dogfooding_v2()
+    _check_multi_action_plan_v0()
     _check_component_release_attestation()
     _check_compiler_provenance_doc()
     _check_compiler_evidence_doc()

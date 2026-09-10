@@ -81,6 +81,7 @@ import loom_effectful_result as _loom_effectful_result
 import loom_effectful_attestation as _loom_effectful_attestation
 import loom_execution_bundle as _loom_execution_bundle
 import loom_dogfood as _loom_dogfood
+import loom_multi_action as _loom_multi_action
 
 _PARSE_FRONTEND = _loom_parse.Frontend(LoomError)
 
@@ -978,7 +979,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
     emit_wat,
     LoomError,
     metadata={
-        "citadel_checks": 513,
+        "citadel_checks": 515,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "wasm_abi_versions": [_WASM_ABI_VERSION, _WASM_ABI_V2_VERSION],
         "i31_bits": INT_BITS,
@@ -4964,6 +4965,36 @@ def validate_action_capsule_result_v0(result, public_key_value):
     """Validate a terminal Result and its operator signature without host IO."""
     findings = _action_result_structure_findings(result, public_key_value)
     return _action_result_validation(result, findings)
+
+
+_MULTI_ACTION_FRONTEND = _loom_multi_action.Frontend(
+    _action_capsule_structure_findings,
+    validate_action_capsule_result_v0,
+)
+
+
+def build_multi_action_plan_v0(step_specs):
+    """Compose existing Action Capsules into a bounded, non-executable DAG."""
+    return _loom_multi_action.build_plan(_MULTI_ACTION_FRONTEND, step_specs)
+
+
+def validate_multi_action_plan_v0(plan):
+    """Validate a closed Multi-Action Plan without granting execution authority."""
+    return _loom_multi_action.validate_plan(_MULTI_ACTION_FRONTEND, plan)
+
+
+def build_multi_action_receipt_v0(plan, results_by_step, public_key_value):
+    """Aggregate terminal per-step Results without executing another action."""
+    return _loom_multi_action.build_receipt(
+        _MULTI_ACTION_FRONTEND, plan, results_by_step, public_key_value,
+    )
+
+
+def verify_multi_action_receipt_v0(receipt, plan, results_by_step, public_key_value):
+    """Revalidate every Result and require exact aggregate receipt equality."""
+    return _loom_multi_action.verify_receipt(
+        _MULTI_ACTION_FRONTEND, receipt, plan, results_by_step, public_key_value,
+    )
 
 
 def _action_result_execution_row(execution):
