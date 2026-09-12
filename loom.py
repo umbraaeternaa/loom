@@ -979,7 +979,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
     emit_wat,
     LoomError,
     metadata={
-        "citadel_checks": 517,
+        "citadel_checks": 519,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "wasm_abi_versions": [_WASM_ABI_VERSION, _WASM_ABI_V2_VERSION],
         "i31_bits": INT_BITS,
@@ -4970,6 +4970,7 @@ def validate_action_capsule_result_v0(result, public_key_value):
 _MULTI_ACTION_FRONTEND = _loom_multi_action.Frontend(
     _action_capsule_structure_findings,
     validate_action_capsule_result_v0,
+    _action_invocation_binding_structure_findings,
 )
 
 
@@ -5013,6 +5014,45 @@ def verify_multi_action_execution_state_v0(state, plan, public_key_value):
     """Replay and verify an execution state without performing host actions."""
     return _loom_multi_action.verify_execution_state(
         _MULTI_ACTION_FRONTEND, state, plan, public_key_value,
+    )
+
+
+def build_multi_action_evidence_dataflow_v0(
+    plan, edge_specs, target_bindings_by_step,
+):
+    """Bind declared Result digests to exact target stdin digests without moving bytes."""
+    return _loom_multi_action.build_evidence_dataflow(
+        _MULTI_ACTION_FRONTEND, plan, edge_specs, target_bindings_by_step,
+    )
+
+
+def validate_multi_action_evidence_dataflow_v0(
+    dataflow, plan, target_bindings_by_step,
+):
+    """Rebuild and validate a closed, non-authorizing dataflow declaration."""
+    return _loom_multi_action.validate_evidence_dataflow(
+        _MULTI_ACTION_FRONTEND, dataflow, plan, target_bindings_by_step,
+    )
+
+
+def resolve_multi_action_evidence_dataflow_v0(
+    dataflow, plan, target_bindings_by_step, edge_sha256,
+    source_result, public_key_value,
+):
+    """Resolve one edge from signed terminal Result evidence without host IO."""
+    return _loom_multi_action.resolve_evidence_dataflow(
+        _MULTI_ACTION_FRONTEND, dataflow, plan, target_bindings_by_step,
+        edge_sha256, source_result, public_key_value,
+    )
+
+
+def verify_multi_action_evidence_dataflow_resolution_v0(
+    resolution, dataflow, plan, target_bindings_by_step, public_key_value,
+):
+    """Replay a dataflow resolution from its embedded signed Result."""
+    return _loom_multi_action.verify_evidence_dataflow_resolution(
+        _MULTI_ACTION_FRONTEND, resolution, dataflow, plan,
+        target_bindings_by_step, public_key_value,
     )
 
 

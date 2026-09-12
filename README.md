@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 517 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 519 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 517/517 citadel checks
+PASS — 519/519 citadel checks
 ```
 
 ## The idea in one screen
@@ -195,6 +195,12 @@ then ingests only complete signed Action Results, reconstructs their proved
 `ready -> running -> completed|failed` transitions, hash-chains every event,
 and deterministically unlocks or skips dependents. It is replay-verifiable and
 non-authorizing, not a live scheduler or host executor.
+[`Multi-Action Evidence Dataflow v0`](docs/multi_action_evidence_dataflow_v0.md)
+adds a separate closed declaration for direct DAG edges. It proves that a
+successful signed source Result's `stdout` or `stderr` digest equals the exact
+target Invocation Binding stdin digest, then emits a replay-verifiable
+resolution. It transports no bytes, runs no host action, and never lets a
+source approval authorize the target step.
 
 [`WIT Component Boundary v0`](docs/wit_component_boundary_v0.md) begins the
 Component Model path without relabeling LOOM's tagged core-WASM ABI as a

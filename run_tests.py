@@ -4139,6 +4139,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             multi_action_frontend = multi_action_impl.Frontend(
                 _loom._action_capsule_structure_findings,
                 _loom.validate_action_capsule_result_v0,
+                _loom._action_invocation_binding_structure_findings,
             )
             build_multi_action_plan = lambda specs: multi_action_impl.build_plan(
                 multi_action_frontend, specs,
@@ -4161,6 +4162,30 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             verify_multi_action_state = lambda state, plan, key: multi_action_impl.verify_execution_state(
                 multi_action_frontend, state, plan, key,
             )
+            build_multi_action_dataflow = lambda plan, specs, bindings: multi_action_impl.build_evidence_dataflow(
+                multi_action_frontend, plan, specs, bindings,
+            )
+            validate_multi_action_dataflow = lambda dataflow, plan, bindings: multi_action_impl.validate_evidence_dataflow(
+                multi_action_frontend, dataflow, plan, bindings,
+            )
+            resolve_multi_action_dataflow = lambda dataflow, plan, bindings, edge, result, key: multi_action_impl.resolve_evidence_dataflow(
+                multi_action_frontend, dataflow, plan, bindings, edge, result, key,
+            )
+            verify_multi_action_dataflow_resolution = lambda resolution, dataflow, plan, bindings, key: multi_action_impl.verify_evidence_dataflow_resolution(
+                multi_action_frontend, resolution, dataflow, plan, bindings, key,
+            )
+            build_multi_action_dataflow = lambda plan, edges, bindings: multi_action_impl.build_evidence_dataflow(
+                multi_action_frontend, plan, edges, bindings,
+            )
+            validate_multi_action_dataflow = lambda dataflow, plan, bindings: multi_action_impl.validate_evidence_dataflow(
+                multi_action_frontend, dataflow, plan, bindings,
+            )
+            resolve_multi_action_dataflow = lambda dataflow, plan, bindings, edge_sha, result, key: multi_action_impl.resolve_evidence_dataflow(
+                multi_action_frontend, dataflow, plan, bindings, edge_sha, result, key,
+            )
+            verify_multi_action_dataflow_resolution = lambda resolution, dataflow, plan, bindings, key: multi_action_impl.verify_evidence_dataflow_resolution(
+                multi_action_frontend, resolution, dataflow, plan, bindings, key,
+            )
         else:
             build_multi_action_plan = _loom.build_multi_action_plan_v0
             validate_multi_action_plan = _loom.validate_multi_action_plan_v0
@@ -4169,6 +4194,14 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             build_multi_action_state = _loom.build_multi_action_execution_state_v0
             ingest_multi_action_result = _loom.ingest_multi_action_result_v0
             verify_multi_action_state = _loom.verify_multi_action_execution_state_v0
+            build_multi_action_dataflow = _loom.build_multi_action_evidence_dataflow_v0
+            validate_multi_action_dataflow = _loom.validate_multi_action_evidence_dataflow_v0
+            resolve_multi_action_dataflow = _loom.resolve_multi_action_evidence_dataflow_v0
+            verify_multi_action_dataflow_resolution = _loom.verify_multi_action_evidence_dataflow_resolution_v0
+            build_multi_action_dataflow = _loom.build_multi_action_evidence_dataflow_v0
+            validate_multi_action_dataflow = _loom.validate_multi_action_evidence_dataflow_v0
+            resolve_multi_action_dataflow = _loom.resolve_multi_action_evidence_dataflow_v0
+            verify_multi_action_dataflow_resolution = _loom.verify_multi_action_evidence_dataflow_resolution_v0
         multi_action_browser_boundary = (
             not is_browser_bundle
             or all(not hasattr(_loom, name) for name in (
@@ -4176,6 +4209,10 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                 "build_multi_action_receipt_v0", "verify_multi_action_receipt_v0",
                 "build_multi_action_execution_state_v0",
                 "ingest_multi_action_result_v0", "verify_multi_action_execution_state_v0",
+                "build_multi_action_evidence_dataflow_v0",
+                "validate_multi_action_evidence_dataflow_v0",
+                "resolve_multi_action_evidence_dataflow_v0",
+                "verify_multi_action_evidence_dataflow_resolution_v0",
             ))
         )
         multi_action_specs = [
@@ -6643,7 +6680,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             execution_root = Path(td).resolve()
             cat_path = Path("/bin/cat").resolve()
             cat_bytes = cat_path.read_bytes()
-            _, cat_invocation, _, cat_request, cat_approval = build_host_action(
+            _, cat_invocation, cat_binding, cat_request, cat_approval = build_host_action(
                 execution_root, executable_path=cat_path,
                 cwd_path=execution_root / "cat-work", adapter_bytes=cat_bytes, argv=[],
             )
@@ -7219,6 +7256,222 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             ))
         ok += multi_action_state_machine_ok
         print(f"  {'ok  ' if multi_action_state_machine_ok else 'FAIL'} gate: Multi-Action execution state machine v0")
+        multi_action_dataflow_ok = not execution_sandbox_available
+        multi_action_resolution_ok = not execution_sandbox_available
+        multi_action_dataflow_diagnostics = {}
+        if execution_sandbox_available and action_result_v0_ok:
+            dataflow_plan = build_multi_action_plan([
+                {"id": "produce", "depends_on": [], "capsule": action_capsule},
+                {"id": "consume", "depends_on": ["produce"], "capsule": action_capsule},
+            ])["plan"]
+            dataflow_specs = [{
+                "source_step_id": "produce", "source_channel": "stdout",
+                "target_step_id": "consume",
+            }]
+            dataflow_bindings = {"consume": cat_binding}
+            dataflow_result = build_multi_action_dataflow(
+                dataflow_plan, dataflow_specs, dataflow_bindings,
+            )
+            dataflow = dataflow_result["dataflow"]
+            verified_dataflow = validate_multi_action_dataflow(
+                dataflow, dataflow_plan, dataflow_bindings,
+            )
+            missing_dataflow_binding = build_multi_action_dataflow(
+                dataflow_plan, dataflow_specs, {},
+            )
+            extra_dataflow_binding = build_multi_action_dataflow(
+                dataflow_plan, dataflow_specs,
+                {"consume": cat_binding, "produce": cat_binding},
+            )
+            non_direct_plan = build_multi_action_plan([
+                {"id": "produce", "depends_on": [], "capsule": action_capsule},
+                {"id": "middle", "depends_on": ["produce"], "capsule": action_capsule},
+                {"id": "consume", "depends_on": ["middle"], "capsule": action_capsule},
+            ])["plan"]
+            non_direct_dataflow = build_multi_action_dataflow(
+                non_direct_plan, dataflow_specs, dataflow_bindings,
+            )
+            duplicate_target_plan = build_multi_action_plan([
+                {"id": "source-a", "depends_on": [], "capsule": action_capsule},
+                {"id": "source-b", "depends_on": [], "capsule": action_capsule},
+                {
+                    "id": "consume", "depends_on": ["source-a", "source-b"],
+                    "capsule": action_capsule,
+                },
+            ])["plan"]
+            duplicate_target_dataflow = build_multi_action_dataflow(
+                duplicate_target_plan,
+                [
+                    {
+                        "source_step_id": "source-a", "source_channel": "stdout",
+                        "target_step_id": "consume",
+                    },
+                    {
+                        "source_step_id": "source-b", "source_channel": "stdout",
+                        "target_step_id": "consume",
+                    },
+                ],
+                dataflow_bindings,
+            )
+            tampered_binding = json.loads(json.dumps(cat_binding))
+            tampered_binding["invocation"]["stdin"]["payload_sha256"] = "0" * 64
+            rejected_tampered_binding = build_multi_action_dataflow(
+                dataflow_plan, dataflow_specs, {"consume": tampered_binding},
+            )
+            extended_dataflow = json.loads(json.dumps(dataflow))
+            extended_dataflow["extension"] = "unsigned"
+            rejected_extended_dataflow = validate_multi_action_dataflow(
+                extended_dataflow, dataflow_plan, dataflow_bindings,
+            )
+            drifted_dataflow = json.loads(json.dumps(dataflow))
+            drifted_dataflow["edges"][0]["target"]["payload_sha256"] = "0" * 64
+            drifted_dataflow["edges"][0]["edge_sha256"] = _loom._binding_sha256({
+                key: value for key, value in drifted_dataflow["edges"][0].items()
+                if key != "edge_sha256"
+            })
+            drifted_dataflow["dataflow_sha256"] = _loom._binding_sha256({
+                key: value for key, value in drifted_dataflow.items()
+                if key != "dataflow_sha256"
+            })
+            rejected_drifted_dataflow = validate_multi_action_dataflow(
+                drifted_dataflow, dataflow_plan, dataflow_bindings,
+            )
+
+            edge_sha256 = dataflow["edges"][0]["edge_sha256"]
+            resolution_result = resolve_multi_action_dataflow(
+                dataflow, dataflow_plan, dataflow_bindings, edge_sha256,
+                action_result["result"], test_key,
+            )
+            resolution = resolution_result["resolution"]
+            verified_resolution = verify_multi_action_dataflow_resolution(
+                resolution, dataflow, dataflow_plan, dataflow_bindings, test_key,
+            )
+            stderr_dataflow = build_multi_action_dataflow(
+                dataflow_plan,
+                [{
+                    "source_step_id": "produce", "source_channel": "stderr",
+                    "target_step_id": "consume",
+                }],
+                dataflow_bindings,
+            )["dataflow"]
+            rejected_digest_mismatch = resolve_multi_action_dataflow(
+                stderr_dataflow, dataflow_plan, dataflow_bindings,
+                stderr_dataflow["edges"][0]["edge_sha256"],
+                action_result["result"], test_key,
+            )
+            rejected_forged_resolution = resolve_multi_action_dataflow(
+                dataflow, dataflow_plan, dataflow_bindings, edge_sha256,
+                forged_result, test_key,
+            )
+            rejected_unsuccessful_resolution = resolve_multi_action_dataflow(
+                dataflow, dataflow_plan, dataflow_bindings, edge_sha256,
+                timeout_result["result"], test_key,
+            )
+            unknown_edge_resolution = resolve_multi_action_dataflow(
+                dataflow, dataflow_plan, dataflow_bindings, "0" * 64,
+                action_result["result"], test_key,
+            )
+            tampered_resolution = json.loads(json.dumps(resolution))
+            tampered_resolution["proof"]["equal"] = False
+            tampered_resolution["resolution_sha256"] = _loom._binding_sha256({
+                key: value for key, value in tampered_resolution.items()
+                if key != "resolution_sha256"
+            })
+            rejected_tampered_resolution = verify_multi_action_dataflow_resolution(
+                tampered_resolution, dataflow, dataflow_plan, dataflow_bindings, test_key,
+            )
+            extended_resolution = json.loads(json.dumps(resolution))
+            extended_resolution["extension"] = "unsigned"
+            rejected_extended_resolution = verify_multi_action_dataflow_resolution(
+                extended_resolution, dataflow, dataflow_plan, dataflow_bindings, test_key,
+            )
+
+            multi_action_dataflow_ok = (
+                dataflow_result["valid"] is True
+                and dataflow_result["authorization"] == "none"
+                and dataflow["schema"] == "loom-multi-action-evidence-dataflow/v0"
+                and dataflow["plan_sha256"] == dataflow_plan["plan_sha256"]
+                and dataflow["edges"][0]["source"]["result_field"] == "outcome.stdout"
+                and dataflow["edges"][0]["target"]["binding_sha256"] == cat_binding["binding_sha256"]
+                and dataflow["edges"][0]["target"]["payload_sha256"]
+                == cat_binding["invocation"]["stdin"]["payload_sha256"]
+                and dataflow["lifecycle"] == {
+                    "schema": "loom-multi-action-dataflow-lifecycle/v0",
+                    "authorization": "none", "host_actions_executed": False,
+                    "host_byte_transport": False, "approval_inheritance": "forbidden",
+                    "target_approval_subject": "exact-invocation-binding",
+                    "required_next": "loom-multi-action-dataflow-resolution/v0",
+                }
+                and verified_dataflow == dataflow_result
+                and not missing_dataflow_binding["valid"]
+                and any(item["code"] == "missing-target-binding" for item in missing_dataflow_binding["findings"])
+                and not extra_dataflow_binding["valid"]
+                and any(item["code"] == "unused-target-binding" for item in extra_dataflow_binding["findings"])
+                and not non_direct_dataflow["valid"]
+                and any(item["code"] == "non-direct-dependency" for item in non_direct_dataflow["findings"])
+                and not duplicate_target_dataflow["valid"]
+                and any(item["code"] == "multiple-stdin-sources" for item in duplicate_target_dataflow["findings"])
+                and not rejected_tampered_binding["valid"]
+                and not rejected_extended_dataflow["valid"]
+                and any(item["code"] == "unknown-field" for item in rejected_extended_dataflow["findings"])
+                and not rejected_drifted_dataflow["valid"]
+                and any(item["code"] == "dataflow-mismatch" for item in rejected_drifted_dataflow["findings"])
+            )
+            multi_action_resolution_ok = (
+                resolution_result["valid"] is True
+                and resolution_result["authorization"] == "none"
+                and resolution["schema"] == "loom-multi-action-dataflow-resolution/v0"
+                and resolution["source_evidence"]["result_sha256"] == action_result["result_sha256"]
+                and resolution["source_evidence"]["payload_sha256"]
+                == resolution["target_input"]["payload_sha256"]
+                and resolution["proof"]["equal"] is True
+                and resolution["lifecycle"] == {
+                    "schema": "loom-multi-action-dataflow-resolution-lifecycle/v0",
+                    "terminal_evidence": True, "authorization": "none",
+                    "host_actions_executed": False, "host_byte_transport": False,
+                    "byte_custody": "absent", "approval_inheritance": "forbidden",
+                    "target_approval_required": True,
+                }
+                and verified_resolution == resolution_result
+                and not rejected_digest_mismatch["valid"]
+                and any(item["code"] == "payload-hash-mismatch" for item in rejected_digest_mismatch["findings"])
+                and not rejected_forged_resolution["valid"]
+                and any(item["code"] == "invalid-signature" for item in rejected_forged_resolution["findings"])
+                and not rejected_unsuccessful_resolution["valid"]
+                and any(item["code"] == "unsuccessful-source-result" for item in rejected_unsuccessful_resolution["findings"])
+                and not unknown_edge_resolution["valid"]
+                and any(item["code"] == "unknown-edge" for item in unknown_edge_resolution["findings"])
+                and not rejected_tampered_resolution["valid"]
+                and any(item["code"] == "resolution-mismatch" for item in rejected_tampered_resolution["findings"])
+                and not rejected_extended_resolution["valid"]
+                and any(item["code"] == "unknown-field" for item in rejected_extended_resolution["findings"])
+            )
+            multi_action_dataflow_diagnostics = {
+                "built": dataflow_result, "verified": verified_dataflow,
+                "missing_binding": missing_dataflow_binding,
+                "extra_binding": extra_dataflow_binding,
+                "non_direct": non_direct_dataflow,
+                "duplicate_target": duplicate_target_dataflow,
+                "tampered_binding": rejected_tampered_binding,
+                "extended": rejected_extended_dataflow,
+                "drifted": rejected_drifted_dataflow,
+                "resolution": resolution_result,
+                "verified_resolution": verified_resolution,
+                "digest_mismatch": rejected_digest_mismatch,
+                "forged": rejected_forged_resolution,
+                "unsuccessful": rejected_unsuccessful_resolution,
+                "unknown_edge": unknown_edge_resolution,
+                "tampered_resolution": rejected_tampered_resolution,
+                "extended_resolution": rejected_extended_resolution,
+            }
+        if not (multi_action_dataflow_ok and multi_action_resolution_ok):
+            print("       multi-action dataflow diagnostics:", json.dumps(
+                multi_action_dataflow_diagnostics, sort_keys=True,
+            ))
+        ok += multi_action_dataflow_ok
+        print(f"  {'ok  ' if multi_action_dataflow_ok else 'FAIL'} gate: Multi-Action Evidence Dataflow v0")
+        ok += multi_action_resolution_ok
+        print(f"  {'ok  ' if multi_action_resolution_ok else 'FAIL'} gate: Multi-Action Evidence Dataflow resolution v0")
         action_attestation_v0_ok = True
         action_attestation_diagnostics = {}
         if execution_sandbox_available and action_result_v0_ok:
@@ -8196,7 +8449,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == (500 if is_browser_bundle else 517)
+            and about_json["citadel_checks"] == (500 if is_browser_bundle else 519)
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["wasm_abi_versions"] == ([1] if is_browser_bundle else [1, 2])
             and about_json["i31_bits"] == 31
@@ -8726,7 +8979,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 517/517 citadel checks" in quick
+            and "PASS -- 519/519 citadel checks" in quick
             and 'loom dogfood examples/dogfood_release_policy.loom "(main 3)"' in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
@@ -8837,7 +9090,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "517-multi-action-state-v0")' in play
+            and 'bundleUrl.searchParams.set("v", "519-multi-action-dataflow-v0")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -9440,6 +9693,8 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "`loom_wasi_capabilities.py` | host-only Typed WASI effect projection and exact mapping verification" in mbdoc
             and "non-executable WIT import projection" in mbdoc
             and "`loom_recursion.py` | shared named-call graph, recursive-SCC edges, static descent certificates, and quantitative recurrence metadata" in mbdoc
+            and "Multi-Action Evidence Dataflow v0" in mbdoc
+            and "It transports no bytes" in mbdoc
         )
         ok += module_boundary_doc_ok
         print(f"  {'ok  ' if module_boundary_doc_ok else 'FAIL'} docs: module boundaries pinned")
@@ -9459,7 +9714,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 517/517 citadel checks" in rdoc
+            and "PASS -- 519/519 citadel checks" in rdoc
             and "Dogfooding v1 evaluates one bounded first-order Pure LOOM policy" in rdoc
             and "Evidence-fed Dogfooding v2 replaces the manual quorum" in rdoc
             and "loom examples --format json" in rdoc
@@ -9473,6 +9728,8 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "Experimental or bounded" in rdoc
             and "Action Capsule Result v0 closes the one-use host lifecycle" in stable_words
             and "Action Result Attestation v0 composes that terminal Result" in stable_words
+            and "Multi-Action Evidence Dataflow v0 declares direct Result-to-stdin digest edges" in stable_words
+            and "live executable scheduling, byte transport" in bounded_words
             and "terminal Action Capsule Result v0 remain future contracts" not in rdoc_words
             and "Receipt v4 remain future contracts" not in rdoc_words
             and "does not magically confine arbitrary external tools" in rdoc_words
@@ -9525,7 +9782,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 164   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, Portable Execution Evidence Bundle v0, Dogfooding v1, Evidence-fed Dogfooding v2, Multi-Action Plan v0, aggregate receipt v0 and replayed execution state machine v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, WASM direct/applyN type parity, and the WASM seam/resource frontier
+    total = len(CASES) + 166   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, Portable Execution Evidence Bundle v0, Dogfooding v1, Evidence-fed Dogfooding v2, Multi-Action Plan v0, aggregate receipt v0, replayed execution state machine v0, and Evidence Dataflow v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, WASM direct/applyN type parity, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

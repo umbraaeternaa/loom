@@ -60,7 +60,7 @@ python3 loom.py about --format json
 The expected public baseline is:
 
 ```console
-PASS -- 517/517 citadel checks
+PASS -- 519/519 citadel checks
 ```
 
 The CLI help is also pinned:
@@ -129,6 +129,31 @@ state = loom.ingest_multi_action_result_v0(
 )["state"]
 loom.verify_multi_action_execution_state_v0(state, plan, operator_public_key)
 ```
+
+To declare and resolve one evidence-bound output-to-input edge, provide the
+target step's exact Invocation Binding:
+
+```python
+dataflow = loom.build_multi_action_evidence_dataflow_v0(
+    plan,
+    [{
+        "source_step_id": "compile",
+        "source_channel": "stdout",
+        "target_step_id": "test",
+    }],
+    {"test": test_invocation_binding},
+)["dataflow"]
+resolution = loom.resolve_multi_action_evidence_dataflow_v0(
+    dataflow, plan, {"test": test_invocation_binding},
+    dataflow["edges"][0]["edge_sha256"], compile_result,
+    operator_public_key,
+)["resolution"]
+```
+
+This only proves digest equality between signed terminal evidence and the
+already-bound target stdin. It neither transports the bytes nor authorizes or
+executes the target action. See
+[`multi_action_evidence_dataflow_v0.md`](multi_action_evidence_dataflow_v0.md).
 
 This API verifies evidence and dependency transitions; it does not schedule or
 execute a host action. See

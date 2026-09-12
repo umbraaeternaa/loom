@@ -26,6 +26,20 @@ RESULT_EVIDENCE_SCHEMA = "loom-multi-action-result-evidence/v0"
 TRANSITION_LINK_SCHEMA = "loom-multi-action-transition-link/v0"
 DEPENDENCY_EVIDENCE_SCHEMA = "loom-multi-action-dependency-evidence/v0"
 STATE_LIFECYCLE_SCHEMA = "loom-multi-action-execution-lifecycle/v0"
+DATAFLOW_SCHEMA = "loom-multi-action-evidence-dataflow/v0"
+DATAFLOW_VALIDATION_SCHEMA = "loom-multi-action-evidence-dataflow-validation/v0"
+DATAFLOW_EDGE_SCHEMA = "loom-multi-action-dataflow-edge/v0"
+DATAFLOW_SOURCE_SCHEMA = "loom-multi-action-dataflow-source/v0"
+DATAFLOW_TARGET_SCHEMA = "loom-multi-action-dataflow-target/v0"
+DATAFLOW_DEPENDENCY_SCHEMA = "loom-multi-action-dataflow-dependency/v0"
+DATAFLOW_LIMITS_SCHEMA = "loom-multi-action-dataflow-limits/v0"
+DATAFLOW_LIFECYCLE_SCHEMA = "loom-multi-action-dataflow-lifecycle/v0"
+DATAFLOW_RESOLUTION_SCHEMA = "loom-multi-action-dataflow-resolution/v0"
+DATAFLOW_RESOLUTION_VALIDATION_SCHEMA = "loom-multi-action-dataflow-resolution-validation/v0"
+DATAFLOW_RESULT_EVIDENCE_SCHEMA = "loom-multi-action-dataflow-result-evidence/v0"
+DATAFLOW_TARGET_INPUT_SCHEMA = "loom-multi-action-dataflow-target-input/v0"
+DATAFLOW_PROOF_SCHEMA = "loom-multi-action-dataflow-proof/v0"
+DATAFLOW_RESOLUTION_LIFECYCLE_SCHEMA = "loom-multi-action-dataflow-resolution-lifecycle/v0"
 
 MAX_STEPS = 64
 MAX_DEPENDENCIES_PER_STEP = 64
@@ -34,9 +48,13 @@ _STEP_ID = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 
 
 class Frontend:
-    def __init__(self, capsule_structure_findings, validate_result):
+    def __init__(
+        self, capsule_structure_findings, validate_result,
+        invocation_binding_structure_findings=None,
+    ):
         self.capsule_structure_findings = capsule_structure_findings
         self.validate_result = validate_result
+        self.invocation_binding_structure_findings = invocation_binding_structure_findings
 
 
 def _canonical(value):
@@ -105,6 +123,30 @@ def _state_validation(state, findings):
         "authorization": "none",
         "state": state if not findings else None,
         "state_sha256": state.get("state_sha256") if not findings else None,
+        "findings": findings,
+    }
+
+
+def _dataflow_validation(dataflow, findings):
+    return {
+        "schema": DATAFLOW_VALIDATION_SCHEMA,
+        "valid": not findings,
+        "advisory": True,
+        "authorization": "none",
+        "dataflow": dataflow if not findings else None,
+        "dataflow_sha256": dataflow.get("dataflow_sha256") if not findings else None,
+        "findings": findings,
+    }
+
+
+def _dataflow_resolution_validation(resolution, findings):
+    return {
+        "schema": DATAFLOW_RESOLUTION_VALIDATION_SCHEMA,
+        "valid": not findings,
+        "advisory": True,
+        "authorization": "none",
+        "resolution": resolution if not findings else None,
+        "resolution_sha256": resolution.get("resolution_sha256") if not findings else None,
         "findings": findings,
     }
 
@@ -693,3 +735,400 @@ def ingest_execution_result(frontend, state, plan, step_id, result, public_key_v
         frontend, state, plan, step_id, result, public_key_value,
     )
     return _state_validation(next_state, findings)
+
+
+def _dataflow_binding_findings(frontend, binding, path):
+    validator = frontend.invocation_binding_structure_findings
+    if validator is None:
+        return [_finding(
+            path, "binding-validator-unavailable",
+            "Invocation Binding validation is unavailable in this frontend",
+        )]
+    return _prefixed(path, validator(binding))
+
+
+def _dataflow_inputs(frontend, plan, edge_specs, target_bindings_by_step):
+    findings = []
+    plan_check = validate_plan(frontend, plan)
+    if not plan_check["valid"]:
+        findings.extend(_prefixed("plan", plan_check["findings"]))
+    if not isinstance(edge_specs, list):
+        findings.append(_finding("edges", "expected-array", "dataflow edges must be an array"))
+        edge_specs = []
+    elif not 1 <= len(edge_specs) <= MAX_STEPS:
+        findings.append(_finding("edges", "edge-limit", "a dataflow requires 1 to 64 edges"))
+    if not isinstance(target_bindings_by_step, dict):
+        findings.append(_finding(
+            "target_bindings", "expected-object",
+            "target bindings must map target step ids to Invocation Bindings",
+        ))
+        target_bindings_by_step = {}
+
+    step_map = {
+        step["id"]: step for step in plan.get("steps", [])
+        if isinstance(step, dict) and isinstance(step.get("id"), str)
+    } if isinstance(plan, dict) else {}
+    parsed = []
+    target_ids = []
+    edge_keys = []
+    for index, spec in enumerate(edge_specs):
+        path = f"edges[{index}]"
+        findings.extend(_closed(
+            spec, path, {"source_step_id", "source_channel", "target_step_id"},
+        ))
+        if not isinstance(spec, dict):
+            continue
+        source_step_id = spec.get("source_step_id")
+        source_channel = spec.get("source_channel")
+        target_step_id = spec.get("target_step_id")
+        findings.extend(_step_id_findings(source_step_id, path + ".source_step_id"))
+        findings.extend(_step_id_findings(target_step_id, path + ".target_step_id"))
+        if source_channel not in {"stdout", "stderr"}:
+            findings.append(_finding(
+                path + ".source_channel", "unsupported-source-channel",
+                "source_channel must be stdout or stderr",
+            ))
+        source_step = step_map.get(source_step_id)
+        target_step = step_map.get(target_step_id)
+        if source_step is None:
+            findings.append(_finding(
+                path + ".source_step_id", "unknown-source-step",
+                "source step does not belong to this plan",
+            ))
+        if target_step is None:
+            findings.append(_finding(
+                path + ".target_step_id", "unknown-target-step",
+                "target step does not belong to this plan",
+            ))
+        if source_step_id == target_step_id:
+            findings.append(_finding(path, "self-dataflow", "a step cannot feed itself"))
+        if target_step is not None and source_step_id not in target_step["depends_on"]:
+            findings.append(_finding(
+                path, "non-direct-dependency",
+                "a dataflow edge must follow a direct plan dependency",
+            ))
+        if (
+            source_step is not None and target_step is not None
+            and source_channel in {"stdout", "stderr"}
+        ):
+            parsed.append((source_step_id, source_channel, target_step_id))
+            target_ids.append(target_step_id)
+            edge_keys.append((source_step_id, source_channel, target_step_id))
+    if len(set(edge_keys)) != len(edge_keys):
+        findings.append(_finding("edges", "duplicate-edge", "dataflow edges must be unique"))
+    if len(set(target_ids)) != len(target_ids):
+        findings.append(_finding(
+            "edges", "multiple-stdin-sources",
+            "each target step may have only one stdin dataflow edge",
+        ))
+
+    expected_targets = set(target_ids)
+    for key in sorted(set(target_bindings_by_step) - expected_targets, key=str):
+        findings.append(_finding(
+            "target_bindings." + str(key), "unused-target-binding",
+            "target binding does not belong to a dataflow target",
+        ))
+    for target_id in sorted(expected_targets - set(target_bindings_by_step)):
+        findings.append(_finding(
+            "target_bindings." + target_id, "missing-target-binding",
+            "each target step requires its exact Invocation Binding",
+        ))
+    validated_bindings = {}
+    for target_id in sorted(expected_targets & set(target_bindings_by_step)):
+        binding = target_bindings_by_step[target_id]
+        binding_findings = _dataflow_binding_findings(
+            frontend, binding, "target_bindings." + target_id,
+        )
+        findings.extend(binding_findings)
+        target_step = step_map.get(target_id)
+        if not binding_findings and target_step is not None:
+            if binding["capsule_sha256"] != target_step["capsule_sha256"]:
+                findings.append(_finding(
+                    "target_bindings." + target_id + ".capsule_sha256",
+                    "target-capsule-mismatch",
+                    "target Invocation Binding does not bind the target step Capsule",
+                ))
+            else:
+                validated_bindings[target_id] = binding
+    return plan_check, parsed, step_map, validated_bindings, findings
+
+
+def build_evidence_dataflow(frontend, plan, edge_specs, target_bindings_by_step):
+    """Declare digest-bound Result-to-stdin edges without moving bytes or authority."""
+    plan_check, parsed, step_map, bindings, findings = _dataflow_inputs(
+        frontend, plan, edge_specs, target_bindings_by_step,
+    )
+    if findings:
+        return _dataflow_validation(None, findings)
+    edges = []
+    for source_step_id, source_channel, target_step_id in sorted(
+        parsed, key=lambda item: (item[2], item[0], item[1]),
+    ):
+        source_step = step_map[source_step_id]
+        target_step = step_map[target_step_id]
+        binding = bindings[target_step_id]
+        stdin = binding["invocation"]["stdin"]
+        edge = {
+            "schema": DATAFLOW_EDGE_SCHEMA,
+            "source": {
+                "schema": DATAFLOW_SOURCE_SCHEMA,
+                "step_id": source_step_id,
+                "capsule_sha256": source_step["capsule_sha256"],
+                "result_schema": "loom-action-capsule-result/v0",
+                "result_field": "outcome." + source_channel,
+                "channel": source_channel,
+            },
+            "target": {
+                "schema": DATAFLOW_TARGET_SCHEMA,
+                "step_id": target_step_id,
+                "capsule_sha256": target_step["capsule_sha256"],
+                "approval_boundary_sha256": target_step["approval_boundary"]["boundary_sha256"],
+                "binding_sha256": binding["binding_sha256"],
+                "invocation_sha256": binding["invocation_sha256"],
+                "channel": "stdin",
+                "stdin_schema": stdin["schema"],
+                "encoding": stdin["encoding"],
+                "payload_sha256": stdin["payload_sha256"],
+            },
+            "dependency": {
+                "schema": DATAFLOW_DEPENDENCY_SCHEMA,
+                "kind": "direct",
+                "source_step_id": source_step_id,
+                "target_step_id": target_step_id,
+            },
+        }
+        edge["edge_sha256"] = _sha256(edge)
+        edges.append(edge)
+    body = {
+        "schema": DATAFLOW_SCHEMA,
+        "advisory": True,
+        "plan_sha256": plan_check["plan_sha256"],
+        "edges": edges,
+        "limits": {
+            "schema": DATAFLOW_LIMITS_SCHEMA,
+            "maximum_edges": MAX_STEPS,
+            "maximum_sources_per_target_stdin": 1,
+        },
+        "lifecycle": {
+            "schema": DATAFLOW_LIFECYCLE_SCHEMA,
+            "authorization": "none",
+            "host_actions_executed": False,
+            "host_byte_transport": False,
+            "approval_inheritance": "forbidden",
+            "target_approval_subject": "exact-invocation-binding",
+            "required_next": DATAFLOW_RESOLUTION_SCHEMA,
+        },
+    }
+    body["dataflow_sha256"] = _sha256(body)
+    return _dataflow_validation(body, [])
+
+
+def validate_evidence_dataflow(frontend, dataflow, plan, target_bindings_by_step):
+    """Rebuild and compare one closed evidence dataflow declaration."""
+    outer_keys = {
+        "schema", "advisory", "plan_sha256", "edges", "limits", "lifecycle",
+        "dataflow_sha256",
+    }
+    findings = _closed(dataflow, "dataflow", outer_keys)
+    if not isinstance(dataflow, dict):
+        return _dataflow_validation(None, findings)
+    if dataflow.get("schema") != DATAFLOW_SCHEMA:
+        findings.append(_finding("dataflow.schema", "unsupported-schema", "expected " + DATAFLOW_SCHEMA))
+    if dataflow.get("advisory") is not True:
+        findings.append(_finding("dataflow.advisory", "invalid-advisory", "dataflow must remain advisory"))
+    if not _is_sha256(dataflow.get("dataflow_sha256")):
+        findings.append(_finding(
+            "dataflow.dataflow_sha256", "expected-sha256",
+            "dataflow_sha256 must be lowercase SHA-256",
+        ))
+    edges = dataflow.get("edges")
+    if not isinstance(edges, list):
+        findings.append(_finding("dataflow.edges", "expected-array", "edges must be an array"))
+        return _dataflow_validation(None, findings)
+    if len(edges) > MAX_STEPS:
+        findings.append(_finding("dataflow.edges", "edge-limit", "a dataflow may contain at most 64 edges"))
+    specs = []
+    for index, edge in enumerate(edges):
+        path = f"dataflow.edges[{index}]"
+        findings.extend(_closed(edge, path, {"schema", "source", "target", "dependency", "edge_sha256"}))
+        if not isinstance(edge, dict):
+            continue
+        findings.extend(_closed(
+            edge.get("source"), path + ".source",
+            {"schema", "step_id", "capsule_sha256", "result_schema", "result_field", "channel"},
+        ))
+        findings.extend(_closed(
+            edge.get("target"), path + ".target",
+            {
+                "schema", "step_id", "capsule_sha256", "approval_boundary_sha256",
+                "binding_sha256", "invocation_sha256", "channel", "stdin_schema",
+                "encoding", "payload_sha256",
+            },
+        ))
+        findings.extend(_closed(
+            edge.get("dependency"), path + ".dependency",
+            {"schema", "kind", "source_step_id", "target_step_id"},
+        ))
+        source = edge.get("source")
+        target = edge.get("target")
+        if isinstance(source, dict) and isinstance(target, dict):
+            specs.append({
+                "source_step_id": source.get("step_id"),
+                "source_channel": source.get("channel"),
+                "target_step_id": target.get("step_id"),
+            })
+    expected = build_evidence_dataflow(frontend, plan, specs, target_bindings_by_step)
+    if not expected["valid"]:
+        findings.extend(_prefixed("dataflow", expected["findings"]))
+    elif dataflow != expected["dataflow"]:
+        findings.append(_finding(
+            "dataflow", "dataflow-mismatch",
+            "dataflow is not the exact deterministic declaration for its Plan and Invocation Bindings",
+        ))
+    return _dataflow_validation(dataflow, findings)
+
+
+def resolve_evidence_dataflow(
+    frontend, dataflow, plan, target_bindings_by_step, edge_sha256,
+    source_result, public_key_value,
+):
+    """Resolve one declared edge from signed terminal digest evidence; never transport bytes."""
+    dataflow_check = validate_evidence_dataflow(
+        frontend, dataflow, plan, target_bindings_by_step,
+    )
+    if not dataflow_check["valid"]:
+        return _dataflow_resolution_validation(
+            None, _prefixed("dataflow", dataflow_check["findings"]),
+        )
+    matches = [edge for edge in dataflow["edges"] if edge["edge_sha256"] == edge_sha256]
+    if len(matches) != 1:
+        return _dataflow_resolution_validation(None, [_finding(
+            "edge_sha256", "unknown-edge", "edge_sha256 must identify exactly one declared edge",
+        )])
+    edge = matches[0]
+    result_check = frontend.validate_result(source_result, public_key_value)
+    if not result_check["valid"]:
+        return _dataflow_resolution_validation(
+            None, _prefixed("source_result", result_check["findings"]),
+        )
+    if not _terminal_success(source_result):
+        return _dataflow_resolution_validation(None, [_finding(
+            "source_result.outcome", "unsuccessful-source-result",
+            "only a successful terminal Result may resolve a dataflow edge",
+        )])
+    source = edge["source"]
+    result_binding = source_result["request"]["binding"]
+    if result_binding["capsule_sha256"] != source["capsule_sha256"]:
+        return _dataflow_resolution_validation(None, [_finding(
+            "source_result.request.binding.capsule_sha256", "source-capsule-mismatch",
+            "source Result does not bind the declared source step Capsule",
+        )])
+    descriptor = source_result["outcome"][source["channel"]]
+    target = edge["target"]
+    if descriptor["sha256"] != target["payload_sha256"]:
+        return _dataflow_resolution_validation(None, [_finding(
+            "source_result.outcome." + source["channel"] + ".sha256",
+            "payload-hash-mismatch",
+            "source output digest does not equal the exact target stdin digest",
+        )])
+    body = {
+        "schema": DATAFLOW_RESOLUTION_SCHEMA,
+        "advisory": True,
+        "authorization": "none",
+        "dataflow_sha256": dataflow["dataflow_sha256"],
+        "plan_sha256": plan["plan_sha256"],
+        "edge_sha256": edge["edge_sha256"],
+        "source_evidence": {
+            "schema": DATAFLOW_RESULT_EVIDENCE_SCHEMA,
+            "step_id": source["step_id"],
+            "capsule_sha256": source["capsule_sha256"],
+            "result": source_result,
+            "result_sha256": source_result["result_sha256"],
+            "outcome_sha256": source_result["outcome_sha256"],
+            "channel": source["channel"],
+            "payload_sha256": descriptor["sha256"],
+            "size_bytes": descriptor["size_bytes"],
+            "finalized_at_unix_ms": source_result["finalized_at_unix_ms"],
+        },
+        "target_input": {
+            "schema": DATAFLOW_TARGET_INPUT_SCHEMA,
+            "step_id": target["step_id"],
+            "capsule_sha256": target["capsule_sha256"],
+            "approval_boundary_sha256": target["approval_boundary_sha256"],
+            "binding_sha256": target["binding_sha256"],
+            "invocation_sha256": target["invocation_sha256"],
+            "channel": "stdin",
+            "encoding": target["encoding"],
+            "payload_sha256": target["payload_sha256"],
+        },
+        "proof": {
+            "schema": DATAFLOW_PROOF_SCHEMA,
+            "algorithm": "sha256",
+            "source_payload_sha256": descriptor["sha256"],
+            "target_payload_sha256": target["payload_sha256"],
+            "equal": True,
+        },
+        "lifecycle": {
+            "schema": DATAFLOW_RESOLUTION_LIFECYCLE_SCHEMA,
+            "terminal_evidence": True,
+            "authorization": "none",
+            "host_actions_executed": False,
+            "host_byte_transport": False,
+            "byte_custody": "absent",
+            "approval_inheritance": "forbidden",
+            "target_approval_required": True,
+        },
+    }
+    body["resolution_sha256"] = _sha256(body)
+    return _dataflow_resolution_validation(body, [])
+
+
+def verify_evidence_dataflow_resolution(
+    frontend, resolution, dataflow, plan, target_bindings_by_step,
+    public_key_value,
+):
+    """Rebuild one resolution from its embedded signed Result and compare exactly."""
+    outer_keys = {
+        "schema", "advisory", "authorization", "dataflow_sha256", "plan_sha256",
+        "edge_sha256", "source_evidence", "target_input", "proof", "lifecycle",
+        "resolution_sha256",
+    }
+    findings = _closed(resolution, "resolution", outer_keys)
+    if not isinstance(resolution, dict):
+        return _dataflow_resolution_validation(None, findings)
+    if resolution.get("schema") != DATAFLOW_RESOLUTION_SCHEMA:
+        findings.append(_finding(
+            "resolution.schema", "unsupported-schema", "expected " + DATAFLOW_RESOLUTION_SCHEMA,
+        ))
+    if resolution.get("advisory") is not True or resolution.get("authorization") != "none":
+        findings.append(_finding(
+            "resolution.authorization", "authorization-escalation",
+            "a dataflow resolution must remain advisory and non-authorizing",
+        ))
+    if not _is_sha256(resolution.get("resolution_sha256")):
+        findings.append(_finding(
+            "resolution.resolution_sha256", "expected-sha256",
+            "resolution_sha256 must be lowercase SHA-256",
+        ))
+    source_evidence = resolution.get("source_evidence")
+    findings.extend(_closed(
+        source_evidence, "resolution.source_evidence",
+        {
+            "schema", "step_id", "capsule_sha256", "result", "result_sha256",
+            "outcome_sha256", "channel", "payload_sha256", "size_bytes",
+            "finalized_at_unix_ms",
+        },
+    ))
+    source_result = source_evidence.get("result") if isinstance(source_evidence, dict) else None
+    expected = resolve_evidence_dataflow(
+        frontend, dataflow, plan, target_bindings_by_step,
+        resolution.get("edge_sha256"), source_result, public_key_value,
+    )
+    if not expected["valid"]:
+        findings.extend(_prefixed("resolution", expected["findings"]))
+    elif resolution != expected["resolution"]:
+        findings.append(_finding(
+            "resolution", "resolution-mismatch",
+            "resolution is not the exact replay of its signed Result and declared target input",
+        ))
+    return _dataflow_resolution_validation(resolution, findings)
