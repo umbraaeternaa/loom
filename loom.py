@@ -979,7 +979,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
     emit_wat,
     LoomError,
     metadata={
-        "citadel_checks": 515,
+        "citadel_checks": 517,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "wasm_abi_versions": [_WASM_ABI_VERSION, _WASM_ABI_V2_VERSION],
         "i31_bits": INT_BITS,
@@ -4994,6 +4994,25 @@ def verify_multi_action_receipt_v0(receipt, plan, results_by_step, public_key_va
     """Revalidate every Result and require exact aggregate receipt equality."""
     return _loom_multi_action.verify_receipt(
         _MULTI_ACTION_FRONTEND, receipt, plan, results_by_step, public_key_value,
+    )
+
+
+def build_multi_action_execution_state_v0(plan):
+    """Build the zero-result deterministic state for one Multi-Action Plan."""
+    return _loom_multi_action.build_execution_state(_MULTI_ACTION_FRONTEND, plan)
+
+
+def ingest_multi_action_result_v0(state, plan, step_id, result, public_key_value):
+    """Advance one ready step from an independently verified terminal Result."""
+    return _loom_multi_action.ingest_execution_result(
+        _MULTI_ACTION_FRONTEND, state, plan, step_id, result, public_key_value,
+    )
+
+
+def verify_multi_action_execution_state_v0(state, plan, public_key_value):
+    """Replay and verify an execution state without performing host actions."""
+    return _loom_multi_action.verify_execution_state(
+        _MULTI_ACTION_FRONTEND, state, plan, public_key_value,
     )
 
 

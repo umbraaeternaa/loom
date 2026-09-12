@@ -52,6 +52,7 @@ EFFECTFUL_COMPONENT_EXECUTION_BUNDLE_DOC = ROOT / "docs" / "effectful_component_
 DOGFOOD_DOC = ROOT / "docs" / "dogfooding_v1.md"
 DOGFOOD_V2_DOC = ROOT / "docs" / "dogfooding_v2.md"
 MULTI_ACTION_DOC = ROOT / "docs" / "multi_action_plan_v0.md"
+MULTI_ACTION_STATE_DOC = ROOT / "docs" / "multi_action_execution_state_v0.md"
 RELEASE_READINESS_DOC = ROOT / "docs" / "release_readiness.md"
 WASM_ARTIFACT_DOC = ROOT / "docs" / "gate_wasm_artifact_v1.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
@@ -61,7 +62,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "515-multi-action-plan-v0")',
+        'bundleUrl.searchParams.set("v", "517-multi-action-state-v0")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -163,8 +164,8 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "515 self-verifying checks",
-        ">515</div>",
+        "517 self-verifying checks",
+        ">517</div>",
     )
     forbidden = (
         "512 self-verifying checks",
@@ -1046,6 +1047,8 @@ def _check_multi_action_plan_v0() -> None:
     names = (
         "build_multi_action_plan_v0", "validate_multi_action_plan_v0",
         "build_multi_action_receipt_v0", "verify_multi_action_receipt_v0",
+        "build_multi_action_execution_state_v0", "ingest_multi_action_result_v0",
+        "verify_multi_action_execution_state_v0",
     )
     if any(not hasattr(modular, name) for name in names):
         raise SystemExit("docs parity: modular Multi-Action surface is incomplete")
@@ -1053,8 +1056,19 @@ def _check_multi_action_plan_v0() -> None:
         raise SystemExit("docs parity: host-only Multi-Action surface leaked into standalone")
     if not (ROOT / "loom_multi_action.py").is_file():
         raise SystemExit("docs parity: Multi-Action implementation is absent")
+    if not MULTI_ACTION_STATE_DOC.is_file():
+        raise SystemExit("docs parity: Multi-Action execution state contract is absent")
+    state_words = " ".join(MULTI_ACTION_STATE_DOC.read_text().split())
+    for needle in (
+        "LOOM Multi-Action Execution State Machine v0",
+        "verified-action-result-only",
+        "host_actions_executed_by_state_machine: false",
+        "not a live scheduler",
+    ):
+        if needle not in state_words:
+            raise SystemExit("docs parity: Multi-Action execution state contract lost marker: " + needle)
     readiness = RELEASE_READINESS_DOC.read_text()
-    if "`citadel_checks: 515`" not in readiness or "`citadel_checks: 513`" in readiness:
+    if "`citadel_checks: 517`" not in readiness or "`citadel_checks: 515`" in readiness:
         raise SystemExit("docs parity: release-readiness about count drift")
 
 

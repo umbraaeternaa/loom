@@ -178,11 +178,15 @@ V2 keeps that policy profile unchanged, derives the input from freshly
 reverified canonical Git/CI evidence and an exact pinned-key operator review,
 and issues a second closed receipt without executing or authorizing an action.
 
-`loom_multi_action.py` owns Multi-Action Plan v0. It composes already closed
+`loom_multi_action.py` owns Multi-Action Plan v0 and Execution State Machine
+v0. It composes already closed
 Action Capsules into a deterministic bounded DAG, derives immutable effect and
 per-step approval boundaries, and aggregates independently validated terminal
-Action Results. It contains no scheduler, private key, ledger mutation, or host
-executor; it grants no authority and remains absent from the browser bundle.
+Action Results. Its execution state accepts those complete signed Results,
+hash-chains the reconstructed transitions, and deterministically unlocks or
+skips dependents. It contains no live scheduler, private key, ledger mutation,
+or host executor; it grants no authority and remains absent from the browser
+bundle.
 
 `loom_component_release.py` owns Signed Reproducible Component Release
 Attestation v0. It may run exact offline Cargo builds, inspect locked registry

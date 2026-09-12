@@ -1,4 +1,4 @@
-"""Closed, non-authorizing composition for bounded Action Capsule DAGs."""
+"""Closed, non-authorizing composition and replay for Action Capsule DAGs."""
 
 import hashlib
 import json
@@ -18,9 +18,18 @@ RECEIPT_VALIDATION_SCHEMA = "loom-multi-action-receipt-validation/v0"
 OUTCOME_SCHEMA = "loom-multi-action-outcome/v0"
 SUMMARY_SCHEMA = "loom-multi-action-summary/v0"
 RECEIPT_LIFECYCLE_SCHEMA = "loom-multi-action-receipt-lifecycle/v0"
+STATE_SCHEMA = "loom-multi-action-execution-state/v0"
+STATE_VALIDATION_SCHEMA = "loom-multi-action-execution-state-validation/v0"
+STEP_STATE_SCHEMA = "loom-multi-action-step-state/v0"
+EVENT_SCHEMA = "loom-multi-action-execution-event/v0"
+RESULT_EVIDENCE_SCHEMA = "loom-multi-action-result-evidence/v0"
+TRANSITION_LINK_SCHEMA = "loom-multi-action-transition-link/v0"
+DEPENDENCY_EVIDENCE_SCHEMA = "loom-multi-action-dependency-evidence/v0"
+STATE_LIFECYCLE_SCHEMA = "loom-multi-action-execution-lifecycle/v0"
 
 MAX_STEPS = 64
 MAX_DEPENDENCIES_PER_STEP = 64
+MAX_EVENTS = MAX_STEPS * 3
 _STEP_ID = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 
 
@@ -84,6 +93,18 @@ def _receipt_validation(receipt, findings):
         "authorization": "none",
         "receipt": receipt if not findings else None,
         "receipt_sha256": receipt.get("receipt_sha256") if not findings else None,
+        "findings": findings,
+    }
+
+
+def _state_validation(state, findings):
+    return {
+        "schema": STATE_VALIDATION_SCHEMA,
+        "valid": not findings,
+        "advisory": True,
+        "authorization": "none",
+        "state": state if not findings else None,
+        "state_sha256": state.get("state_sha256") if not findings else None,
         "findings": findings,
     }
 
@@ -410,3 +431,265 @@ def verify_receipt(frontend, receipt, plan, results_by_step, public_key_value):
     if receipt != expected["receipt"]:
         findings.append(_finding("receipt", "receipt-mismatch", "receipt does not match the exact plan and terminal Results"))
     return _receipt_validation(receipt, findings)
+
+
+def _finish_state(state):
+    by_id = {item["step_id"]: item for item in state["steps"]}
+    for name, status in (
+        ("ready", "ready"), ("running", "running"),
+        ("completed", "completed"), ("failed", "failed"),
+        ("skipped", "skipped"),
+    ):
+        state[name] = sorted(step_id for step_id, item in by_id.items() if item["state"] == status)
+    state["revision"] = len(state["events"])
+    state["event_chain_sha256"] = (
+        state["events"][-1]["event_sha256"] if state["events"]
+        else _sha256({"schema": EVENT_SCHEMA, "plan_sha256": state["plan_sha256"], "events": []})
+    )
+    state["lifecycle"] = {
+        "schema": STATE_LIFECYCLE_SCHEMA,
+        "terminal": not state["ready"] and not state["running"] and not any(
+            item["state"] == "blocked" for item in state["steps"]
+        ),
+        "authorization": "none",
+        "accepts": "verified-action-result-only",
+        "host_actions_executed_by_state_machine": False,
+        "replay": "denied",
+    }
+    state["state_sha256"] = _sha256({
+        key: value for key, value in state.items() if key != "state_sha256"
+    })
+    return state
+
+
+def _initial_state(plan):
+    steps = []
+    for step in plan["steps"]:
+        blocked_by = list(step["depends_on"])
+        steps.append({
+            "schema": STEP_STATE_SCHEMA,
+            "step_id": step["id"],
+            "capsule_sha256": step["capsule_sha256"],
+            "approval_boundary_sha256": step["approval_boundary"]["boundary_sha256"],
+            "state": "blocked" if blocked_by else "ready",
+            "blocked_by": blocked_by,
+            "execution_sha256": None,
+            "result_sha256": None,
+            "started_at_unix_ms": None,
+            "finalized_at_unix_ms": None,
+            "last_event_sha256": None,
+        })
+    return _finish_state({
+        "schema": STATE_SCHEMA,
+        "plan_sha256": plan["plan_sha256"],
+        "revision": 0,
+        "steps": steps,
+        "ready": [],
+        "running": [],
+        "completed": [],
+        "failed": [],
+        "skipped": [],
+        "events": [],
+        "event_chain_sha256": "",
+        "lifecycle": {},
+    })
+
+
+def _append_event(state, step, kind, from_state, to_state, at_unix_ms, evidence):
+    event = {
+        "schema": EVENT_SCHEMA,
+        "index": len(state["events"]),
+        "kind": kind,
+        "step_id": step["step_id"],
+        "from_state": from_state,
+        "to_state": to_state,
+        "at_unix_ms": at_unix_ms,
+        "previous_event_sha256": state["event_chain_sha256"],
+        "evidence": evidence,
+    }
+    event["event_sha256"] = _sha256(event)
+    state["events"].append(event)
+    state["event_chain_sha256"] = event["event_sha256"]
+    step["state"] = to_state
+    step["last_event_sha256"] = event["event_sha256"]
+    return event
+
+
+def _dependency_evidence(step_map, dependency_ids, trigger_event_sha256):
+    return {
+        "schema": DEPENDENCY_EVIDENCE_SCHEMA,
+        "dependencies": [{
+            "step_id": dependency,
+            "state": step_map[dependency]["state"],
+            "last_event_sha256": step_map[dependency]["last_event_sha256"],
+        } for dependency in dependency_ids],
+        "trigger_event_sha256": trigger_event_sha256,
+    }
+
+
+def _refresh_dependencies(state, plan, at_unix_ms, trigger_event_sha256):
+    step_map = {item["step_id"]: item for item in state["steps"]}
+    plan_steps = {item["id"]: item for item in plan["steps"]}
+    order = _topological_order(
+        sorted(plan_steps), {step_id: item["depends_on"] for step_id, item in plan_steps.items()},
+    )
+    for step_id in order:
+        current = step_map[step_id]
+        if current["state"] != "blocked":
+            continue
+        dependencies = plan_steps[step_id]["depends_on"]
+        failed = [
+            dependency for dependency in dependencies
+            if step_map[dependency]["state"] in {"failed", "skipped"}
+        ]
+        if failed:
+            current["blocked_by"] = failed
+            event = _append_event(
+                state, current, "dependency-skipped", "blocked", "skipped",
+                at_unix_ms, _dependency_evidence(step_map, dependencies, trigger_event_sha256),
+            )
+            current["finalized_at_unix_ms"] = at_unix_ms
+            trigger_event_sha256 = event["event_sha256"]
+        elif all(step_map[dependency]["state"] == "completed" for dependency in dependencies):
+            current["blocked_by"] = []
+            event = _append_event(
+                state, current, "dependency-satisfied", "blocked", "ready",
+                at_unix_ms, _dependency_evidence(step_map, dependencies, trigger_event_sha256),
+            )
+            trigger_event_sha256 = event["event_sha256"]
+
+
+def build_execution_state(frontend, plan):
+    """Build the deterministic zero-result state for one validated plan."""
+    plan_check = validate_plan(frontend, plan)
+    if not plan_check["valid"]:
+        return _state_validation(None, _prefixed("plan", plan_check["findings"]))
+    return _state_validation(_initial_state(plan), [])
+
+
+def _result_events(state):
+    results = []
+    events = state.get("events") if isinstance(state, dict) else None
+    if not isinstance(events, list) or len(events) > MAX_EVENTS:
+        return results
+    for event in events:
+        if not isinstance(event, dict) or event.get("kind") != "execution-observed":
+            continue
+        evidence = event.get("evidence")
+        if isinstance(evidence, dict) and evidence.get("schema") == RESULT_EVIDENCE_SCHEMA:
+            results.append((event.get("step_id"), evidence.get("result")))
+    return results
+
+
+def _ingest_result(frontend, state, plan, step_id, result, public_key_value):
+    step_map = {item["step_id"]: item for item in state["steps"]}
+    if step_id not in step_map:
+        return None, [_finding("step_id", "unknown-step", "step does not belong to this plan")]
+    step = step_map[step_id]
+    if step["state"] != "ready":
+        return None, [_finding("step_id", "invalid-state-transition", "only a ready step can accept a terminal Result")]
+    result_check = frontend.validate_result(result, public_key_value)
+    if not result_check["valid"]:
+        return None, _prefixed("result", result_check["findings"])
+    plan_step = next(item for item in plan["steps"] if item["id"] == step_id)
+    if result["request"]["binding"]["capsule_sha256"] != plan_step["capsule_sha256"]:
+        return None, [_finding("result", "capsule-result-mismatch", "Result does not bind this plan step's Action Capsule")]
+    existing = [item for _, item in _result_events(state)]
+    if any(item["result_sha256"] == result["result_sha256"] for item in existing):
+        return None, [_finding("result.result_sha256", "reused-result", "one Result cannot advance multiple plan steps")]
+    if any(item["approval_sha256"] == result["approval_sha256"] for item in existing):
+        return None, [_finding("result.approval_sha256", "reused-approval", "each plan step requires a distinct Action Approval")]
+    for dependency in plan_step["depends_on"]:
+        parent = step_map[dependency]
+        if parent["state"] != "completed":
+            return None, [_finding("step_id", "dependency-not-completed", "all dependencies must complete successfully before execution")]
+        if parent["finalized_at_unix_ms"] > result["execution"]["executed_at_unix_ms"]:
+            return None, [_finding("result.execution.executed_at_unix_ms", "dependency-order-violation", "step execution predates dependency finalization")]
+
+    next_state = json.loads(_canonical(state))
+    next_step = next(item for item in next_state["steps"] if item["step_id"] == step_id)
+    execution = result["execution"]
+    execution_event = _append_event(
+        next_state, next_step, "execution-observed", "ready", "running",
+        execution["executed_at_unix_ms"], {
+            "schema": RESULT_EVIDENCE_SCHEMA,
+            "approval_boundary_sha256": next_step["approval_boundary_sha256"],
+            "result": result,
+        },
+    )
+    next_step["blocked_by"] = []
+    next_step["execution_sha256"] = result["execution_sha256"]
+    next_step["result_sha256"] = result["result_sha256"]
+    next_step["started_at_unix_ms"] = execution["executed_at_unix_ms"]
+    successful = _terminal_success(result)
+    final_state = "completed" if successful else "failed"
+    final_event = _append_event(
+        next_state, next_step, "result-finalized", "running", final_state,
+        result["finalized_at_unix_ms"], {
+            "schema": TRANSITION_LINK_SCHEMA,
+            "source_event_sha256": execution_event["event_sha256"],
+            "execution_sha256": result["execution_sha256"],
+            "result_sha256": result["result_sha256"],
+        },
+    )
+    next_step["finalized_at_unix_ms"] = result["finalized_at_unix_ms"]
+    _refresh_dependencies(
+        next_state, plan, result["finalized_at_unix_ms"], final_event["event_sha256"],
+    )
+    return _finish_state(next_state), []
+
+
+def verify_execution_state(frontend, state, plan, public_key_value):
+    outer_keys = {
+        "schema", "plan_sha256", "revision", "steps", "ready", "running",
+        "completed", "failed", "skipped", "events", "event_chain_sha256",
+        "lifecycle", "state_sha256",
+    }
+    findings = _closed(state, "state", outer_keys)
+    plan_check = validate_plan(frontend, plan)
+    if not plan_check["valid"]:
+        findings.extend(_prefixed("plan", plan_check["findings"]))
+    if not isinstance(state, dict) or not plan_check["valid"]:
+        return _state_validation(None, findings)
+    if state.get("schema") != STATE_SCHEMA:
+        findings.append(_finding("state.schema", "unsupported-schema", "expected " + STATE_SCHEMA))
+    if state.get("plan_sha256") != plan["plan_sha256"]:
+        findings.append(_finding("state.plan_sha256", "plan-mismatch", "state does not bind this plan"))
+    events = state.get("events")
+    if not isinstance(events, list):
+        findings.append(_finding("state.events", "expected-array", "events must be an array"))
+    elif len(events) > MAX_EVENTS:
+        findings.append(_finding("state.events", "event-limit", "an execution state may contain at most 192 events"))
+    if not _is_sha256(state.get("state_sha256")):
+        findings.append(_finding("state.state_sha256", "expected-sha256", "state_sha256 must be lowercase SHA-256"))
+    else:
+        try:
+            expected_hash = _sha256({key: value for key, value in state.items() if key != "state_sha256"})
+        except (TypeError, ValueError):
+            expected_hash = None
+            findings.append(_finding("state", "non-canonical-state", "state must contain canonical JSON values"))
+        if expected_hash is not None and state["state_sha256"] != expected_hash:
+            findings.append(_finding("state.state_sha256", "state-hash-mismatch", "state hash does not match its canonical body"))
+
+    expected = _initial_state(plan)
+    for index, (event_step_id, result) in enumerate(_result_events(state)):
+        expected, replay_findings = _ingest_result(
+            frontend, expected, plan, event_step_id, result, public_key_value,
+        )
+        if replay_findings:
+            findings.extend(_prefixed(f"state.events[{index}]", replay_findings))
+            break
+    if expected is not None and state != expected:
+        findings.append(_finding("state", "state-mismatch", "state is not the exact deterministic replay of its verified Results"))
+    return _state_validation(state, findings)
+
+
+def ingest_execution_result(frontend, state, plan, step_id, result, public_key_value):
+    """Advance one ready step from a complete signed Result; never execute it."""
+    state_check = verify_execution_state(frontend, state, plan, public_key_value)
+    if not state_check["valid"]:
+        return _state_validation(None, _prefixed("state", state_check["findings"]))
+    next_state, findings = _ingest_result(
+        frontend, state, plan, step_id, result, public_key_value,
+    )
+    return _state_validation(next_state, findings)

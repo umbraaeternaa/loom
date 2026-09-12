@@ -4152,16 +4152,30 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             verify_multi_action_receipt = lambda receipt, plan, results, key: multi_action_impl.verify_receipt(
                 multi_action_frontend, receipt, plan, results, key,
             )
+            build_multi_action_state = lambda plan: multi_action_impl.build_execution_state(
+                multi_action_frontend, plan,
+            )
+            ingest_multi_action_result = lambda state, plan, step_id, result, key: multi_action_impl.ingest_execution_result(
+                multi_action_frontend, state, plan, step_id, result, key,
+            )
+            verify_multi_action_state = lambda state, plan, key: multi_action_impl.verify_execution_state(
+                multi_action_frontend, state, plan, key,
+            )
         else:
             build_multi_action_plan = _loom.build_multi_action_plan_v0
             validate_multi_action_plan = _loom.validate_multi_action_plan_v0
             build_multi_action_receipt = _loom.build_multi_action_receipt_v0
             verify_multi_action_receipt = _loom.verify_multi_action_receipt_v0
+            build_multi_action_state = _loom.build_multi_action_execution_state_v0
+            ingest_multi_action_result = _loom.ingest_multi_action_result_v0
+            verify_multi_action_state = _loom.verify_multi_action_execution_state_v0
         multi_action_browser_boundary = (
             not is_browser_bundle
             or all(not hasattr(_loom, name) for name in (
                 "build_multi_action_plan_v0", "validate_multi_action_plan_v0",
                 "build_multi_action_receipt_v0", "verify_multi_action_receipt_v0",
+                "build_multi_action_execution_state_v0",
+                "ingest_multi_action_result_v0", "verify_multi_action_execution_state_v0",
             ))
         )
         multi_action_specs = [
@@ -4228,6 +4242,38 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         multi_action_single_plan = build_multi_action_plan([
             {"id": "run", "depends_on": [], "capsule": action_capsule},
         ])["plan"]
+        initial_multi_action_state_result = build_multi_action_state(multi_action_plan)
+        initial_multi_action_state = initial_multi_action_state_result["state"]
+        verified_initial_multi_action_state = verify_multi_action_state(
+            initial_multi_action_state, multi_action_plan, None,
+        )
+        tampered_initial_multi_action_state = json.loads(json.dumps(initial_multi_action_state))
+        tampered_initial_multi_action_state["ready"] = ["audit"]
+        tampered_initial_multi_action_state["state_sha256"] = _loom._binding_sha256({
+            key: value for key, value in tampered_initial_multi_action_state.items()
+            if key != "state_sha256"
+        })
+        rejected_initial_multi_action_state = verify_multi_action_state(
+            tampered_initial_multi_action_state, multi_action_plan, None,
+        )
+        malformed_initial_multi_action_state = json.loads(json.dumps(initial_multi_action_state))
+        malformed_initial_multi_action_state["events"] = None
+        malformed_initial_multi_action_state["state_sha256"] = _loom._binding_sha256({
+            key: value for key, value in malformed_initial_multi_action_state.items()
+            if key != "state_sha256"
+        })
+        rejected_malformed_multi_action_state = verify_multi_action_state(
+            malformed_initial_multi_action_state, multi_action_plan, None,
+        )
+        oversized_initial_multi_action_state = json.loads(json.dumps(initial_multi_action_state))
+        oversized_initial_multi_action_state["events"] = [None] * 193
+        oversized_initial_multi_action_state["state_sha256"] = _loom._binding_sha256({
+            key: value for key, value in oversized_initial_multi_action_state.items()
+            if key != "state_sha256"
+        })
+        rejected_oversized_multi_action_state = verify_multi_action_state(
+            oversized_initial_multi_action_state, multi_action_plan, None,
+        )
         multi_action_plan_ok = (
             multi_action_result["valid"] is True
             and multi_action_browser_boundary
@@ -4270,6 +4316,43 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         )
         ok += multi_action_plan_ok
         print(f"  {'ok  ' if multi_action_plan_ok else 'FAIL'} gate: Multi-Action Plan v0 closed DAG")
+        multi_action_state_genesis_ok = (
+            initial_multi_action_state_result["valid"] is True
+            and initial_multi_action_state_result["authorization"] == "none"
+            and initial_multi_action_state["schema"] == "loom-multi-action-execution-state/v0"
+            and initial_multi_action_state["revision"] == 0
+            and initial_multi_action_state["ready"] == ["compile"]
+            and initial_multi_action_state["running"] == []
+            and initial_multi_action_state["completed"] == []
+            and initial_multi_action_state["failed"] == []
+            and initial_multi_action_state["skipped"] == []
+            and initial_multi_action_state["events"] == []
+            and initial_multi_action_state["lifecycle"] == {
+                "schema": "loom-multi-action-execution-lifecycle/v0",
+                "terminal": False, "authorization": "none",
+                "accepts": "verified-action-result-only",
+                "host_actions_executed_by_state_machine": False,
+                "replay": "denied",
+            }
+            and verified_initial_multi_action_state == initial_multi_action_state_result
+            and rejected_initial_multi_action_state["valid"] is False
+            and any(
+                item["code"] == "state-mismatch"
+                for item in rejected_initial_multi_action_state["findings"]
+            )
+            and rejected_malformed_multi_action_state["valid"] is False
+            and any(
+                item["code"] == "expected-array"
+                for item in rejected_malformed_multi_action_state["findings"]
+            )
+            and rejected_oversized_multi_action_state["valid"] is False
+            and any(
+                item["code"] == "event-limit"
+                for item in rejected_oversized_multi_action_state["findings"]
+            )
+        )
+        ok += multi_action_state_genesis_ok
+        print(f"  {'ok  ' if multi_action_state_genesis_ok else 'FAIL'} gate: Multi-Action execution state genesis v0")
     except Exception as e:
         print(f"  FAIL Multi-Action Plan v0 contract: {e}")
     try:                                               # Exact Invocation Binding must close host intent without granting authority
@@ -7021,6 +7104,121 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             ))
         ok += multi_action_receipt_ok
         print(f"  {'ok  ' if multi_action_receipt_ok else 'FAIL'} gate: Multi-Action aggregate receipt v0")
+        multi_action_state_machine_ok = not execution_sandbox_available
+        multi_action_state_diagnostics = {}
+        if execution_sandbox_available and action_result_v0_ok:
+            single_state = build_multi_action_state(multi_action_single_plan)["state"]
+            completed_state_result = ingest_multi_action_result(
+                single_state, multi_action_single_plan, "run", action_result["result"], test_key,
+            )
+            completed_state = completed_state_result["state"]
+            verified_completed_state = verify_multi_action_state(
+                completed_state, multi_action_single_plan, test_key,
+            )
+            replayed_state_result = ingest_multi_action_result(
+                completed_state, multi_action_single_plan, "run", action_result["result"], test_key,
+            )
+            forged_state_result = ingest_multi_action_result(
+                single_state, multi_action_single_plan, "run", forged_result, test_key,
+            )
+            unknown_state_step = ingest_multi_action_result(
+                single_state, multi_action_single_plan, "other", action_result["result"], test_key,
+            )
+
+            failed_state = build_multi_action_state(stopped_multi_action_plan)["state"]
+            failed_state_result = ingest_multi_action_result(
+                failed_state, stopped_multi_action_plan, "first", timeout_result["result"], test_key,
+            )
+            failed_state = failed_state_result["state"]
+            verified_failed_state = verify_multi_action_state(
+                failed_state, stopped_multi_action_plan, test_key,
+            )
+
+            ordered_parent_state = build_multi_action_state(stopped_multi_action_plan)["state"]
+            ordered_parent_state = ingest_multi_action_result(
+                ordered_parent_state, stopped_multi_action_plan,
+                "first", action_result["result"], test_key,
+            )["state"]
+            rejected_early_child = ingest_multi_action_result(
+                ordered_parent_state, stopped_multi_action_plan,
+                "second", timeout_result["result"], test_key,
+            )
+
+            reused_state = build_multi_action_state(reused_result_plan)["state"]
+            reused_state = ingest_multi_action_result(
+                reused_state, reused_result_plan, "first", action_result["result"], test_key,
+            )["state"]
+            rejected_reused_state = ingest_multi_action_result(
+                reused_state, reused_result_plan, "second", action_result["result"], test_key,
+            )
+            tampered_completed_state = json.loads(json.dumps(completed_state))
+            tampered_completed_state["events"][0]["to_state"] = "completed"
+            tampered_completed_state["state_sha256"] = _loom._binding_sha256({
+                key: value for key, value in tampered_completed_state.items()
+                if key != "state_sha256"
+            })
+            rejected_tampered_state = verify_multi_action_state(
+                tampered_completed_state, multi_action_single_plan, test_key,
+            )
+
+            completed_step = completed_state["steps"][0]
+            failed_steps = {item["step_id"]: item for item in failed_state["steps"]}
+            multi_action_state_machine_ok = (
+                completed_state_result["valid"] is True
+                and completed_state["revision"] == 2
+                and completed_state["ready"] == []
+                and completed_state["running"] == []
+                and completed_state["completed"] == ["run"]
+                and completed_state["failed"] == []
+                and completed_state["skipped"] == []
+                and [item["kind"] for item in completed_state["events"]]
+                == ["execution-observed", "result-finalized"]
+                and completed_step["execution_sha256"] == action_result["result"]["execution_sha256"]
+                and completed_step["result_sha256"] == action_result["result_sha256"]
+                and completed_state["lifecycle"]["terminal"] is True
+                and completed_state["lifecycle"]["authorization"] == "none"
+                and completed_state["lifecycle"]["host_actions_executed_by_state_machine"] is False
+                and verified_completed_state == completed_state_result
+                and replayed_state_result["valid"] is False
+                and any(item["code"] == "invalid-state-transition" for item in replayed_state_result["findings"])
+                and forged_state_result["valid"] is False
+                and any(item["code"] == "invalid-signature" for item in forged_state_result["findings"])
+                and unknown_state_step["valid"] is False
+                and any(item["code"] == "unknown-step" for item in unknown_state_step["findings"])
+                and failed_state_result["valid"] is True
+                and failed_state["revision"] == 3
+                and failed_state["failed"] == ["first"]
+                and failed_state["skipped"] == ["second"]
+                and failed_steps["second"]["blocked_by"] == ["first"]
+                and [item["kind"] for item in failed_state["events"]]
+                == ["execution-observed", "result-finalized", "dependency-skipped"]
+                and failed_state["lifecycle"]["terminal"] is True
+                and verified_failed_state == failed_state_result
+                and rejected_early_child["valid"] is False
+                and any(item["code"] == "dependency-order-violation" for item in rejected_early_child["findings"])
+                and rejected_reused_state["valid"] is False
+                and any(item["code"] == "reused-result" for item in rejected_reused_state["findings"])
+                and rejected_tampered_state["valid"] is False
+                and any(item["code"] in {"state-hash-mismatch", "state-mismatch"} for item in rejected_tampered_state["findings"])
+            )
+            multi_action_state_diagnostics = {
+                "completed": completed_state_result,
+                "verified": verified_completed_state,
+                "replay": replayed_state_result,
+                "forged": forged_state_result,
+                "unknown": unknown_state_step,
+                "failed": failed_state_result,
+                "verified_failed": verified_failed_state,
+                "early_child": rejected_early_child,
+                "reused": rejected_reused_state,
+                "tampered": rejected_tampered_state,
+            }
+        if not multi_action_state_machine_ok:
+            print("       multi-action state diagnostics:", json.dumps(
+                multi_action_state_diagnostics, sort_keys=True,
+            ))
+        ok += multi_action_state_machine_ok
+        print(f"  {'ok  ' if multi_action_state_machine_ok else 'FAIL'} gate: Multi-Action execution state machine v0")
         action_attestation_v0_ok = True
         action_attestation_diagnostics = {}
         if execution_sandbox_available and action_result_v0_ok:
@@ -7998,7 +8196,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == (500 if is_browser_bundle else 515)
+            and about_json["citadel_checks"] == (500 if is_browser_bundle else 517)
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["wasm_abi_versions"] == ([1] if is_browser_bundle else [1, 2])
             and about_json["i31_bits"] == 31
@@ -8528,7 +8726,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 515/515 citadel checks" in quick
+            and "PASS -- 517/517 citadel checks" in quick
             and 'loom dogfood examples/dogfood_release_policy.loom "(main 3)"' in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
@@ -8639,7 +8837,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "515-multi-action-plan-v0")' in play
+            and 'bundleUrl.searchParams.set("v", "517-multi-action-state-v0")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -9261,7 +9459,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 515/515 citadel checks" in rdoc
+            and "PASS -- 517/517 citadel checks" in rdoc
             and "Dogfooding v1 evaluates one bounded first-order Pure LOOM policy" in rdoc
             and "Evidence-fed Dogfooding v2 replaces the manual quorum" in rdoc
             and "loom examples --format json" in rdoc
@@ -9327,7 +9525,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 162   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, Portable Execution Evidence Bundle v0, Dogfooding v1, Evidence-fed Dogfooding v2, Multi-Action Plan v0 and aggregate receipt v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, WASM direct/applyN type parity, and the WASM seam/resource frontier
+    total = len(CASES) + 164   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, Portable Execution Evidence Bundle v0, Dogfooding v1, Evidence-fed Dogfooding v2, Multi-Action Plan v0, aggregate receipt v0 and replayed execution state machine v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, WASM direct/applyN type parity, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

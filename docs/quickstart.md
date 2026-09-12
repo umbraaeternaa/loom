@@ -60,7 +60,7 @@ python3 loom.py about --format json
 The expected public baseline is:
 
 ```console
-PASS -- 515/515 citadel checks
+PASS -- 517/517 citadel checks
 ```
 
 The CLI help is also pinned:
@@ -118,6 +118,21 @@ plan = loom.build_multi_action_plan_v0([
 Each step still requires its own Invocation Binding, operator Approval, Claim,
 Mediation, Bounded Execution, and terminal Result. See
 [`multi_action_plan_v0.md`](multi_action_plan_v0.md).
+
+After those independently authorized actions return signed terminal Results,
+replay them into the plan's deterministic state:
+
+```python
+state = loom.build_multi_action_execution_state_v0(plan)["state"]
+state = loom.ingest_multi_action_result_v0(
+    state, plan, "compile", compile_result, operator_public_key,
+)["state"]
+loom.verify_multi_action_execution_state_v0(state, plan, operator_public_key)
+```
+
+This API verifies evidence and dependency transitions; it does not schedule or
+execute a host action. See
+[`multi_action_execution_state_v0.md`](multi_action_execution_state_v0.md).
 
 ## 4. See the trust gate
 
