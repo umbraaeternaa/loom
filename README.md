@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 519 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 521 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 519/519 citadel checks
+PASS — 521/521 citadel checks
 ```
 
 ## The idea in one screen
@@ -201,6 +201,11 @@ successful signed source Result's `stdout` or `stderr` digest equals the exact
 target Invocation Binding stdin digest, then emits a replay-verifiable
 resolution. It transports no bytes, runs no host action, and never lets a
 source approval authorize the target step.
+[`Multi-Action Byte Delivery Evidence v0`](docs/multi_action_byte_delivery_evidence_v0.md)
+then requires possession of the exact bounded canonical bytes and binds their
+digest and size to that signed chain. The evidence keeps the byte witness
+detached, executes no IO, grants no authority, and does not overclaim that a
+child process consumed the payload.
 
 [`WIT Component Boundary v0`](docs/wit_component_boundary_v0.md) begins the
 Component Model path without relabeling LOOM's tagged core-WASM ABI as a

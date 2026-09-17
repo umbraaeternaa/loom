@@ -60,7 +60,7 @@ python3 loom.py about --format json
 The expected public baseline is:
 
 ```console
-PASS -- 519/519 citadel checks
+PASS -- 521/521 citadel checks
 ```
 
 The CLI help is also pinned:
@@ -154,6 +154,26 @@ This only proves digest equality between signed terminal evidence and the
 already-bound target stdin. It neither transports the bytes nor authorizes or
 executes the target action. See
 [`multi_action_evidence_dataflow_v0.md`](multi_action_evidence_dataflow_v0.md).
+
+To prove possession of the exact bytes committed by both sides without storing
+the payload in the artifact:
+
+```python
+delivery = loom.build_multi_action_byte_delivery_evidence_v0(
+    resolution, dataflow, plan, {"test": test_invocation_binding},
+    delivered_bytes, operator_public_key,
+)["evidence"]
+loom.verify_multi_action_byte_delivery_evidence_v0(
+    delivery, resolution, dataflow, plan,
+    {"test": test_invocation_binding}, delivered_bytes,
+    operator_public_key,
+)
+```
+
+This detached byte witness proves exact digest and size equality. It still does
+not transport bytes, authorize the target, or claim that a process consumed
+them. See
+[`multi_action_byte_delivery_evidence_v0.md`](multi_action_byte_delivery_evidence_v0.md).
 
 This API verifies evidence and dependency transitions; it does not schedule or
 execute a host action. See

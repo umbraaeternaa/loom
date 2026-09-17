@@ -4174,6 +4174,12 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             verify_multi_action_dataflow_resolution = lambda resolution, dataflow, plan, bindings, key: multi_action_impl.verify_evidence_dataflow_resolution(
                 multi_action_frontend, resolution, dataflow, plan, bindings, key,
             )
+            build_multi_action_byte_delivery = lambda resolution, dataflow, plan, bindings, payload, key: multi_action_impl.build_byte_delivery_evidence(
+                multi_action_frontend, resolution, dataflow, plan, bindings, payload, key,
+            )
+            verify_multi_action_byte_delivery = lambda evidence, resolution, dataflow, plan, bindings, payload, key: multi_action_impl.verify_byte_delivery_evidence(
+                multi_action_frontend, evidence, resolution, dataflow, plan, bindings, payload, key,
+            )
             build_multi_action_dataflow = lambda plan, edges, bindings: multi_action_impl.build_evidence_dataflow(
                 multi_action_frontend, plan, edges, bindings,
             )
@@ -4198,6 +4204,8 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             validate_multi_action_dataflow = _loom.validate_multi_action_evidence_dataflow_v0
             resolve_multi_action_dataflow = _loom.resolve_multi_action_evidence_dataflow_v0
             verify_multi_action_dataflow_resolution = _loom.verify_multi_action_evidence_dataflow_resolution_v0
+            build_multi_action_byte_delivery = _loom.build_multi_action_byte_delivery_evidence_v0
+            verify_multi_action_byte_delivery = _loom.verify_multi_action_byte_delivery_evidence_v0
             build_multi_action_dataflow = _loom.build_multi_action_evidence_dataflow_v0
             validate_multi_action_dataflow = _loom.validate_multi_action_evidence_dataflow_v0
             resolve_multi_action_dataflow = _loom.resolve_multi_action_evidence_dataflow_v0
@@ -4213,6 +4221,8 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                 "validate_multi_action_evidence_dataflow_v0",
                 "resolve_multi_action_evidence_dataflow_v0",
                 "verify_multi_action_evidence_dataflow_resolution_v0",
+                "build_multi_action_byte_delivery_evidence_v0",
+                "verify_multi_action_byte_delivery_evidence_v0",
             ))
         )
         multi_action_specs = [
@@ -7258,6 +7268,8 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         print(f"  {'ok  ' if multi_action_state_machine_ok else 'FAIL'} gate: Multi-Action execution state machine v0")
         multi_action_dataflow_ok = not execution_sandbox_available
         multi_action_resolution_ok = not execution_sandbox_available
+        multi_action_byte_delivery_ok = not execution_sandbox_available
+        multi_action_byte_delivery_adversarial_ok = not execution_sandbox_available
         multi_action_dataflow_diagnostics = {}
         if execution_sandbox_available and action_result_v0_ok:
             dataflow_plan = build_multi_action_plan([
@@ -7386,6 +7398,61 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                 extended_resolution, dataflow, dataflow_plan, dataflow_bindings, test_key,
             )
 
+            delivery_bytes = canonical(semantics_input).encode("utf-8")
+            delivery_result = build_multi_action_byte_delivery(
+                resolution, dataflow, dataflow_plan, dataflow_bindings,
+                delivery_bytes, test_key,
+            )
+            delivery = delivery_result["evidence"]
+            verified_delivery = verify_multi_action_byte_delivery(
+                delivery, resolution, dataflow, dataflow_plan, dataflow_bindings,
+                delivery_bytes, test_key,
+            )
+            wrong_delivery_bytes = canonical({
+                "action": "read",
+                "manifest_sha256": semantics_input["manifest_sha256"],
+            }).encode("utf-8")
+            rejected_wrong_delivery = build_multi_action_byte_delivery(
+                resolution, dataflow, dataflow_plan, dataflow_bindings,
+                wrong_delivery_bytes, test_key,
+            )
+            rejected_oversized_delivery = build_multi_action_byte_delivery(
+                resolution, dataflow, dataflow_plan, dataflow_bindings,
+                b'"' + (b"a" * (1024 * 1024)) + b'"', test_key,
+            )
+            rejected_noncanonical_delivery = build_multi_action_byte_delivery(
+                resolution, dataflow, dataflow_plan, dataflow_bindings,
+                b'{"action": "process"}', test_key,
+            )
+            rejected_non_bytes_delivery = build_multi_action_byte_delivery(
+                resolution, dataflow, dataflow_plan, dataflow_bindings,
+                canonical(semantics_input), test_key,
+            )
+            rejected_invalid_utf8_delivery = build_multi_action_byte_delivery(
+                resolution, dataflow, dataflow_plan, dataflow_bindings,
+                b'"\xff"', test_key,
+            )
+            rejected_duplicate_key_delivery = build_multi_action_byte_delivery(
+                resolution, dataflow, dataflow_plan, dataflow_bindings,
+                b'{"action":"process","action":"process"}', test_key,
+            )
+            tampered_delivery = json.loads(json.dumps(delivery))
+            tampered_delivery["proof"]["digests_equal"] = False
+            tampered_delivery["evidence_sha256"] = _loom._binding_sha256({
+                key: value for key, value in tampered_delivery.items()
+                if key != "evidence_sha256"
+            })
+            rejected_tampered_delivery = verify_multi_action_byte_delivery(
+                tampered_delivery, resolution, dataflow, dataflow_plan,
+                dataflow_bindings, delivery_bytes, test_key,
+            )
+            extended_delivery = json.loads(json.dumps(delivery))
+            extended_delivery["extension"] = "unsigned"
+            rejected_extended_delivery = verify_multi_action_byte_delivery(
+                extended_delivery, resolution, dataflow, dataflow_plan,
+                dataflow_bindings, delivery_bytes, test_key,
+            )
+
             multi_action_dataflow_ok = (
                 dataflow_result["valid"] is True
                 and dataflow_result["authorization"] == "none"
@@ -7446,6 +7513,53 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                 and not rejected_extended_resolution["valid"]
                 and any(item["code"] == "unknown-field" for item in rejected_extended_resolution["findings"])
             )
+            multi_action_byte_delivery_ok = (
+                delivery_result["valid"] is True
+                and delivery_result["authorization"] == "none"
+                and delivery["schema"] == "loom-multi-action-byte-delivery-evidence/v0"
+                and delivery["links"]["resolution_sha256"] == resolution["resolution_sha256"]
+                and delivery["links"]["source_result_sha256"] == action_result["result_sha256"]
+                and delivery["links"]["target_binding_sha256"] == cat_binding["binding_sha256"]
+                and delivery["witness"] == {
+                    "schema": "loom-multi-action-byte-witness/v0",
+                    "encoding": "canonical-json/utf-8", "payload_embedded": False,
+                    "payload_sha256": hashlib.sha256(delivery_bytes).hexdigest(),
+                    "size_bytes": len(delivery_bytes),
+                    "maximum_size_bytes": 1024 * 1024,
+                }
+                and delivery["proof"]["digests_equal"] is True
+                and delivery["proof"]["sizes_equal"] is True
+                and delivery["lifecycle"] == {
+                    "schema": "loom-multi-action-byte-delivery-lifecycle/v0",
+                    "evidence_kind": "detached-byte-handoff",
+                    "authorization": "none", "host_actions_executed": False,
+                    "host_byte_transport": False, "process_delivery_proven": False,
+                    "payload_embedded": False, "byte_custody": "external",
+                    "byte_witness_required_for_replay": True,
+                    "approval_inheritance": "forbidden",
+                    "target_approval_required": True,
+                }
+                and canonical(semantics_input) not in json.dumps(delivery, sort_keys=True)
+                and verified_delivery == delivery_result
+            )
+            multi_action_byte_delivery_adversarial_ok = (
+                not rejected_wrong_delivery["valid"]
+                and any(item["code"] == "source-payload-mismatch" for item in rejected_wrong_delivery["findings"])
+                and not rejected_oversized_delivery["valid"]
+                and any(item["code"] == "byte-limit-exceeded" for item in rejected_oversized_delivery["findings"])
+                and not rejected_noncanonical_delivery["valid"]
+                and any(item["code"] == "non-canonical-json" for item in rejected_noncanonical_delivery["findings"])
+                and not rejected_non_bytes_delivery["valid"]
+                and any(item["code"] == "expected-bytes" for item in rejected_non_bytes_delivery["findings"])
+                and not rejected_invalid_utf8_delivery["valid"]
+                and any(item["code"] == "invalid-utf8" for item in rejected_invalid_utf8_delivery["findings"])
+                and not rejected_duplicate_key_delivery["valid"]
+                and any(item["code"] == "invalid-canonical-json" for item in rejected_duplicate_key_delivery["findings"])
+                and not rejected_tampered_delivery["valid"]
+                and any(item["code"] == "evidence-mismatch" for item in rejected_tampered_delivery["findings"])
+                and not rejected_extended_delivery["valid"]
+                and any(item["code"] == "unknown-field" for item in rejected_extended_delivery["findings"])
+            )
             multi_action_dataflow_diagnostics = {
                 "built": dataflow_result, "verified": verified_dataflow,
                 "missing_binding": missing_dataflow_binding,
@@ -7463,8 +7577,22 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                 "unknown_edge": unknown_edge_resolution,
                 "tampered_resolution": rejected_tampered_resolution,
                 "extended_resolution": rejected_extended_resolution,
+                "delivery": delivery_result,
+                "verified_delivery": verified_delivery,
+                "wrong_delivery": rejected_wrong_delivery,
+                "oversized_delivery": rejected_oversized_delivery,
+                "noncanonical_delivery": rejected_noncanonical_delivery,
+                "non_bytes_delivery": rejected_non_bytes_delivery,
+                "invalid_utf8_delivery": rejected_invalid_utf8_delivery,
+                "duplicate_key_delivery": rejected_duplicate_key_delivery,
+                "tampered_delivery": rejected_tampered_delivery,
+                "extended_delivery": rejected_extended_delivery,
             }
-        if not (multi_action_dataflow_ok and multi_action_resolution_ok):
+        if not (
+            multi_action_dataflow_ok and multi_action_resolution_ok
+            and multi_action_byte_delivery_ok
+            and multi_action_byte_delivery_adversarial_ok
+        ):
             print("       multi-action dataflow diagnostics:", json.dumps(
                 multi_action_dataflow_diagnostics, sort_keys=True,
             ))
@@ -7472,6 +7600,10 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         print(f"  {'ok  ' if multi_action_dataflow_ok else 'FAIL'} gate: Multi-Action Evidence Dataflow v0")
         ok += multi_action_resolution_ok
         print(f"  {'ok  ' if multi_action_resolution_ok else 'FAIL'} gate: Multi-Action Evidence Dataflow resolution v0")
+        ok += multi_action_byte_delivery_ok
+        print(f"  {'ok  ' if multi_action_byte_delivery_ok else 'FAIL'} gate: Multi-Action Byte Delivery Evidence v0")
+        ok += multi_action_byte_delivery_adversarial_ok
+        print(f"  {'ok  ' if multi_action_byte_delivery_adversarial_ok else 'FAIL'} gate: Multi-Action Byte Delivery adversarial replay v0")
         action_attestation_v0_ok = True
         action_attestation_diagnostics = {}
         if execution_sandbox_available and action_result_v0_ok:
@@ -8449,7 +8581,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == (500 if is_browser_bundle else 519)
+            and about_json["citadel_checks"] == (500 if is_browser_bundle else 521)
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["wasm_abi_versions"] == ([1] if is_browser_bundle else [1, 2])
             and about_json["i31_bits"] == 31
@@ -8979,7 +9111,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 519/519 citadel checks" in quick
+            and "PASS -- 521/521 citadel checks" in quick
             and 'loom dogfood examples/dogfood_release_policy.loom "(main 3)"' in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
@@ -9090,7 +9222,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "519-multi-action-dataflow-v0")' in play
+            and 'bundleUrl.searchParams.set("v", "521-byte-delivery-evidence-v0")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -9695,6 +9827,8 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "`loom_recursion.py` | shared named-call graph, recursive-SCC edges, static descent certificates, and quantitative recurrence metadata" in mbdoc
             and "Multi-Action Evidence Dataflow v0" in mbdoc
             and "It transports no bytes" in mbdoc
+            and "Multi-Action Byte Delivery Evidence v0" in mbdoc
+            and "detached byte witness" in mbdoc
         )
         ok += module_boundary_doc_ok
         print(f"  {'ok  ' if module_boundary_doc_ok else 'FAIL'} docs: module boundaries pinned")
@@ -9714,7 +9848,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 519/519 citadel checks" in rdoc
+            and "PASS -- 521/521 citadel checks" in rdoc
             and "Dogfooding v1 evaluates one bounded first-order Pure LOOM policy" in rdoc
             and "Evidence-fed Dogfooding v2 replaces the manual quorum" in rdoc
             and "loom examples --format json" in rdoc
@@ -9729,7 +9863,8 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "Action Capsule Result v0 closes the one-use host lifecycle" in stable_words
             and "Action Result Attestation v0 composes that terminal Result" in stable_words
             and "Multi-Action Evidence Dataflow v0 declares direct Result-to-stdin digest edges" in stable_words
-            and "live executable scheduling, byte transport" in bounded_words
+            and "Multi-Action Byte Delivery Evidence v0 binds a detached byte witness" in stable_words
+            and "live executable scheduling, byte-counted process delivery, transport" in bounded_words
             and "terminal Action Capsule Result v0 remain future contracts" not in rdoc_words
             and "Receipt v4 remain future contracts" not in rdoc_words
             and "does not magically confine arbitrary external tools" in rdoc_words
@@ -9782,7 +9917,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 166   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, Portable Execution Evidence Bundle v0, Dogfooding v1, Evidence-fed Dogfooding v2, Multi-Action Plan v0, aggregate receipt v0, replayed execution state machine v0, and Evidence Dataflow v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, WASM direct/applyN type parity, and the WASM seam/resource frontier
+    total = len(CASES) + 168   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, Portable Execution Evidence Bundle v0, Dogfooding v1, Evidence-fed Dogfooding v2, Multi-Action Plan v0, aggregate receipt v0, replayed execution state machine v0, Evidence Dataflow v0, and detached Byte Delivery Evidence v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, WASM direct/applyN type parity, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

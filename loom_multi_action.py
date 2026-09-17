@@ -40,10 +40,17 @@ DATAFLOW_RESULT_EVIDENCE_SCHEMA = "loom-multi-action-dataflow-result-evidence/v0
 DATAFLOW_TARGET_INPUT_SCHEMA = "loom-multi-action-dataflow-target-input/v0"
 DATAFLOW_PROOF_SCHEMA = "loom-multi-action-dataflow-proof/v0"
 DATAFLOW_RESOLUTION_LIFECYCLE_SCHEMA = "loom-multi-action-dataflow-resolution-lifecycle/v0"
+BYTE_DELIVERY_SCHEMA = "loom-multi-action-byte-delivery-evidence/v0"
+BYTE_DELIVERY_VALIDATION_SCHEMA = "loom-multi-action-byte-delivery-evidence-validation/v0"
+BYTE_DELIVERY_LINKS_SCHEMA = "loom-multi-action-byte-delivery-links/v0"
+BYTE_DELIVERY_WITNESS_SCHEMA = "loom-multi-action-byte-witness/v0"
+BYTE_DELIVERY_PROOF_SCHEMA = "loom-multi-action-byte-delivery-proof/v0"
+BYTE_DELIVERY_LIFECYCLE_SCHEMA = "loom-multi-action-byte-delivery-lifecycle/v0"
 
 MAX_STEPS = 64
 MAX_DEPENDENCIES_PER_STEP = 64
 MAX_EVENTS = MAX_STEPS * 3
+MAX_DELIVERY_BYTES = 1024 * 1024
 _STEP_ID = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 
 
@@ -147,6 +154,18 @@ def _dataflow_resolution_validation(resolution, findings):
         "authorization": "none",
         "resolution": resolution if not findings else None,
         "resolution_sha256": resolution.get("resolution_sha256") if not findings else None,
+        "findings": findings,
+    }
+
+
+def _byte_delivery_validation(evidence, findings):
+    return {
+        "schema": BYTE_DELIVERY_VALIDATION_SCHEMA,
+        "valid": not findings,
+        "advisory": True,
+        "authorization": "none",
+        "evidence": evidence if not findings else None,
+        "evidence_sha256": evidence.get("evidence_sha256") if not findings else None,
         "findings": findings,
     }
 
@@ -1132,3 +1151,207 @@ def verify_evidence_dataflow_resolution(
             "resolution is not the exact replay of its signed Result and declared target input",
         ))
     return _dataflow_resolution_validation(resolution, findings)
+
+
+def _delivery_byte_findings(delivered_bytes):
+    if type(delivered_bytes) is not bytes:
+        return [_finding(
+            "delivered_bytes", "expected-bytes",
+            "delivered_bytes must be one exact immutable bytes value",
+        )]
+    if len(delivered_bytes) > MAX_DELIVERY_BYTES:
+        return [_finding(
+            "delivered_bytes", "byte-limit-exceeded",
+            "a byte-delivery witness may contain at most 1048576 bytes",
+        )]
+    try:
+        text = delivered_bytes.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return [_finding(
+            "delivered_bytes", "invalid-utf8",
+            "the target stdin contract requires exact UTF-8 bytes",
+        )]
+
+    def no_duplicate_keys(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("duplicate JSON object key")
+            value[key] = item
+        return value
+
+    def reject_constant(value):
+        raise ValueError("non-finite JSON number: " + value)
+
+    try:
+        parsed = json.loads(
+            text, object_pairs_hook=no_duplicate_keys, parse_constant=reject_constant,
+        )
+        canonical = _canonical(parsed).encode("utf-8")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return [_finding(
+            "delivered_bytes", "invalid-canonical-json",
+            "delivered bytes must decode as closed canonical JSON UTF-8",
+        )]
+    if canonical != delivered_bytes:
+        return [_finding(
+            "delivered_bytes", "non-canonical-json",
+            "delivered bytes must be the exact canonical JSON UTF-8 representation",
+        )]
+    return []
+
+
+def build_byte_delivery_evidence(
+    frontend, resolution, dataflow, plan, target_bindings_by_step,
+    delivered_bytes, public_key_value,
+):
+    """Bind a detached exact byte witness to one resolution without moving it."""
+    resolution_check = verify_evidence_dataflow_resolution(
+        frontend, resolution, dataflow, plan, target_bindings_by_step,
+        public_key_value,
+    )
+    findings = []
+    if not resolution_check["valid"]:
+        findings.extend(_prefixed("resolution", resolution_check["findings"]))
+    findings.extend(_delivery_byte_findings(delivered_bytes))
+    if findings:
+        return _byte_delivery_validation(None, findings)
+
+    payload_sha256 = hashlib.sha256(delivered_bytes).hexdigest()
+    source = resolution["source_evidence"]
+    target = resolution["target_input"]
+    if payload_sha256 != source["payload_sha256"]:
+        findings.append(_finding(
+            "delivered_bytes", "source-payload-mismatch",
+            "byte witness SHA-256 does not equal the signed source output digest",
+        ))
+    if payload_sha256 != target["payload_sha256"]:
+        findings.append(_finding(
+            "delivered_bytes", "target-payload-mismatch",
+            "byte witness SHA-256 does not equal the exact target stdin digest",
+        ))
+    if len(delivered_bytes) != source["size_bytes"]:
+        findings.append(_finding(
+            "delivered_bytes", "source-size-mismatch",
+            "byte witness length does not equal the signed source output size",
+        ))
+    if findings:
+        return _byte_delivery_validation(None, findings)
+
+    body = {
+        "schema": BYTE_DELIVERY_SCHEMA,
+        "advisory": True,
+        "authorization": "none",
+        "links": {
+            "schema": BYTE_DELIVERY_LINKS_SCHEMA,
+            "resolution_sha256": resolution["resolution_sha256"],
+            "dataflow_sha256": resolution["dataflow_sha256"],
+            "plan_sha256": resolution["plan_sha256"],
+            "edge_sha256": resolution["edge_sha256"],
+            "source_result_sha256": source["result_sha256"],
+            "source_step_id": source["step_id"],
+            "target_step_id": target["step_id"],
+            "target_binding_sha256": target["binding_sha256"],
+            "target_invocation_sha256": target["invocation_sha256"],
+            "target_approval_boundary_sha256": target["approval_boundary_sha256"],
+        },
+        "witness": {
+            "schema": BYTE_DELIVERY_WITNESS_SCHEMA,
+            "encoding": target["encoding"],
+            "payload_embedded": False,
+            "payload_sha256": payload_sha256,
+            "size_bytes": len(delivered_bytes),
+            "maximum_size_bytes": MAX_DELIVERY_BYTES,
+        },
+        "proof": {
+            "schema": BYTE_DELIVERY_PROOF_SCHEMA,
+            "algorithm": "sha256",
+            "source_payload_sha256": source["payload_sha256"],
+            "target_payload_sha256": target["payload_sha256"],
+            "witness_payload_sha256": payload_sha256,
+            "digests_equal": True,
+            "source_size_bytes": source["size_bytes"],
+            "witness_size_bytes": len(delivered_bytes),
+            "sizes_equal": True,
+        },
+        "lifecycle": {
+            "schema": BYTE_DELIVERY_LIFECYCLE_SCHEMA,
+            "evidence_kind": "detached-byte-handoff",
+            "authorization": "none",
+            "host_actions_executed": False,
+            "host_byte_transport": False,
+            "process_delivery_proven": False,
+            "payload_embedded": False,
+            "byte_custody": "external",
+            "byte_witness_required_for_replay": True,
+            "approval_inheritance": "forbidden",
+            "target_approval_required": True,
+        },
+    }
+    body["evidence_sha256"] = _sha256(body)
+    return _byte_delivery_validation(body, [])
+
+
+def verify_byte_delivery_evidence(
+    frontend, evidence, resolution, dataflow, plan, target_bindings_by_step,
+    delivered_bytes, public_key_value,
+):
+    """Rebuild byte-delivery evidence from the detached witness and signed chain."""
+    outer_keys = {
+        "schema", "advisory", "authorization", "links", "witness", "proof",
+        "lifecycle", "evidence_sha256",
+    }
+    findings = _closed(evidence, "evidence", outer_keys)
+    if not isinstance(evidence, dict):
+        return _byte_delivery_validation(None, findings)
+    if evidence.get("schema") != BYTE_DELIVERY_SCHEMA:
+        findings.append(_finding(
+            "evidence.schema", "unsupported-schema", "expected " + BYTE_DELIVERY_SCHEMA,
+        ))
+    if evidence.get("advisory") is not True or evidence.get("authorization") != "none":
+        findings.append(_finding(
+            "evidence.authorization", "authorization-escalation",
+            "byte-delivery evidence must remain advisory and non-authorizing",
+        ))
+    if not _is_sha256(evidence.get("evidence_sha256")):
+        findings.append(_finding(
+            "evidence.evidence_sha256", "expected-sha256",
+            "evidence_sha256 must be lowercase SHA-256",
+        ))
+    nested = (
+        ("links", {
+            "schema", "resolution_sha256", "dataflow_sha256", "plan_sha256",
+            "edge_sha256", "source_result_sha256", "source_step_id",
+            "target_step_id", "target_binding_sha256", "target_invocation_sha256",
+            "target_approval_boundary_sha256",
+        }),
+        ("witness", {
+            "schema", "encoding", "payload_embedded", "payload_sha256",
+            "size_bytes", "maximum_size_bytes",
+        }),
+        ("proof", {
+            "schema", "algorithm", "source_payload_sha256", "target_payload_sha256",
+            "witness_payload_sha256", "digests_equal", "source_size_bytes",
+            "witness_size_bytes", "sizes_equal",
+        }),
+        ("lifecycle", {
+            "schema", "evidence_kind", "authorization", "host_actions_executed",
+            "host_byte_transport", "process_delivery_proven", "payload_embedded",
+            "byte_custody", "byte_witness_required_for_replay",
+            "approval_inheritance", "target_approval_required",
+        }),
+    )
+    for name, keys in nested:
+        findings.extend(_closed(evidence.get(name), "evidence." + name, keys))
+    expected = build_byte_delivery_evidence(
+        frontend, resolution, dataflow, plan, target_bindings_by_step,
+        delivered_bytes, public_key_value,
+    )
+    if not expected["valid"]:
+        findings.extend(_prefixed("evidence", expected["findings"]))
+    elif evidence != expected["evidence"]:
+        findings.append(_finding(
+            "evidence", "evidence-mismatch",
+            "byte-delivery evidence is not the exact replay of its detached byte witness and signed chain",
+        ))
+    return _byte_delivery_validation(evidence, findings)

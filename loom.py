@@ -979,7 +979,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
     emit_wat,
     LoomError,
     metadata={
-        "citadel_checks": 519,
+        "citadel_checks": 521,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "wasm_abi_versions": [_WASM_ABI_VERSION, _WASM_ABI_V2_VERSION],
         "i31_bits": INT_BITS,
@@ -5053,6 +5053,28 @@ def verify_multi_action_evidence_dataflow_resolution_v0(
     return _loom_multi_action.verify_evidence_dataflow_resolution(
         _MULTI_ACTION_FRONTEND, resolution, dataflow, plan,
         target_bindings_by_step, public_key_value,
+    )
+
+
+def build_multi_action_byte_delivery_evidence_v0(
+    resolution, dataflow, plan, target_bindings_by_step,
+    delivered_bytes, public_key_value,
+):
+    """Bind one detached exact byte witness to a resolved dataflow edge."""
+    return _loom_multi_action.build_byte_delivery_evidence(
+        _MULTI_ACTION_FRONTEND, resolution, dataflow, plan,
+        target_bindings_by_step, delivered_bytes, public_key_value,
+    )
+
+
+def verify_multi_action_byte_delivery_evidence_v0(
+    evidence, resolution, dataflow, plan, target_bindings_by_step,
+    delivered_bytes, public_key_value,
+):
+    """Replay byte-delivery evidence from its detached bytes and signed chain."""
+    return _loom_multi_action.verify_byte_delivery_evidence(
+        _MULTI_ACTION_FRONTEND, evidence, resolution, dataflow, plan,
+        target_bindings_by_step, delivered_bytes, public_key_value,
     )
 
 
