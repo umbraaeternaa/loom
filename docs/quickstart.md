@@ -60,7 +60,7 @@ python3 loom.py about --format json
 The expected public baseline is:
 
 ```console
-PASS -- 522/522 citadel checks
+PASS -- 523/523 citadel checks
 ```
 
 The portable Windows core harness can also be exercised without making a
@@ -68,10 +68,15 @@ Windows certification claim:
 
 ```console
 python3 tools/windows_core_conformance.py --self-test
+python3 tools/windows_component_conformance.py --self-test
 ```
 
 Only the pinned `verify-windows-core` CI job may emit the revision-bound
 Windows Core Conformance v0 witness.
+
+The second command runs the real Pure/effectful Component and reproducible
+release path with local pinned tools. It is non-certifying outside the pinned
+`verify-windows-component` job and emits no Windows witness.
 
 The CLI help is also pinned:
 

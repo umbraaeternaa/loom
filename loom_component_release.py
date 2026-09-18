@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -40,8 +41,12 @@ CARGO_RELEASE = "1.93.0"
 CARGO_COMMIT = "083ac5135f967fd9dc906ab057a2315861c7a80d"
 RUSTC_RELEASE = "1.93.0"
 RUSTC_COMMIT = "254b59607d4417e9dffbc307138ae5c86280fe4c"
-SUPPORTED_HOSTS = frozenset(("aarch64-apple-darwin", "x86_64-unknown-linux-gnu"))
-FEDERATION_HOSTS = tuple(sorted(SUPPORTED_HOSTS))
+REPRODUCIBILITY_HOSTS = frozenset((
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+))
+FEDERATION_HOSTS = ("aarch64-apple-darwin", "x86_64-unknown-linux-gnu")
 _RELEASE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -162,7 +167,7 @@ def _verbose_identity(path, label, release, commit):
     if fields.get("commit-hash") != commit:
         raise ValueError(f"{label} commit mismatch")
     host = fields.get("host")
-    if host not in SUPPORTED_HOSTS:
+    if host not in REPRODUCIBILITY_HOSTS:
         raise ValueError(f"{label} host is outside the closed release contract")
     return {
         "version": text,
@@ -173,15 +178,43 @@ def _verbose_identity(path, label, release, commit):
     }, str(resolved)
 
 
-def _linker_identity():
-    linker = _executable("/usr/bin/cc", "linker")
-    result = _run([str(linker), "--version"])
-    if result.returncode:
-        raise ValueError("linker version probe failed")
+def _linker_identity(host):
+    if host == "x86_64-pc-windows-msvc":
+        candidate = os.environ.get("LOOM_WINDOWS_LINKER") or shutil.which("link.exe")
+        if not candidate:
+            raise ValueError("MSVC link.exe is absent from the Windows build environment")
+        linker = _executable(candidate, "linker")
+        result = _run([str(linker), "/?"])
+    else:
+        linker = _executable("/usr/bin/cc", "linker")
+        result = _run([str(linker), "--version"])
+        if result.returncode:
+            raise ValueError("linker version probe failed")
     version = (result.stdout + result.stderr).decode("utf-8", "strict").strip()
     if not version:
         raise ValueError("linker version probe returned no identity")
     return {"version": version, "sha256": _sha256(linker.read_bytes())}, str(linker)
+
+
+def _build_path(rustc, host):
+    rust_bin = str(Path(rustc).parent)
+    if host == "x86_64-pc-windows-msvc":
+        inherited = os.environ.get("PATH", "")
+        return rust_bin + (os.pathsep + inherited if inherited else "")
+    return rust_bin + os.pathsep + "/usr/bin:/bin"
+
+
+def _windows_toolchain_environment(host):
+    if host != "x86_64-pc-windows-msvc":
+        return {}
+    inherited = {}
+    for key in ("COMSPEC", "INCLUDE", "LIB", "LIBPATH", "PATHEXT", "SystemRoot"):
+        value = os.environ.get(key)
+        if value:
+            inherited[key] = value
+    if "SystemRoot" not in inherited:
+        raise ValueError("Windows SystemRoot is absent from the MSVC build environment")
+    return inherited
 
 
 def _source_tree_identity(root):
@@ -253,10 +286,13 @@ def _dependency_snapshot(source_root, cargo_home, cargo, rustc, host):
             "HOME": raw_tmp,
             "LANG": "C",
             "LC_ALL": "C",
-            "PATH": str(Path(rustc).parent) + os.pathsep + "/usr/bin:/bin",
+            "PATH": _build_path(rustc, host),
             "RUSTC": rustc,
+            "TEMP": raw_tmp,
+            "TMP": raw_tmp,
             "TMPDIR": raw_tmp,
         }
+        metadata_env.update(_windows_toolchain_environment(host))
         metadata_result = _run([
             cargo, "metadata", "--offline", "--locked", "--format-version", "1",
             "--filter-platform", host,
@@ -359,22 +395,43 @@ def _link_metadata_mode(host):
 
 
 def _build_environment(cargo_home, rustc, linker, host, home, tmpdir):
-    return {
+    env = {
         "CARGO_HOME": str(Path(cargo_home).resolve(strict=True)),
         "CARGO_INCREMENTAL": "0",
         "HOME": str(home),
         "LANG": "C",
         "LC_ALL": "C",
-        "PATH": str(Path(rustc).parent) + os.pathsep + "/usr/bin:/bin",
+        "PATH": _build_path(rustc, host),
         "RUSTC": rustc,
-        "RUSTFLAGS": (
-            "-Clinker=" + linker
-            + " --remap-path-prefix=" + str(home.parent.resolve(strict=True))
-            + "=/loom-release-build"
-        ),
         "SOURCE_DATE_EPOCH": "0",
+        "TEMP": str(tmpdir),
+        "TMP": str(tmpdir),
         "TMPDIR": str(tmpdir),
     }
+    flags = (
+        "-Clinker=" + linker,
+        "--remap-path-prefix=" + str(home.parent.resolve(strict=True))
+        + "=/loom-release-build",
+    )
+    if host == "x86_64-pc-windows-msvc":
+        env["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join(flags)
+        env["USERPROFILE"] = str(home)
+        env.update(_windows_toolchain_environment(host))
+    else:
+        env["RUSTFLAGS"] = " ".join(flags)
+    return env
+
+
+def _bind_registry(source, target, host):
+    source = Path(source).resolve(strict=True)
+    if host != "x86_64-pc-windows-msvc":
+        target.symlink_to(source, target_is_directory=True)
+        return
+    comspec = os.environ.get("COMSPEC", "cmd.exe")
+    result = _run([comspec, "/d", "/s", "/c", "mklink", "/J", str(target), str(source)])
+    if result.returncode or not target.is_dir():
+        detail = (result.stdout + result.stderr).decode("utf-8", "replace").strip()
+        raise ValueError("cannot create isolated Cargo registry junction: " + detail)
 
 
 def _clean_builder(cargo, rustc, linker, host, cargo_home, source_root, target_root, home, tmpdir, workdir):
@@ -436,7 +493,7 @@ def _static_reproducibility(evidence, component_bytes):
             or toolchain["rustc"].get("release") != RUSTC_RELEASE
             or toolchain["rustc"].get("commit") != RUSTC_COMMIT
             or toolchain["cargo"].get("host") != toolchain["rustc"].get("host")
-            or toolchain["rustc"].get("host") not in SUPPORTED_HOSTS
+            or toolchain["rustc"].get("host") not in REPRODUCIBILITY_HOSTS
         ):
             findings.append(_finding("evidence.toolchain", "unsupported-toolchain", "Cargo/rustc release, commit, or host is outside v0"))
         for label in ("linker", "build_wasm_tools", "verify_wasm_tools", "wasmtime"):
@@ -559,7 +616,7 @@ def build_component_release_reproducibility_v0(
         rustc_id, rustc = _verbose_identity(
             rustc_executable, "rustc", RUSTC_RELEASE, RUSTC_COMMIT,
         )
-        linker_id, linker = _linker_identity()
+        linker_id, linker = _linker_identity(rustc_id["host"])
         if cargo_id["host"] != rustc_id["host"]:
             raise ValueError("Cargo and rustc host identities differ")
         dependencies = _dependency_snapshot(
@@ -573,8 +630,9 @@ def build_component_release_reproducibility_v0(
             workdir = tmp / "work"
             for path in (isolated_cargo, isolated_home, isolated_tmp, workdir):
                 path.mkdir()
-            (isolated_cargo / "registry").symlink_to(
-                Path(cargo_home).resolve(strict=True) / "registry", target_is_directory=True,
+            _bind_registry(
+                Path(cargo_home).resolve(strict=True) / "registry",
+                isolated_cargo / "registry", rustc_id["host"],
             )
             builder_a, builder_a_path = _clean_builder(
                 cargo, rustc, linker, rustc_id["host"], isolated_cargo, source_root, tmp / "target-a",
@@ -996,7 +1054,7 @@ def _strict_platform_attestation(
             for finding in findings
         ]
     host = evidence["toolchain"]["rustc"]["host"]
-    if evidence["toolchain"]["cargo"]["host"] != host or host not in SUPPORTED_HOSTS:
+    if evidence["toolchain"]["cargo"]["host"] != host or host not in FEDERATION_HOSTS:
         return None, [_finding(
             path + ".evidence.toolchain", "unsupported-platform-host",
             "platform attestation host is outside the closed federation host set",

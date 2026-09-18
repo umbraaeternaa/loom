@@ -57,6 +57,7 @@ MULTI_ACTION_DATAFLOW_DOC = ROOT / "docs" / "multi_action_evidence_dataflow_v0.m
 MULTI_ACTION_BYTE_DELIVERY_DOC = ROOT / "docs" / "multi_action_byte_delivery_evidence_v0.md"
 RELEASE_READINESS_DOC = ROOT / "docs" / "release_readiness.md"
 WINDOWS_CORE_DOC = ROOT / "docs" / "windows_core_conformance_v0.md"
+WINDOWS_COMPONENT_DOC = ROOT / "docs" / "windows_component_conformance_v0.md"
 WASM_ARTIFACT_DOC = ROOT / "docs" / "gate_wasm_artifact_v1.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
 
@@ -65,7 +66,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "522-windows-core-conformance-v0")',
+        'bundleUrl.searchParams.set("v", "523-windows-component-conformance-v0")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -167,8 +168,8 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "522 self-verifying checks",
-        ">522</div>",
+        "523 self-verifying checks",
+        ">523</div>",
     )
     forbidden = (
         "521 self-verifying checks",
@@ -1112,7 +1113,7 @@ def _check_multi_action_plan_v0() -> None:
         if needle not in delivery_words:
             raise SystemExit("docs parity: Multi-Action byte-delivery contract lost marker: " + needle)
     readiness = RELEASE_READINESS_DOC.read_text()
-    if "`citadel_checks: 522`" not in readiness or "`citadel_checks: 521`" in readiness:
+    if "`citadel_checks: 523`" not in readiness or "`citadel_checks: 522`" in readiness:
         raise SystemExit("docs parity: release-readiness about count drift")
 
 
@@ -1137,6 +1138,28 @@ def _check_windows_core_conformance_doc() -> None:
     ):
         if needle not in words:
             raise SystemExit("docs parity: Windows core contract lost marker: " + needle)
+
+
+def _check_windows_component_conformance_doc() -> None:
+    if not WINDOWS_COMPONENT_DOC.is_file():
+        raise SystemExit("docs parity: Windows Component Conformance v0 contract is absent")
+    words = " ".join(WINDOWS_COMPONENT_DOC.read_text().split())
+    for needle in (
+        "LOOM Windows Component Conformance v0",
+        "tools/windows_component_conformance.py",
+        "loom-windows-component-ci-witness/v0",
+        "windows-component-conformance-v0",
+        "--offline --frozen --release",
+        "authorization: none",
+        "does **not** certify",
+        "ACL/SID",
+        "reparse-point",
+        "Job Object",
+        "verify-windows-component",
+        "Federation v0",
+    ):
+        if needle not in words:
+            raise SystemExit("docs parity: Windows Component contract lost marker: " + needle)
 
 
 def _check_component_release_attestation() -> None:
@@ -2286,6 +2309,7 @@ def main() -> int:
     _check_dogfooding_v2()
     _check_multi_action_plan_v0()
     _check_windows_core_conformance_doc()
+    _check_windows_component_conformance_doc()
     _check_component_release_attestation()
     _check_compiler_provenance_doc()
     _check_compiler_evidence_doc()

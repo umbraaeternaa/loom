@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 522 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 523 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 522/522 citadel checks
+PASS — 523/523 citadel checks
 ```
 
 ## The idea in one screen
@@ -366,6 +366,17 @@ This is deliberately narrower than full Windows support. Windows Component
 Model execution, Gate custody, ACL/SID and reparse-point handling, and bounded
 host isolation remain separate certification layers. See
 [`docs/windows_core_conformance_v0.md`](docs/windows_core_conformance_v0.md).
+
+### Windows Component Conformance v0
+
+An independent `windows-2025` job now pins native wasm-tools, Wasmtime,
+Cargo/rustc, and MSVC identities; builds and executes real Pure and effectful
+Components; refuses tampered binaries; and repeats the two-clean-build
+offline/frozen Component release proof. Its revision-bound
+`loom-windows-component-ci-witness/v0` remains test-only and non-authorizing.
+It does not certify Windows host custody or silently extend the existing
+macOS/Linux Federation v0. See
+[`docs/windows_component_conformance_v0.md`](docs/windows_component_conformance_v0.md).
 
 ## Published docs parity
 

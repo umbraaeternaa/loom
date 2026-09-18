@@ -30,8 +30,8 @@ loom.verify_component_adapter_artifact_v0(
 
 Both tool paths are explicit evidence inputs. The implementation accepts only
 the pinned wasm-tools `1.257.1` and Wasmtime `48.0.0` binaries in the closed
-macOS arm64 and Linux x86_64 executable-hash allowlist. Their official release
-archive digests are pinned separately in CI before extraction. Absence,
+macOS arm64, Linux x86_64, and Windows x86_64 executable-hash allowlist. Their
+official release archive digests are pinned separately in CI before extraction. Absence,
 replacement, version drift, platform drift, or hash drift fails closed.
 The artifact records the build-platform wasm-tools identity; verification may
 use the other supported platform identity from the same closed version/hash
@@ -45,6 +45,8 @@ CI pins Rust `1.93.0`. The additive
 [Signed Reproducible Component Release Attestation v0](component_release_attestation_v0.md)
 now performs two clean frozen source builds and binds their exact Component
 outputs without changing this artifact schema.
+The native Windows proof surface and its non-claims are specified separately
+in [Windows Component Conformance v0](windows_component_conformance_v0.md).
 
 ## Component shape
 

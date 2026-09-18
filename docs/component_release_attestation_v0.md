@@ -69,7 +69,8 @@ The closed object is `loom-component-release-reproducibility/v0`. It binds:
 - exact Boundary, LOOM source, ABI v2 core, WIT, builder source tree, and
   `Cargo.lock` SHA-256 identities;
 - exact Cargo and rustc executable hashes, release `1.93.0`, upstream commit,
-  supported host triple, and exact `/usr/bin/cc` linker hash/version;
+  supported host triple, and exact host linker hash/version (`/usr/bin/cc` on
+  macOS/Linux or the discovered MSVC `link.exe` on Windows);
 - exact build and verification wasm-tools identities plus the Wasmtime
   verifier identity;
 - every active host dependency selected by structured, offline, locked Cargo
@@ -119,6 +120,10 @@ untrusted hint; the supplied pinned public key is the trust root.
 Every result is advisory and `authorization: none`. A valid envelope does not
 approve execution, grant WASI, authorize publication, transfer key custody, or
 replace an operator gate.
+
+The supported same-host build set is macOS arm64, Linux x86_64, and Windows
+x86_64. This does not change the two-host membership of Component Release
+Evidence Federation v0.
 
 v0 proves two clean reproducible builds on one exact supported host and
 toolchain. It deliberately records `cross_platform_claim: false` and
