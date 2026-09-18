@@ -1132,6 +1132,8 @@ def _check_windows_core_conformance_doc() -> None:
         "reparse-point",
         "Job Object",
         "verify-windows-core",
+        "process argument-length",
+        "must not be transported through `node -e`",
     ):
         if needle not in words:
             raise SystemExit("docs parity: Windows core contract lost marker: " + needle)

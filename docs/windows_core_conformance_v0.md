@@ -36,6 +36,11 @@ Missing Node.js is a failure. `--require-node` and `--no-node` are mutually
 exclusive. The Windows job may not turn JavaScript or WebAssembly execution
 into compile-only coverage.
 
+Generated JavaScript and the Node WebAssembly harness are executed from a
+private temporary `.js` file. They must not be transported through `node -e`:
+the complete generated program can exceed the Windows process argument-length
+limit even though the same language program is valid.
+
 ## Witness
 
 Only certifying mode on the pinned Windows CI environment may write

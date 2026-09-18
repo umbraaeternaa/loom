@@ -2080,7 +2080,7 @@ def compile_js(program_src):
 
 def run_js(program_src, call_src):
     """Compile to JS, run through Node; return (value, output-lines) — proof the JS target matches the interpreter. Needs node."""
-    import subprocess, json as _json
+    import os, subprocess, tempfile, json as _json
     def _norm(v):
         if isinstance(v, dict):
             return {k: _norm(x) for k, x in v.items()}
@@ -2090,7 +2090,11 @@ def run_js(program_src, call_src):
         return v
     call_ast = parse(call_src); _check_call_literals(call_ast)
     js = compile_js(program_src) + "\nconsole.log('__R__'+JSON.stringify(" + _emit_js(call_ast[0]) + "))"
-    r = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=15)
+    with tempfile.TemporaryDirectory(prefix="loom-node-") as temp_dir:
+        script_path = os.path.join(temp_dir, "program.js")
+        with open(script_path, "w", encoding="utf-8", newline="\n") as script:
+            script.write(js)
+        r = subprocess.run(["node", script_path], capture_output=True, text=True, timeout=15)
     if r.returncode != 0:
         stderr = r.stderr.strip()
         detail = next((line.strip() for line in stderr.splitlines() if "Error:" in line), stderr)
@@ -4645,7 +4649,7 @@ def emit_wat(program_src):
 
 def run_wasm(program_src, call_src):
     """Compile to wasm bytes, run via node's built-in WebAssembly, and decode the observable result. Needs node."""
-    import subprocess, json as _json
+    import os, subprocess, tempfile, json as _json
     def _norm(v):
         if isinstance(v, dict):
             return {k: _norm(x) for k, x in v.items()}
@@ -4702,7 +4706,11 @@ def run_wasm(program_src, call_src):
           "const __v=__dec(m.instance.exports[" + repr(name) + "](" + ",".join(str(a << 1) for a in args) + "));"
           "console.log('__VAL__'+JSON.stringify(__v));console.log('__OUT__'+JSON.stringify(__out));})"
           ".catch(e=>{console.error(String(e));process.exit(1)})")
-    r = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=15)
+    with tempfile.TemporaryDirectory(prefix="loom-node-") as temp_dir:
+        script_path = os.path.join(temp_dir, "program.js")
+        with open(script_path, "w", encoding="utf-8", newline="\n") as script:
+            script.write(js)
+        r = subprocess.run(["node", script_path], capture_output=True, text=True, timeout=15)
     if r.returncode != 0: raise LoomError("node-wasm: " + r.stderr.strip()[:200])
     val = None; out = []
     for ln in r.stdout.strip().splitlines():

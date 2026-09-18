@@ -9808,6 +9808,9 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         workflow = root.joinpath(".github", "workflows", "ci.yml").read_text()
         contract = root.joinpath("docs", "windows_core_conformance_v0.md").read_text()
         fuzz_source = root.joinpath("fuzz_tests.py").read_text()
+        codegen_source = root.joinpath("loom_codegen.py").read_text()
+        wasm_source = root.joinpath("loom_wasm.py").read_text()
+        standalone_source = root.joinpath("docs", "loom.py").read_text()
         no_bytecode = dict(os.environ); no_bytecode["PYTHONDONTWRITEBYTECODE"] = "1"
         self_test = subprocess.run(
             [sys.executable, str(conformance), "--self-test"],
@@ -9832,9 +9835,17 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "loom-windows-core-ci-witness/v0" in contract
             and "does **not** certify" in contract
             and "ACL/SID" in contract and "Job Object" in contract
+            and "process argument-length" in contract
             and "FUZZ_CASES = 256" in conformance.read_text()
             and "FUZZ_SEEDS = (0xC17ADE1, 0xBADC0DE, 0xA11CE)" in conformance.read_text()
             and '"--cases", str(FUZZ_CASES), "--seed", hex(seed)' in conformance.read_text()
+            and all('TemporaryDirectory(prefix="loom-node-")' in source for source in (codegen_source, wasm_source, standalone_source))
+            and '["node", "-e", js]' not in codegen_source
+            and '["node", "-e", js]' not in wasm_source
+            and '["node", "-e", js]' not in standalone_source
+            and codegen_source.count('subprocess.run(["node", script_path]') == 1
+            and wasm_source.count('subprocess.run(["node", script_path]') == 1
+            and standalone_source.count('subprocess.run(["node", script_path]') == 2
             and 'parser.add_argument(\n        "--require-node"' in fuzz_source
             and "if args.require_node and not node_available:" in fuzz_source
         )
