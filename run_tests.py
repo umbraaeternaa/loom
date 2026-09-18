@@ -8581,7 +8581,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == (500 if is_browser_bundle else 521)
+            and about_json["citadel_checks"] == (501 if is_browser_bundle else 522)
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["wasm_abi_versions"] == ([1] if is_browser_bundle else [1, 2])
             and about_json["i31_bits"] == 31
@@ -9111,7 +9111,8 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 521/521 citadel checks" in quick
+            and "PASS -- 522/522 citadel checks" in quick
+            and "tools/windows_core_conformance.py --self-test" in quick
             and 'loom dogfood examples/dogfood_release_policy.loom "(main 3)"' in quick
             and "loom --help" in quick
             and "loom help quickstart" in quick
@@ -9222,7 +9223,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "521-byte-delivery-evidence-v0")' in play
+            and 'bundleUrl.searchParams.set("v", "522-windows-core-conformance-v0")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -9801,6 +9802,48 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         print(f"  {'ok  ' if i31_doc_ok else 'FAIL'} docs: i31 semantics pinned")
     except Exception as e:
         print(f"  FAIL i31 semantics doc pin: {e}")
+    try:                                               # Windows core portability is proved without overclaiming host security
+        root = Path(__file__).resolve().parent
+        conformance = root.joinpath("tools", "windows_core_conformance.py")
+        workflow = root.joinpath(".github", "workflows", "ci.yml").read_text()
+        contract = root.joinpath("docs", "windows_core_conformance_v0.md").read_text()
+        fuzz_source = root.joinpath("fuzz_tests.py").read_text()
+        no_bytecode = dict(os.environ); no_bytecode["PYTHONDONTWRITEBYTECODE"] = "1"
+        self_test = subprocess.run(
+            [sys.executable, str(conformance), "--self-test"],
+            cwd=root, capture_output=True, text=True, env=no_bytecode,
+        )
+        contradictory_fuzz = subprocess.run(
+            [sys.executable, str(root.joinpath("fuzz_tests.py")), "--require-node", "--no-node", "--cases", "3"],
+            cwd=root, capture_output=True, text=True, env=no_bytecode,
+        )
+        windows_core_ok = (
+            conformance.is_file()
+            and self_test.returncode == 0
+            and "PASS Windows Core Conformance v0 portable self-test (non-certifying)" in self_test.stdout
+            and contradictory_fuzz.returncode == 2
+            and "--no-node and --require-node are mutually exclusive" in contradictory_fuzz.stderr
+            and 'runs-on: windows-2025' in workflow
+            and 'python-version: "3.12"' in workflow
+            and 'node-version: "22"' in workflow
+            and "python tools/windows_core_conformance.py --output .windows-core-witness/x86_64-pc-windows-msvc.json" in workflow
+            and "name: windows-core-conformance-v0" in workflow
+            and "if-no-files-found: error" in workflow
+            and "loom-windows-core-ci-witness/v0" in contract
+            and "does **not** certify" in contract
+            and "ACL/SID" in contract and "Job Object" in contract
+            and "FUZZ_CASES = 256" in conformance.read_text()
+            and "FUZZ_SEEDS = (0xC17ADE1, 0xBADC0DE, 0xA11CE)" in conformance.read_text()
+            and '"--cases", str(FUZZ_CASES), "--seed", hex(seed)' in conformance.read_text()
+            and 'parser.add_argument(\n        "--require-node"' in fuzz_source
+            and "if args.require_node and not node_available:" in fuzz_source
+        )
+        ok += windows_core_ok
+        print(f"  {'ok  ' if windows_core_ok else 'FAIL'} portability: Windows Core Conformance v0 fail-closed profile")
+        if not windows_core_ok:
+            print("       " + (self_test.stdout.strip() or self_test.stderr.strip())[:500])
+    except Exception as e:
+        print(f"  FAIL Windows Core Conformance v0 pin: {e}")
     try:                                               # module boundaries keep loom.py a facade instead of a re-growing monolith
         mbdoc = Path(__file__).with_name("docs").joinpath("module_boundaries.md").read_text()
         module_boundary_doc_ok = (
@@ -9829,6 +9872,8 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "It transports no bytes" in mbdoc
             and "Multi-Action Byte Delivery Evidence v0" in mbdoc
             and "detached byte witness" in mbdoc
+            and "Windows Core Conformance v0 is an additive portability boundary" in mbdoc
+            and "windows_core_conformance_v0.md" in mbdoc
         )
         ok += module_boundary_doc_ok
         print(f"  {'ok  ' if module_boundary_doc_ok else 'FAIL'} docs: module boundaries pinned")
@@ -9848,7 +9893,9 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 521/521 citadel checks" in rdoc
+            and "PASS -- 522/522 citadel checks" in rdoc
+            and "Windows Core Conformance v0 adds a native `windows-2025` proof lane" in rdoc
+            and "does not yet certify Windows" in rdoc_words
             and "Dogfooding v1 evaluates one bounded first-order Pure LOOM policy" in rdoc
             and "Evidence-fed Dogfooding v2 replaces the manual quorum" in rdoc
             and "loom examples --format json" in rdoc
@@ -9917,7 +9964,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 168   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, Portable Execution Evidence Bundle v0, Dogfooding v1, Evidence-fed Dogfooding v2, Multi-Action Plan v0, aggregate receipt v0, replayed execution state machine v0, Evidence Dataflow v0, and detached Byte Delivery Evidence v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, WASM direct/applyN type parity, and the WASM seam/resource frontier
+    total = len(CASES) + 169   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, Portable Execution Evidence Bundle v0, Dogfooding v1, Evidence-fed Dogfooding v2, Multi-Action Plan v0, aggregate receipt v0, replayed execution state machine v0, Evidence Dataflow v0, detached Byte Delivery Evidence v0, Windows Core Conformance v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, WASM direct/applyN type parity, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

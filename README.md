@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 521 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 522 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 521/521 citadel checks
+PASS — 522/522 citadel checks
 ```
 
 ## The idea in one screen
@@ -353,6 +353,19 @@ python3 fuzz_tests.py --cases 256 --no-node           # parser/checker/Python pl
 
 Every failure prints its seed and the divergent generated expression. The default fuzz smoke is also
 part of `run_tests.py`; GitHub Actions runs the full citadel and three extended seeds on every push and pull request.
+
+### Windows Core Conformance v0
+
+The CI includes an independent `windows-2025` job for the portable language
+core. It installs the wheel and requires real interpreter, Python, JavaScript,
+WebAssembly, WAT, CLI, and deterministic fuzz execution; missing Node.js fails
+the job rather than reducing coverage. A successful exact revision publishes a
+non-authorizing `windows-core-conformance-v0` witness.
+
+This is deliberately narrower than full Windows support. Windows Component
+Model execution, Gate custody, ACL/SID and reparse-point handling, and bounded
+host isolation remain separate certification layers. See
+[`docs/windows_core_conformance_v0.md`](docs/windows_core_conformance_v0.md).
 
 ## Published docs parity
 

@@ -111,6 +111,39 @@ jobs:
           path: .federation-witness/aarch64-apple-darwin.json
           if-no-files-found: error
 
+  verify-windows-core:
+    runs-on: windows-2025
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Build and install the Windows wheel
+        shell: pwsh
+        run: |
+          python -m pip install "setuptools>=61" wheel
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP/loom-wheel" | Out-Null
+          python -m pip wheel . --no-deps --no-build-isolation --wheel-dir "$env:RUNNER_TEMP/loom-wheel"
+          $wheels = @(Get-ChildItem "$env:RUNNER_TEMP/loom-wheel/*.whl")
+          if ($wheels.Count -ne 1) { throw "expected exactly one LOOM wheel" }
+          python -m pip install --force-reinstall $wheels[0].FullName
+      - name: Compile portable core sources
+        run: python -m py_compile loom.py loom_parse.py loom_checker.py loom_bounds.py loom_frontend.py loom_recursion.py loom_runtime.py loom_codegen.py loom_wasm.py loom_cli.py fuzz_tests.py tools/windows_core_conformance.py
+      - name: Run Windows Core Conformance v0
+        env:
+          LOOM_WINDOWS_RUNNER: windows-2025
+        run: python tools/windows_core_conformance.py --output .windows-core-witness/x86_64-pc-windows-msvc.json
+      - name: Upload Windows Core witness
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-core-conformance-v0
+          path: .windows-core-witness/x86_64-pc-windows-msvc.json
+          if-no-files-found: error
+
   federate-component-evidence:
     needs: [verify, verify-macos-component]
     runs-on: ubuntu-latest

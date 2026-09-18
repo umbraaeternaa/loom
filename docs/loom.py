@@ -9722,7 +9722,7 @@ def build_about():
     return {
         "schema": "loom-about/v1",
         "language": "LOOM",
-        "citadel_checks": 500,
+        "citadel_checks": 501,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "wasm_abi_versions": [_WASM_ABI_VERSION],
         "i31_bits": INT_BITS,

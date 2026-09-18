@@ -6,7 +6,7 @@ experimental, and what LOOM does not claim yet.
 
 ## Current public baseline
 
-- Canonical self-verification: `PASS -- 521/521 citadel checks`.
+- Canonical self-verification: `PASS -- 522/522 citadel checks`.
 - Published browser bundle parity is required before release:
   `python3 verify_docs_parity.py`.
 - The public compatibility surface is `loom.py`; module boundaries are pinned in
@@ -203,6 +203,14 @@ experimental, and what LOOM does not claim yet.
 ## Experimental or bounded
 
 - LOOM is still a research kernel, not a package-manager ecosystem.
+- Windows Core Conformance v0 adds a native `windows-2025` proof lane for the
+  parser/checker, interpreter, generated Python and JavaScript, core WASM/WAT,
+  CLI, installed wheel, and mandatory four-backend fuzzing. A revision is
+  certified only when its exact CI job publishes the
+  `loom-windows-core-ci-witness/v0` artifact. This does not yet certify Windows
+  Component Model execution, Gate custody, ACL/SID or reparse-point handling,
+  bounded host isolation, or three-platform federation; those remain separate
+  fail-closed layers.
 - Multi-Action Plan, Execution State, Evidence Dataflow, and Byte Delivery
   Evidence v0 are evidence composition and replay contracts; live executable
   scheduling, byte-counted process delivery, transport, rollback/compensation, and dynamic
@@ -270,10 +278,10 @@ python3 loom.py about --format json
 
 Expected public markers:
 
-- `run_tests.py` prints `PASS -- 521/521 citadel checks`.
+- `run_tests.py` prints `PASS -- 522/522 citadel checks`.
 - `verify_docs_parity.py` prints that the published bundle is standalone and
   citadel-green.
-- `loom.py about --format json` reports `citadel_checks: 521`, the default
+- `loom.py about --format json` reports `citadel_checks: 522`, the default
   WASM ABI version, all supported WASM ABI versions, and the backend list.
 - An installed checkout exposes `loom` as the same CLI surface as
   `python3 loom.py`.

@@ -164,8 +164,17 @@ def main(argv=None):
     parser.add_argument("--seed", type=lambda x: int(x, 0), default=0xC17ADE1)
     parser.add_argument("--cases", type=int, default=64)
     parser.add_argument("--no-node", action="store_true")
+    parser.add_argument(
+        "--require-node", action="store_true",
+        help="fail instead of reducing differential execution when Node.js is unavailable",
+    )
     args = parser.parse_args(argv)
     if args.cases < 3: parser.error("--cases must be at least 3")
+    if args.no_node and args.require_node:
+        parser.error("--no-node and --require-node are mutually exclusive")
+    node_available = bool(shutil.which("node"))
+    if args.require_node and not node_available:
+        parser.error("--require-node was selected but Node.js is unavailable")
 
     rng = random.Random(args.seed)
     serial = [0]
@@ -176,7 +185,7 @@ def main(argv=None):
                 raise AssertionError("render/parse round-trip mismatch: " + render(node))
         parser_properties(rng, args.cases)
         checker_properties(rng, expressions)
-        differential_properties(expressions, bool(shutil.which("node")) and not args.no_node)
+        differential_properties(expressions, node_available and not args.no_node)
     except Exception as exc:
         print(f"FAIL property fuzz seed={args.seed:#x} cases={args.cases}: {exc}")
         return 1

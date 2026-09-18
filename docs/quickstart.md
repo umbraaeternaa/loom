@@ -60,8 +60,18 @@ python3 loom.py about --format json
 The expected public baseline is:
 
 ```console
-PASS -- 521/521 citadel checks
+PASS -- 522/522 citadel checks
 ```
+
+The portable Windows core harness can also be exercised without making a
+Windows certification claim:
+
+```console
+python3 tools/windows_core_conformance.py --self-test
+```
+
+Only the pinned `verify-windows-core` CI job may emit the revision-bound
+Windows Core Conformance v0 witness.
 
 The CLI help is also pinned:
 

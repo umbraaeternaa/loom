@@ -40,6 +40,7 @@ Current stable boundaries:
 | `loom_execution_bundle.py` | bounded portable packaging and externally pinned offline verification of terminal execution evidence |
 | `loom_dogfood.py` | bounded four-backend Pure policy execution plus evidence-fed Git/CI and signed-review receipts |
 | `loom_multi_action.py` | bounded Action Capsule DAG composition and aggregate terminal receipts |
+| `tools/windows_core_conformance.py` | fail-closed native Windows core conformance runner and non-authorizing CI witness |
 
 ## Gate boundary rule
 
@@ -209,3 +210,11 @@ receipt building. It also checks that the standalone browser bundle preserves
 the same public schemas without importing development-only modules. The WASM
 pin also checks that compiler contexts remain isolated across parallel builds
 and that legacy module-global `_WASM_*` compiler tables do not return.
+
+Windows Core Conformance v0 is an additive portability boundary. Its runner
+may exercise the parser/checker, interpreter, Python/JavaScript/WASM/WAT
+backends, CLI, and installed wheel, but it must not import Windows host-security
+claims into the language core. Certifying mode is restricted to the pinned
+Windows CI environment; `--self-test` is explicitly non-certifying. Missing
+Node.js is a hard failure, and the emitted witness grants no authority. The
+normative contract is [`windows_core_conformance_v0.md`](windows_core_conformance_v0.md).
