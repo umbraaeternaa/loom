@@ -34,6 +34,11 @@ and extracted executable SHA-256 identities before use:
 Missing tools, version drift, hash drift, host drift, absent Cargo registry
 sources, or an unavailable linker fails closed.
 
+All six repository-owned Rust builder inputs are marked `text eol=lf` in
+`.gitattributes`. Their evidence identity is therefore the exact Git byte
+identity on Windows as well as macOS/Linux; checkout policy may not rewrite
+those source inputs to CRLF before hashing or compilation.
+
 ## Required proof surface
 
 The job completes all of these without a skip or fallback:

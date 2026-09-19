@@ -68,6 +68,8 @@ The closed object is `loom-component-release-reproducibility/v0`. It binds:
 
 - exact Boundary, LOOM source, ABI v2 core, WIT, builder source tree, and
   `Cargo.lock` SHA-256 identities;
+- canonical LF checkout bytes for every repository-owned Rust builder input,
+  pinned by `.gitattributes` across Windows, macOS, and Linux;
 - exact Cargo and rustc executable hashes, release `1.93.0`, upstream commit,
   supported host triple, and exact host linker hash/version (`/usr/bin/cc` on
   macOS/Linux or the discovered MSVC `link.exe` on Windows);

@@ -9864,6 +9864,15 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         adapter_source = root.joinpath("loom_component_adapter.py").read_text()
         release_source = root.joinpath("loom_component_release.py").read_text()
         runner_source = conformance.read_text()
+        attributes = root.joinpath(".gitattributes").read_text().splitlines()
+        builder_inputs = (
+            "tools/loom-component-builder/Cargo.toml",
+            "tools/loom-component-builder/Cargo.lock",
+            "tools/loom-component-builder/src/main.rs",
+            "tools/loom-effectful-component-builder/Cargo.toml",
+            "tools/loom-effectful-component-builder/Cargo.lock",
+            "tools/loom-effectful-component-builder/src/main.rs",
+        )
         windows_component_ok = (
             conformance.is_file()
             and 'SCHEMA = "loom-windows-component-ci-witness/v0"' in runner_source
@@ -9892,6 +9901,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and 'FEDERATION_HOSTS = ("aarch64-apple-darwin", "x86_64-unknown-linux-gnu")' in release_source
             and "CARGO_ENCODED_RUSTFLAGS" in release_source
             and "mklink" in release_source
+            and attributes == [path + " text eol=lf" for path in builder_inputs]
             and "loom-windows-component-ci-witness/v0" in contract
             and "does **not** certify" in contract
             and "Windows is intentionally not inserted" in contract
