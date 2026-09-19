@@ -85,7 +85,8 @@ The closed object is `loom-component-release-reproducibility/v0`. It binds:
   linker path, a closed executable search path, and compiler path remapping to
   the stable `/loom-release-build` prefix;
 - the linker's content-hash-default metadata mode; random UUID/build-id flags
-  are never supplied, and exact output equality remains the final oracle;
+  are never supplied on POSIX; Windows instead pins MSVC `/Brepro` as
+  `msvc-brepro`, and exact output equality remains the final oracle;
 - byte equality of the two builders, two Component artifact objects, and two
   Component binaries;
 - the complete Component Adapter Artifact v0 and final Component identity.

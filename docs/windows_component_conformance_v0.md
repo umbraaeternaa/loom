@@ -60,7 +60,9 @@ The job completes all of these without a skip or fallback:
 The Windows implementation uses native `.exe` identities, `TEMP/TMP/TMPDIR`,
 an isolated Cargo home backed by a registry-source junction, inherited
 MSVC `INCLUDE/LIB/LIBPATH/SystemRoot`, and encoded Rust flags. macOS/Linux keep
-their existing restricted POSIX environment.
+their existing restricted POSIX environment. Windows additionally requires
+MSVC `/Brepro`; release evidence records `link_metadata: msvc-brepro`, and two
+independent PE outputs must still be byte-identical.
 
 ## Witness
 

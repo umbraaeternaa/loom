@@ -9900,6 +9900,8 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and '"x86_64-pc-windows-msvc"' in release_source
             and 'FEDERATION_HOSTS = ("aarch64-apple-darwin", "x86_64-unknown-linux-gnu")' in release_source
             and "CARGO_ENCODED_RUSTFLAGS" in release_source
+            and '"-Clink-arg=/Brepro"' in release_source
+            and 'return "msvc-brepro"' in release_source
             and "mklink" in release_source
             and attributes == [path + " text eol=lf" for path in builder_inputs]
             and "loom-windows-component-ci-witness/v0" in contract

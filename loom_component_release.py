@@ -391,6 +391,8 @@ def _dependency_snapshot(source_root, cargo_home, cargo, rustc, host):
 
 
 def _link_metadata_mode(host):
+    if host == "x86_64-pc-windows-msvc":
+        return "msvc-brepro"
     return "content-hash-default"
 
 
@@ -414,7 +416,7 @@ def _build_environment(cargo_home, rustc, linker, host, home, tmpdir):
         + "=/loom-release-build",
     )
     if host == "x86_64-pc-windows-msvc":
-        env["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join(flags)
+        env["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join(flags + ("-Clink-arg=/Brepro",))
         env["USERPROFILE"] = str(home)
         env.update(_windows_toolchain_environment(host))
     else:
