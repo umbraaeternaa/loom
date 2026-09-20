@@ -6,7 +6,7 @@ experimental, and what LOOM does not claim yet.
 
 ## Current public baseline
 
-- Canonical self-verification: `PASS -- 523/523 citadel checks`.
+- Canonical self-verification: `PASS -- 524/524 citadel checks`.
 - Published browser bundle parity is required before release:
   `python3 verify_docs_parity.py`.
 - The public compatibility surface is `loom.py`; module boundaries are pinned in
@@ -219,6 +219,14 @@ experimental, and what LOOM does not claim yet.
   Gate custody, ACL/SID, reparse-point defense, AppContainer, Job Object, and
   operator-presence claims remain outside this profile; macOS/Linux Component
   Federation v0 is unchanged.
+- Windows Host Security Substrate v0 adds a separate native `windows-2025`
+  proof for current-user SID/DACL custody, component path reparse refusal,
+  byte-identical private snapshots, a zero-capability AppContainer with real
+  loopback-network denial, and Job Object active-process/kill-on-close limits.
+  Its `loom-windows-host-security-ci-witness/v0` artifact is test-only and
+  non-authorizing. It is not yet Bounded Execution integration, native operator
+  presence, or Federation v1; the cumulative Win32 path walk also detects each
+  opened component but does not eliminate every path-replacement race.
 - Multi-Action Plan, Execution State, Evidence Dataflow, and Byte Delivery
   Evidence v0 are evidence composition and replay contracts; live executable
   scheduling, byte-counted process delivery, transport, rollback/compensation, and dynamic
@@ -286,10 +294,10 @@ python3 loom.py about --format json
 
 Expected public markers:
 
-- `run_tests.py` prints `PASS -- 523/523 citadel checks`.
+- `run_tests.py` prints `PASS -- 524/524 citadel checks`.
 - `verify_docs_parity.py` prints that the published bundle is standalone and
   citadel-green.
-- `loom.py about --format json` reports `citadel_checks: 523`, the default
+- `loom.py about --format json` reports `citadel_checks: 524`, the default
   WASM ABI version, all supported WASM ABI versions, and the backend list.
 - An installed checkout exposes `loom` as the same CLI surface as
   `python3 loom.py`.

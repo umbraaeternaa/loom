@@ -61,4 +61,5 @@ py-modules = [
   "loom_runtime",
   "loom_wasi_capabilities",
   "loom_wasm",
+  "loom_windows_host",
 ]

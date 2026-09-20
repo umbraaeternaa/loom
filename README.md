@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 523 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 524 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 523/523 citadel checks
+PASS — 524/524 citadel checks
 ```
 
 ## The idea in one screen
@@ -377,6 +377,18 @@ offline/frozen Component release proof. Its revision-bound
 It does not certify Windows host custody or silently extend the existing
 macOS/Linux Federation v0. See
 [`docs/windows_component_conformance_v0.md`](docs/windows_component_conformance_v0.md).
+
+### Windows Host Security Substrate v0
+
+A third independent `windows-2025` lane builds a repository-owned native probe
+twice with MSVC `/Brepro`, then exercises SID/DACL private custody,
+component-by-component reparse-point refusal, a byte-identical private
+snapshot, a zero-capability AppContainer with real loopback-network denial,
+and Job Object process-tree containment. Its revision-bound
+`loom-windows-host-security-ci-witness/v0` artifact is test-only and grants no
+authority. This substrate is deliberately not yet wired into LOOM Bounded
+Execution and does not claim native operator presence or Federation v1. See
+[`docs/windows_host_security_v0.md`](docs/windows_host_security_v0.md).
 
 ## Published docs parity
 

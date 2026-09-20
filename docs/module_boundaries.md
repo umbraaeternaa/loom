@@ -41,6 +41,9 @@ Current stable boundaries:
 | `loom_dogfood.py` | bounded four-backend Pure policy execution plus evidence-fed Git/CI and signed-review receipts |
 | `loom_multi_action.py` | bounded Action Capsule DAG composition and aggregate terminal receipts |
 | `tools/windows_core_conformance.py` | fail-closed native Windows core conformance runner and non-authorizing CI witness |
+| `loom_windows_host.py` | pure validation and canonical hashing for Windows Host Security v0 native evidence |
+| `tools/windows_host_security_conformance.py` | pinned Windows certifying runner and non-authorizing revision-bound witness emitter |
+| `tools/windows-host-security/host_security_probe.c` | repository-owned SID/DACL, reparse, AppContainer, network, and Job Object native probe |
 
 ## Gate boundary rule
 
@@ -66,6 +69,15 @@ facade so it can run without development-only module imports in Pyodide.
 
 A future migration may split Gate further, but it must keep the public facade
 stable and pin the new boundary before deleting the old one.
+
+## Windows host-security boundary
+
+`loom_windows_host.py` validates evidence only; it performs no host action and
+grants no authority. The Python conformance runner owns environment pinning,
+two-build `/Brepro` comparison, native-probe execution, and atomic witness
+emission. The C probe alone touches Windows security APIs. This separation keeps
+portable LOOM imports free of Win32 dependencies and prevents a native CI result
+from silently becoming a Bounded Execution or operator-presence claim.
 
 ## WASM compiler state boundary
 

@@ -4,3 +4,4 @@ tools/loom-component-builder/src/main.rs text eol=lf
 tools/loom-effectful-component-builder/Cargo.toml text eol=lf
 tools/loom-effectful-component-builder/Cargo.lock text eol=lf
 tools/loom-effectful-component-builder/src/main.rs text eol=lf
+tools/windows-host-security/host_security_probe.c text eol=lf
