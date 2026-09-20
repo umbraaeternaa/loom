@@ -53,7 +53,8 @@ def _compiler():
 
 
 def _build_probe(cl, destination):
-    destination.mkdir(parents=True, exist_ok=False)
+    if not destination.is_dir() or any(destination.iterdir()):
+        raise AssertionError("native build destination must be one existing empty directory")
     output = destination / "loom-windows-host-security-probe.exe"
     result = _run([
         cl, "/nologo", "/W4", "/WX", "/O2", "/Brepro", "/DUNICODE",

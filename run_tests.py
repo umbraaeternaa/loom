@@ -9950,6 +9950,8 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and '"federation": False' in contract_source
             and 'EXPECTED_RUNNER = "windows-2025"' in runner_source
             and '"/Brepro"' in runner_source
+            and "native build destination must be one existing empty directory" in runner_source
+            and "destination.mkdir(" not in runner_source
             and "two /Brepro native probe builds are not byte-identical" in runner_source
             and 'PROBE_SCHEMA "loom-windows-host-security-native-probe/v0"' in probe_source
             and "FILE_FLAG_OPEN_REPARSE_POINT" in probe_source
