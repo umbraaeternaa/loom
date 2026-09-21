@@ -1,6 +1,7 @@
 # LOOM Windows Host Security Substrate v0
 
-Status: local candidate pending acceptance by its exact native Windows CI lane.
+Status: certified only when the exact revision passes its native Windows CI
+lane and emits a valid revision-bound witness artifact.
 
 Windows Host Security Substrate v0 is a fail-closed, test-only proof surface for
 host properties that the portable language and Component profiles cannot prove.
