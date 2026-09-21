@@ -323,6 +323,7 @@ static int child_mode(const wchar_t *port_text) {
     unsigned long port = wcstoul(port_text, NULL, 10);
     int connected;
     int network_error;
+    u_long nonblocking = 1;
     if (!token_is_appcontainer()) return 31;
     if (WSAStartup(MAKEWORD(2, 2), &data) != 0) return 32;
     connection = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -331,12 +332,36 @@ static int child_mode(const wchar_t *port_text) {
     target.sin_family = AF_INET;
     target.sin_port = htons((u_short)port);
     target.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (ioctlsocket(connection, FIONBIO, &nonblocking) == SOCKET_ERROR) return 39;
     connected = connect(connection, (struct sockaddr *)&target, (int)sizeof(target));
     network_error = connected == 0 ? 0 : WSAGetLastError();
+    if (connected != 0 && network_error == WSAEWOULDBLOCK) {
+        fd_set writable;
+        fd_set exceptional;
+        struct timeval timeout;
+        int selected;
+        int error_size = (int)sizeof(network_error);
+        FD_ZERO(&writable);
+        FD_ZERO(&exceptional);
+        FD_SET(connection, &writable);
+        FD_SET(connection, &exceptional);
+        timeout.tv_sec = 2;
+        timeout.tv_usec = 0;
+        selected = select(0, NULL, &writable, &exceptional, &timeout);
+        if (selected == SOCKET_ERROR) return 40;
+        if (selected == 0) {
+            network_error = WSAETIMEDOUT;
+        } else if (getsockopt(connection, SOL_SOCKET, SO_ERROR,
+                              (char *)&network_error, &error_size) == SOCKET_ERROR) {
+            return 41;
+        } else if (network_error == 0) {
+            connected = 0;
+        }
+    }
     closesocket(connection);
     WSACleanup();
     if (connected == 0) return 34;
-    if (network_error != WSAEACCES) return 38;
+    if (network_error != WSAEACCES && network_error != WSAETIMEDOUT) return 38;
 
     memset(&startup, 0, sizeof(startup));
     memset(&process, 0, sizeof(process));
@@ -389,6 +414,26 @@ static SOCKET loopback_listener(u_short *port) {
     }
     *port = ntohs(address.sin_port);
     return listener;
+}
+
+
+static void prove_loopback_listener_live(SOCKET listener, u_short port) {
+    SOCKET client = INVALID_SOCKET;
+    SOCKET accepted = INVALID_SOCKET;
+    struct sockaddr_in target;
+    client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (client == INVALID_SOCKET) fail_message("cannot create loopback control socket");
+    memset(&target, 0, sizeof(target));
+    target.sin_family = AF_INET;
+    target.sin_port = htons(port);
+    target.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (connect(client, (struct sockaddr *)&target, (int)sizeof(target)) == SOCKET_ERROR) {
+        fail_message("loopback control connection failed");
+    }
+    accepted = accept(listener, NULL, NULL);
+    if (accepted == INVALID_SOCKET) fail_message("loopback control connection was not accepted");
+    closesocket(accepted);
+    closesocket(client);
 }
 
 
@@ -475,6 +520,7 @@ static void run_appcontainer_child(const wchar_t *snapshot, PSID appcontainer_si
     DWORD exit_code = 0;
 
     listener = loopback_listener(&port);
+    prove_loopback_listener_live(listener, port);
     InitializeProcThreadAttributeList(NULL, 1, 0, &bytes);
     if (bytes == 0 || GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
         fail_win32("cannot size process attribute list");

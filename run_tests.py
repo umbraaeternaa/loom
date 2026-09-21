@@ -9972,6 +9972,10 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "wchar_t environment[2]" not in probe_source
             and "run_appcontainer_child(snapshot, appcontainer_sid, folder)" in probe_source
             and "WSAEACCES" in probe_source
+            and "WSAETIMEDOUT" in probe_source
+            and "ioctlsocket(connection, FIONBIO, &nonblocking)" in probe_source
+            and "prove_loopback_listener_live(listener, port)" in probe_source
+            and "accepted = accept(listener, NULL, NULL)" in probe_source
             and "JOB_OBJECT_LIMIT_ACTIVE_PROCESS" in probe_source
             and "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE" in probe_source
             and "GetSecurityInfo" in probe_source

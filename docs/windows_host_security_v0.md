@@ -21,9 +21,11 @@ and an explicitly captured x64 `cl.exe`. It requires all six checks:
    refused.
 4. The private executable snapshot is byte-identical to the source probe and
    the opened final-handle identity remains stable during inspection.
-5. A zero-capability AppContainer token is proved at runtime and cannot connect
-   to an active loopback listener. Its child receives system variables plus
-   profile-local `LOCALAPPDATA`/`TEMP`/`TMP`, never the parent CI environment.
+5. A zero-capability AppContainer token is proved at runtime and cannot complete
+   a bounded nonblocking connection to a loopback listener that a parent
+   control connection first proves reachable. Its child receives system
+   variables plus profile-local `LOCALAPPDATA`/`TEMP`/`TMP`, never the parent CI
+   environment.
 6. A Job Object enforces one active process and
    `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` terminates a live child.
 
