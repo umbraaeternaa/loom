@@ -164,6 +164,30 @@ static int handle_is_reparse(HANDLE handle) {
 }
 
 
+static void pin_file_owner(const wchar_t *path, const wchar_t *owner_text) {
+    PSID owner = NULL;
+    HANDLE file = INVALID_HANDLE_VALUE;
+    DWORD status;
+    if (!ConvertStringSidToSidW(owner_text, &owner)) {
+        fail_win32("cannot parse current user SID for private custody");
+    }
+    file = CreateFileW(path, READ_CONTROL | WRITE_OWNER,
+                       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                       NULL, OPEN_EXISTING,
+                       FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    if (file == INVALID_HANDLE_VALUE) fail_win32("cannot open private snapshot to pin owner");
+    if (handle_is_reparse(file)) fail_message("private snapshot became a reparse point before owner pinning");
+    status = SetSecurityInfo(file, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION,
+                             owner, NULL, NULL, NULL);
+    if (status != ERROR_SUCCESS) {
+        SetLastError(status);
+        fail_win32("cannot pin private snapshot owner");
+    }
+    close_handle(&file);
+    LocalFree(owner);
+}
+
+
 static HANDLE open_component(const wchar_t *path, int directory) {
     DWORD access = FILE_READ_ATTRIBUTES | READ_CONTROL;
     DWORD flags = FILE_FLAG_OPEN_REPARSE_POINT | (directory ? FILE_FLAG_BACKUP_SEMANTICS : 0);
@@ -506,6 +530,7 @@ static int probe_mode(void) {
         fail_message("cannot build private snapshot path");
     }
     if (!CopyFileW(self, snapshot, TRUE)) fail_win32("cannot create private executable snapshot");
+    pin_file_owner(snapshot, owner_sid);
     hash_file(self, source_hash);
     hash_file(snapshot, snapshot_hash);
     if (!digest_equal(source_hash, snapshot_hash)) fail_message("private snapshot bytes diverged");

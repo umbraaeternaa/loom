@@ -9958,6 +9958,8 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "CreateAppContainerProfile" in probe_source
             and "GetAppContainerFolderPath(appcontainer_sid_text, &folder)" in probe_source
             and "GetAppContainerFolderPath(profile, &folder)" not in probe_source
+            and "pin_file_owner(snapshot, owner_sid)" in probe_source
+            and "SetSecurityInfo(file, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION" in probe_source
             and "PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES" in probe_source
             and "capabilities.CapabilityCount = 0" in probe_source
             and "WSAEACCES" in probe_source
