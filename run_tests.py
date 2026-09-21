@@ -9962,9 +9962,15 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "SetSecurityInfo(file, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION" in probe_source
             and "PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES" in probe_source
             and "capabilities.CapabilityCount = 0" in probe_source
-            and "CreateEnvironmentBlock(&environment, NULL, FALSE)" in probe_source
-            and "DestroyEnvironmentBlock(environment)" in probe_source
+            and "CreateEnvironmentBlock(&system_block, NULL, FALSE)" in probe_source
+            and "build_appcontainer_environment(profile_folder)" in probe_source
+            and 'L"LOCALAPPDATA=%ls"' in probe_source
+            and 'L"TEMP=%ls\\\\Temp"' in probe_source
+            and 'L"TMP=%ls\\\\Temp"' in probe_source
+            and "qsort(entries, count, sizeof(wchar_t *), compare_environment_entries)" in probe_source
+            and "DestroyEnvironmentBlock(system_block)" in probe_source
             and "wchar_t environment[2]" not in probe_source
+            and "run_appcontainer_child(snapshot, appcontainer_sid, folder)" in probe_source
             and "WSAEACCES" in probe_source
             and "JOB_OBJECT_LIMIT_ACTIVE_PROCESS" in probe_source
             and "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE" in probe_source

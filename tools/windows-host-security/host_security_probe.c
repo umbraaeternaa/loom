@@ -392,7 +392,75 @@ static SOCKET loopback_listener(u_short *port) {
 }
 
 
-static void run_appcontainer_child(const wchar_t *snapshot, PSID appcontainer_sid) {
+static int environment_entry_is(const wchar_t *entry, const wchar_t *name) {
+    size_t length = wcslen(name);
+    return _wcsnicmp(entry, name, length) == 0 && entry[length] == L'=';
+}
+
+
+static int compare_environment_entries(const void *left, const void *right) {
+    const wchar_t *const *left_entry = (const wchar_t *const *)left;
+    const wchar_t *const *right_entry = (const wchar_t *const *)right;
+    return _wcsicmp(*left_entry, *right_entry);
+}
+
+
+static wchar_t *build_appcontainer_environment(const wchar_t *folder) {
+    LPVOID system_block = NULL;
+    wchar_t *cursor;
+    wchar_t **entries;
+    wchar_t local_appdata[MAX_WPATH];
+    wchar_t temp[MAX_WPATH];
+    wchar_t tmp[MAX_WPATH];
+    wchar_t *result;
+    wchar_t *output;
+    size_t capacity = 3;
+    size_t count = 0;
+    size_t total = 1;
+    size_t index;
+
+    if (!CreateEnvironmentBlock(&system_block, NULL, FALSE)) {
+        fail_win32("cannot create system-only AppContainer environment base");
+    }
+    for (cursor = (wchar_t *)system_block; *cursor != L'\0'; cursor += wcslen(cursor) + 1) {
+        capacity += 1;
+    }
+    entries = (wchar_t **)calloc(capacity, sizeof(wchar_t *));
+    if (entries == NULL) fail_message("out of memory building AppContainer environment");
+    for (cursor = (wchar_t *)system_block; *cursor != L'\0'; cursor += wcslen(cursor) + 1) {
+        if (!environment_entry_is(cursor, L"LOCALAPPDATA")
+            && !environment_entry_is(cursor, L"TEMP")
+            && !environment_entry_is(cursor, L"TMP")) {
+            entries[count++] = cursor;
+        }
+    }
+    if (swprintf_s(local_appdata, MAX_WPATH, L"LOCALAPPDATA=%ls", folder) < 0
+        || swprintf_s(temp, MAX_WPATH, L"TEMP=%ls\\Temp", folder) < 0
+        || swprintf_s(tmp, MAX_WPATH, L"TMP=%ls\\Temp", folder) < 0) {
+        fail_message("cannot build AppContainer profile environment entries");
+    }
+    entries[count++] = local_appdata;
+    entries[count++] = temp;
+    entries[count++] = tmp;
+    qsort(entries, count, sizeof(wchar_t *), compare_environment_entries);
+    for (index = 0; index < count; ++index) total += wcslen(entries[index]) + 1;
+    result = (wchar_t *)calloc(total, sizeof(wchar_t));
+    if (result == NULL) fail_message("out of memory materializing AppContainer environment");
+    output = result;
+    for (index = 0; index < count; ++index) {
+        size_t length = wcslen(entries[index]) + 1;
+        memcpy(output, entries[index], length * sizeof(wchar_t));
+        output += length;
+    }
+    *output = L'\0';
+    free(entries);
+    DestroyEnvironmentBlock(system_block);
+    return result;
+}
+
+
+static void run_appcontainer_child(const wchar_t *snapshot, PSID appcontainer_sid,
+                                   const wchar_t *profile_folder) {
     SIZE_T bytes = 0;
     LPPROC_THREAD_ATTRIBUTE_LIST attributes = NULL;
     SECURITY_CAPABILITIES capabilities;
@@ -402,7 +470,7 @@ static void run_appcontainer_child(const wchar_t *snapshot, PSID appcontainer_si
     SOCKET listener = INVALID_SOCKET;
     u_short port = 0;
     wchar_t command[MAX_WPATH];
-    LPVOID environment = NULL;
+    wchar_t *environment = NULL;
     DWORD wait;
     DWORD exit_code = 0;
 
@@ -431,19 +499,17 @@ static void run_appcontainer_child(const wchar_t *snapshot, PSID appcontainer_si
     if (swprintf_s(command, MAX_WPATH, L"\"%ls\" --child %u", snapshot, (unsigned)port) < 0) {
         fail_message("cannot build AppContainer child command");
     }
-    if (!CreateEnvironmentBlock(&environment, NULL, FALSE)) {
-        fail_win32("cannot create system-only AppContainer environment");
-    }
+    environment = build_appcontainer_environment(profile_folder);
     if (!CreateProcessW(snapshot, command, NULL, NULL, FALSE,
                         EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED
                         | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
                         environment, NULL, &startup.StartupInfo, &process)) {
         DWORD error = GetLastError();
-        DestroyEnvironmentBlock(environment);
+        free(environment);
         SetLastError(error);
         fail_win32("cannot create zero-capability AppContainer process");
     }
-    DestroyEnvironmentBlock(environment);
+    free(environment);
     job = create_containment_job();
     if (!AssignProcessToJobObject(job, process.hProcess)) fail_win32("cannot assign AppContainer to Job Object");
     if (ResumeThread(process.hThread) == (DWORD)-1) fail_win32("cannot resume AppContainer process");
@@ -560,7 +626,7 @@ static int probe_mode(void) {
         }
     }
 
-    run_appcontainer_child(snapshot, appcontainer_sid);
+    run_appcontainer_child(snapshot, appcontainer_sid, folder);
     prove_kill_on_close(self);
 
     owner_utf8 = wide_utf8(owner_sid);
