@@ -9956,6 +9956,8 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and 'PROBE_SCHEMA "loom-windows-host-security-native-probe/v0"' in probe_source
             and "FILE_FLAG_OPEN_REPARSE_POINT" in probe_source
             and "CreateAppContainerProfile" in probe_source
+            and "GetAppContainerFolderPath(appcontainer_sid_text, &folder)" in probe_source
+            and "GetAppContainerFolderPath(profile, &folder)" not in probe_source
             and "PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES" in probe_source
             and "capabilities.CapabilityCount = 0" in probe_source
             and "WSAEACCES" in probe_source

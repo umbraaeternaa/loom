@@ -498,7 +498,7 @@ static int probe_mode(void) {
         }
     }
     appcontainer_sid_text = sid_string(appcontainer_sid);
-    if (GetAppContainerFolderPath(profile, &folder) != S_OK || folder == NULL) {
+    if (GetAppContainerFolderPath(appcontainer_sid_text, &folder) != S_OK || folder == NULL) {
         fail_message("cannot resolve AppContainer profile folder");
     }
     if (swprintf_s(snapshot, MAX_WPATH, L"%ls\\probe-copy.exe", folder) < 0
