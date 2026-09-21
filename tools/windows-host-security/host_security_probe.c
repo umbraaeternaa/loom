@@ -402,7 +402,7 @@ static void run_appcontainer_child(const wchar_t *snapshot, PSID appcontainer_si
     SOCKET listener = INVALID_SOCKET;
     u_short port = 0;
     wchar_t command[MAX_WPATH];
-    wchar_t environment[2] = {L'\0', L'\0'};
+    LPVOID environment = NULL;
     DWORD wait;
     DWORD exit_code = 0;
 
@@ -431,12 +431,19 @@ static void run_appcontainer_child(const wchar_t *snapshot, PSID appcontainer_si
     if (swprintf_s(command, MAX_WPATH, L"\"%ls\" --child %u", snapshot, (unsigned)port) < 0) {
         fail_message("cannot build AppContainer child command");
     }
+    if (!CreateEnvironmentBlock(&environment, NULL, FALSE)) {
+        fail_win32("cannot create system-only AppContainer environment");
+    }
     if (!CreateProcessW(snapshot, command, NULL, NULL, FALSE,
                         EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED
                         | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
                         environment, NULL, &startup.StartupInfo, &process)) {
+        DWORD error = GetLastError();
+        DestroyEnvironmentBlock(environment);
+        SetLastError(error);
         fail_win32("cannot create zero-capability AppContainer process");
     }
+    DestroyEnvironmentBlock(environment);
     job = create_containment_job();
     if (!AssignProcessToJobObject(job, process.hProcess)) fail_win32("cannot assign AppContainer to Job Object");
     if (ResumeThread(process.hThread) == (DWORD)-1) fail_win32("cannot resume AppContainer process");

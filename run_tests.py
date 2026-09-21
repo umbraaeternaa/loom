@@ -9962,6 +9962,9 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "SetSecurityInfo(file, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION" in probe_source
             and "PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES" in probe_source
             and "capabilities.CapabilityCount = 0" in probe_source
+            and "CreateEnvironmentBlock(&environment, NULL, FALSE)" in probe_source
+            and "DestroyEnvironmentBlock(environment)" in probe_source
+            and "wchar_t environment[2]" not in probe_source
             and "WSAEACCES" in probe_source
             and "JOB_OBJECT_LIMIT_ACTIVE_PROCESS" in probe_source
             and "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE" in probe_source

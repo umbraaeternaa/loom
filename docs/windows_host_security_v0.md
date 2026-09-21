@@ -22,7 +22,8 @@ and an explicitly captured x64 `cl.exe`. It requires all six checks:
 4. The private executable snapshot is byte-identical to the source probe and
    the opened final-handle identity remains stable during inspection.
 5. A zero-capability AppContainer token is proved at runtime and cannot connect
-   to an active loopback listener.
+   to an active loopback listener. Its child receives a system-only environment
+   block, never the parent CI environment.
 6. A Job Object enforces one active process and
    `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` terminates a live child.
 
@@ -66,7 +67,7 @@ The native profile uses documented Windows primitives:
 - [AppContainer isolation](https://learn.microsoft.com/windows/win32/secauthz/appcontainer-isolation)
 - [Launching an AppContainer process](https://learn.microsoft.com/windows/win32/secauthz/implementing-an-appcontainer)
 - [`CreateAppContainerProfile`](https://learn.microsoft.com/windows/win32/api/userenv/nf-userenv-createappcontainerprofile)
+- [`CreateEnvironmentBlock`](https://learn.microsoft.com/windows/win32/api/userenv/nf-userenv-createenvironmentblock)
 - [Job Objects](https://learn.microsoft.com/windows/win32/procthread/job-objects)
 - [`PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`](https://learn.microsoft.com/windows/win32/api/processthreadsapi/nf-processthreadsapi-updateprocthreadattribute)
 - [`FILE_FLAG_OPEN_REPARSE_POINT`](https://learn.microsoft.com/windows/win32/api/fileapi/nf-fileapi-createfilew)
-
