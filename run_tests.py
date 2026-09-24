@@ -8581,7 +8581,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == (501 if is_browser_bundle else 524)
+            and about_json["citadel_checks"] == (501 if is_browser_bundle else 525)
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["wasm_abi_versions"] == ([1] if is_browser_bundle else [1, 2])
             and about_json["i31_bits"] == 31
@@ -9111,7 +9111,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 524/524 citadel checks" in quick
+            and "PASS -- 525/525 citadel checks" in quick
             and "tools/windows_core_conformance.py --self-test" in quick
             and "tools/windows_component_conformance.py --self-test" in quick
             and "tools/windows_host_security_conformance.py --self-test" in quick
@@ -9225,7 +9225,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "524-windows-host-security-substrate-v0")' in play
+            and 'bundleUrl.searchParams.set("v", "525-windows-bounded-execution-integration-v0")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -9994,6 +9994,64 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         print(f"  {'ok  ' if windows_host_security_ok else 'FAIL'} portability: Windows Host Security Substrate v0 fail-closed profile")
     except Exception as e:
         print(f"  FAIL Windows Host Security Substrate v0 pin: {e}")
+    try:                                               # Windows Bounded Execution integrates signed Approval through terminal Result
+        root = Path(__file__).resolve().parent
+        contract_path = root.joinpath("loom_windows_execution.py")
+        conformance = root.joinpath("tools", "windows_bounded_execution_conformance.py")
+        adapter = root.joinpath("tools", "windows-bounded-execution", "bounded_execution_adapter.c")
+        integration_doc = root.joinpath("docs", "windows_bounded_execution_v0.md")
+        workflow = root.joinpath(".github", "workflows", "ci.yml").read_text()
+        pyproject = tomllib.loads(root.joinpath("pyproject.toml").read_text())
+        attributes = root.joinpath(".gitattributes").read_text().splitlines()
+        contract_source = contract_path.read_text()
+        runner_source = conformance.read_text()
+        adapter_source = adapter.read_text()
+        integration_doc_words = " ".join(integration_doc.read_text().split())
+        self_test = subprocess.run(
+            [sys.executable, str(conformance), "--self-test"],
+            capture_output=True, text=True,
+        )
+        with tempfile.TemporaryDirectory(prefix="loom-windows-bounded-refusal-") as temporary:
+            witness = Path(temporary).joinpath("forbidden.json")
+            refusal = subprocess.run(
+                [sys.executable, str(conformance), "--output", str(witness)],
+                capture_output=True, text=True,
+            )
+            refusal_ok = refusal.returncode == 1 and not witness.exists()
+        windows_bounded_execution_ok = (
+            contract_path.is_file() and conformance.is_file() and adapter.is_file()
+            and integration_doc.is_file()
+            and self_test.returncode == 0
+            and "PASS Windows Bounded Execution Integration v0 portable self-test (non-certifying)" in self_test.stdout
+            and refusal_ok
+            and 'WITNESS_SCHEMA = "loom-windows-bounded-execution-ci-witness/v0"' in contract_source
+            and 'CLAIM_SCHEMA = "loom-windows-action-claim/v0"' in contract_source
+            and 'RESULT_SCHEMA = "loom-windows-action-result/v0"' in contract_source
+            and len(__import__("loom_windows_execution").EXPECTED_CHECKS) == 6
+            and "Action Approval v2 was already claimed" in contract_source
+            and "Windows execution reservation is absent, replayed, or not terminalizable" in contract_source
+            and 'EXPECTED_RUNNER = "windows-2025"' in runner_source
+            and "two /Brepro native adapter builds are not byte-identical" in runner_source
+            and "_verify_action_capsule_approval_v2(" in runner_source
+            and "contract.claim_once(" in runner_source
+            and "contract.mediate(" in runner_source
+            and "contract.reserve(" in runner_source
+            and "contract.complete(" in runner_source
+            and "fixed native adapter" in runner_source
+            and '#include "../windows-host-security/host_security_probe.c"' in adapter_source
+            and "verify-windows-bounded-execution:" in workflow
+            and workflow.count("runs-on: windows-2025") >= 4
+            and "python tools/windows_bounded_execution_conformance.py --output .windows-bounded-execution-witness/x86_64-pc-windows-msvc.json" in workflow
+            and "name: windows-bounded-execution-integration-v0" in workflow
+            and "loom_windows_execution" in pyproject["tool"]["setuptools"]["py-modules"]
+            and "tools/windows-bounded-execution/bounded_execution_adapter.c text eol=lf" in attributes
+            and "fixed integration profile" in integration_doc_words
+            and "not a general-purpose Windows executor" in integration_doc_words
+        )
+        ok += windows_bounded_execution_ok
+        print(f"  {'ok  ' if windows_bounded_execution_ok else 'FAIL'} portability: Windows Bounded Execution Integration v0")
+    except Exception as e:
+        print(f"  FAIL Windows Bounded Execution Integration v0 pin: {e}")
     try:                                               # module boundaries keep loom.py a facade instead of a re-growing monolith
         mbdoc = Path(__file__).with_name("docs").joinpath("module_boundaries.md").read_text()
         module_boundary_doc_ok = (
@@ -10043,7 +10101,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 524/524 citadel checks" in rdoc
+            and "PASS -- 525/525 citadel checks" in rdoc
             and "Windows Core Conformance v0 adds a native `windows-2025` proof lane" in rdoc
             and "does not yet certify Windows" in rdoc_words
             and "Dogfooding v1 evaluates one bounded first-order Pure LOOM policy" in rdoc
@@ -10114,7 +10172,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 171   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, Portable Execution Evidence Bundle v0, Dogfooding v1, Evidence-fed Dogfooding v2, Multi-Action Plan v0, aggregate receipt v0, replayed execution state machine v0, Evidence Dataflow v0, detached Byte Delivery Evidence v0, Windows Core Conformance v0, Windows Component Conformance v0, Windows Host Security Substrate v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, WASM direct/applyN type parity, and the WASM seam/resource frontier
+    total = len(CASES) + 172   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, Portable Execution Evidence Bundle v0, Dogfooding v1, Evidence-fed Dogfooding v2, Multi-Action Plan v0, aggregate receipt v0, replayed execution state machine v0, Evidence Dataflow v0, detached Byte Delivery Evidence v0, Windows Core Conformance v0, Windows Component Conformance v0, Windows Host Security Substrate v0, Windows Bounded Execution Integration v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, WASM direct/applyN type parity, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

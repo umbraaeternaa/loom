@@ -44,6 +44,9 @@ Current stable boundaries:
 | `loom_windows_host.py` | pure validation and canonical hashing for Windows Host Security v0 native evidence |
 | `tools/windows_host_security_conformance.py` | pinned Windows certifying runner and non-authorizing revision-bound witness emitter |
 | `tools/windows-host-security/host_security_probe.c` | repository-owned SID/DACL, reparse, AppContainer, network, and Job Object native probe |
+| `loom_windows_execution.py` | additive Windows Approval-to-Result lifecycle, one-use ledger, and native receipt validation |
+| `tools/windows_bounded_execution_conformance.py` | pinned Windows Bounded Execution integration runner and revision-bound witness emitter |
+| `tools/windows-bounded-execution/bounded_execution_adapter.c` | fixed native integration adapter over the Host Security Substrate primitives |
 
 ## Gate boundary rule
 

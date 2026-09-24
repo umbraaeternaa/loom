@@ -228,6 +228,33 @@ jobs:
           path: .windows-host-security-witness/x86_64-pc-windows-msvc.json
           if-no-files-found: error
 
+  verify-windows-bounded-execution:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Pin the native x64 compiler
+        shell: pwsh
+        run: |
+          $compiler = (Get-Command cl.exe).Source
+          "LOOM_WINDOWS_CL=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Compile Windows Bounded Execution surfaces
+        run: python -m py_compile loom.py loom_windows_host.py loom_windows_execution.py tools/windows_bounded_execution_conformance.py
+      - name: Run Windows Bounded Execution Integration v0
+        env:
+          LOOM_WINDOWS_RUNNER: windows-2025
+        run: python tools/windows_bounded_execution_conformance.py --output .windows-bounded-execution-witness/x86_64-pc-windows-msvc.json
+      - name: Upload Windows Bounded Execution witness
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-bounded-execution-integration-v0
+          path: .windows-bounded-execution-witness/x86_64-pc-windows-msvc.json
+          if-no-files-found: error
+
   federate-component-evidence:
     needs: [verify, verify-macos-component]
     runs-on: ubuntu-latest

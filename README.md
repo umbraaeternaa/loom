@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 524 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 525 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 524/524 citadel checks
+PASS — 525/525 citadel checks
 ```
 
 ## The idea in one screen
@@ -386,9 +386,20 @@ component-by-component reparse-point refusal, a byte-identical private
 snapshot, a zero-capability AppContainer with real loopback-network denial,
 and Job Object process-tree containment. Its revision-bound
 `loom-windows-host-security-ci-witness/v0` artifact is test-only and grants no
-authority. This substrate is deliberately not yet wired into LOOM Bounded
-Execution and does not claim native operator presence or Federation v1. See
+authority. The substrate alone still grants no Bounded Execution authority and
+does not claim native operator presence or Federation v1. See
 [`docs/windows_host_security_v0.md`](docs/windows_host_security_v0.md).
+
+### Windows Bounded Execution Integration v0
+
+A fourth independent `windows-2025` lane now binds a real signed Action
+Approval v2 to an atomic one-use Windows claim, exact environment/stdin
+mediation, the native zero-capability AppContainer and Job Object adapter, and
+a terminal hash-linked Result. Its revision-bound witness remains test-only and
+non-authorizing. The adapter is one fixed repository-owned integration action,
+not a general-purpose Windows executor; existing POSIX Bounded Execution v0 is
+unchanged. See
+[`docs/windows_bounded_execution_v0.md`](docs/windows_bounded_execution_v0.md).
 
 ## Published docs parity
 

@@ -42,8 +42,10 @@ operator presence, or Federation v1. It does not turn a CI witness into an
 approval and does not grant a capability. The cumulative Win32 component walk
 detects reparse points on each opened component, but it is not a handle-relative
 NT namespace resolver and therefore does not claim to eliminate every
-path-replacement race. Integration requires a later host adapter that reuses
-these properties inside the signed Claim/Mediation/Bounded Execution lifecycle.
+path-replacement race. The separate Windows Bounded Execution Integration v0
+profile now reuses these properties inside a signed Approval/Claim/Mediation/
+Execution/Result lifecycle, while this substrate witness remains independently
+non-authorizing.
 
 ## Commands
 

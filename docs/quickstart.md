@@ -60,7 +60,7 @@ python3 loom.py about --format json
 The expected public baseline is:
 
 ```console
-PASS -- 524/524 citadel checks
+PASS -- 525/525 citadel checks
 ```
 
 The portable Windows core harness can also be exercised without making a
@@ -70,6 +70,7 @@ Windows certification claim:
 python3 tools/windows_core_conformance.py --self-test
 python3 tools/windows_component_conformance.py --self-test
 python3 tools/windows_host_security_conformance.py --self-test
+python3 tools/windows_bounded_execution_conformance.py --self-test
 ```
 
 Only the pinned `verify-windows-core` CI job may emit the revision-bound
@@ -84,6 +85,11 @@ its tamper refusals on any platform. Only the pinned
 `verify-windows-host-security` job builds and runs the native SID/DACL,
 reparse-point, AppContainer, network-denial, and Job Object probe; portable
 self-test mode is explicitly non-certifying.
+
+The fourth command validates the additive Windows Approval-to-Result lifecycle,
+native receipt schema, and tamper refusal without making a Windows
+certification claim. Only `verify-windows-bounded-execution` builds the fixed
+native adapter and emits the revision-bound integration witness.
 
 The CLI help is also pinned:
 
