@@ -324,6 +324,9 @@ Expected public markers:
   WASM ABI version, all supported WASM ABI versions, and the backend list.
 - An installed checkout exposes `loom` as the same CLI surface as
   `python3 loom.py`.
+- The Linux federation job proves its real user plus network namespace
+  prerequisite before Citadel; inability to create that namespace fails the
+  job without emitting a Linux general-execution witness.
 
 ## Non-claims
 

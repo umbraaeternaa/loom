@@ -7105,6 +7105,9 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                 and "needs: [verify, verify-macos-component, verify-windows-general-execution]" in federation_workflow
                 and "--expected-commit \"$GITHUB_SHA\"" in federation_workflow
                 and "cross-platform-general-execution-federation-v0" in federation_workflow
+                and "Enable and prove Linux user and network namespaces" in federation_workflow
+                and "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0" in federation_workflow
+                and "/usr/bin/unshare --user --map-root-user --net -- /usr/bin/true" in federation_workflow
                 and (
                     not execution_sandbox_available
                     or (

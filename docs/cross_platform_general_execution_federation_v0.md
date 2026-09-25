@@ -22,6 +22,14 @@ Approval-to-Result chain and its operator public key. The Windows input is the
 existing `loom-windows-general-execution-ci-witness/v1`, including its native
 adversarial checks and terminal lifecycle.
 
+Ubuntu runners can apply an AppArmor policy that blocks unprivileged user
+namespaces even when the kernel supports them. The Linux CI job explicitly
+opens that policy gate on the ephemeral runner, then requires
+`/usr/bin/unshare --user --map-root-user --net -- /usr/bin/true` to succeed
+before Citadel may emit a Linux witness. This is a real kernel namespace
+precondition, not a fallback or simulated pass. A runner that cannot satisfy
+it fails closed and contributes no federation input.
+
 `loom_general_federation.py` validates every nested native artifact before it
 builds `loom-cross-platform-general-execution-federation/v0`.
 `tools/verify_general_execution_federation_ci.py` accepts exactly three JSON
