@@ -61,6 +61,7 @@ static int network_mode(void) {
     if (connection == INVALID_SOCKET) {
         error = WSAGetLastError();
         WSACleanup();
+        fprintf(stderr, "loom-network-socket-error:%d\n", error);
         return error == WSAEACCES ? 0 : 45;
     }
     if (ioctlsocket(connection, FIONBIO, &nonblocking) == SOCKET_ERROR) return 46;
