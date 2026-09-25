@@ -10108,6 +10108,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "verify_path_components(request->target, 0)" in adapter_source
             and "LOOM_PARENT_SECRET" in target_source
             and "CreateSymbolicLinkW" in target_source
+            and "return error == WSAEACCES ? 0 : 45;" in target_source
             and "verify-windows-general-execution:" in workflow
             and "LOOM_WINDOWS_RUNNER: windows-2025" in workflow
             and workflow.count("runs-on: windows-2025") >= 5

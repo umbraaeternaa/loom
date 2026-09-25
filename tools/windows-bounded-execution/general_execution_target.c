@@ -58,7 +58,11 @@ static int network_mode(void) {
     if (port == 0 || port > 65535) return 43;
     if (WSAStartup(MAKEWORD(2, 2), &data) != 0) return 44;
     connection = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (connection == INVALID_SOCKET) return 45;
+    if (connection == INVALID_SOCKET) {
+        error = WSAGetLastError();
+        WSACleanup();
+        return error == WSAEACCES ? 0 : 45;
+    }
     if (ioctlsocket(connection, FIONBIO, &nonblocking) == SOCKET_ERROR) return 46;
     memset(&target, 0, sizeof(target));
     target.sin_family = AF_INET;
