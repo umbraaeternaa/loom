@@ -67,7 +67,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "525-windows-bounded-execution-integration-v0")',
+        'bundleUrl.searchParams.set("v", "526-windows-general-adapter-execution-v1")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -169,8 +169,8 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "525 self-verifying checks",
-        ">525</div>",
+        "526 self-verifying checks",
+        ">526</div>",
     )
     forbidden = (
         "523 self-verifying checks",
@@ -1116,7 +1116,7 @@ def _check_multi_action_plan_v0() -> None:
         if needle not in delivery_words:
             raise SystemExit("docs parity: Multi-Action byte-delivery contract lost marker: " + needle)
     readiness = RELEASE_READINESS_DOC.read_text()
-    if "`citadel_checks: 525`" not in readiness or "`citadel_checks: 524`" in readiness:
+    if "`citadel_checks: 526`" not in readiness or "`citadel_checks: 525`" in readiness:
         raise SystemExit("docs parity: release-readiness about count drift")
 
 

@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 525 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 526 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 525/525 citadel checks
+PASS — 526/526 citadel checks
 ```
 
 ## The idea in one screen
@@ -400,6 +400,20 @@ non-authorizing. The adapter is one fixed repository-owned integration action,
 not a general-purpose Windows executor; existing POSIX Bounded Execution v0 is
 unchanged. See
 [`docs/windows_bounded_execution_v0.md`](docs/windows_bounded_execution_v0.md).
+
+### Windows General Adapter Execution v1
+
+A fifth independent `windows-2025` lane extends the fixed integration action
+to one exact hash-pinned PE target. The signed Invocation Binding covers target
+hash and arguments, exact environment/stdin, timeout, and denied shell/network
+policy. The adapter takes those values only through a bounded binary stdin
+frame, creates a byte-identical private snapshot, and executes it in a
+zero-capability AppContainer under a one-process Job Object while streaming
+bounded stdout/stderr. Native CI attacks target hash and reparse handling,
+parent-environment isolation, live network access, child spawning, output
+flooding, timeout, and replay. The revision-bound witness remains test-only and
+non-authorizing. See
+[`docs/windows_general_execution_v1.md`](docs/windows_general_execution_v1.md).
 
 ## Published docs parity
 

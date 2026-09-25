@@ -47,6 +47,10 @@ Current stable boundaries:
 | `loom_windows_execution.py` | additive Windows Approval-to-Result lifecycle, one-use ledger, and native receipt validation |
 | `tools/windows_bounded_execution_conformance.py` | pinned Windows Bounded Execution integration runner and revision-bound witness emitter |
 | `tools/windows-bounded-execution/bounded_execution_adapter.c` | fixed native integration adapter over the Host Security Substrate primitives |
+| `loom_windows_general.py` | closed request/frame/receipt and terminal ledger contracts for Windows General Adapter Execution v1 |
+| `tools/windows_general_execution_conformance.py` | pinned native general-execution runner with adversarial revision-bound witness |
+| `tools/windows-bounded-execution/general_execution_adapter.c` | zero-capability hash-pinned PE snapshot executor with bounded streaming I/O |
+| `tools/windows-bounded-execution/general_execution_target.c` | repository-owned adversarial target used only by the native CI profile |
 
 ## Gate boundary rule
 
@@ -233,3 +237,12 @@ claims into the language core. Certifying mode is restricted to the pinned
 Windows CI environment; `--self-test` is explicitly non-certifying. Missing
 Node.js is a hard failure, and the emitted witness grants no authority. The
 normative contract is [`windows_core_conformance_v0.md`](windows_core_conformance_v0.md).
+
+Windows General Adapter Execution v1 is additive to the fixed v0 integration.
+`loom_windows_general.py` owns only closed portable contracts and ledger
+terminalization; it performs no process launch on non-Windows hosts. The native
+adapter alone owns target remeasurement, private snapshot custody,
+zero-capability AppContainer launch, one-process Job Object containment, exact
+child environment construction, and streaming output/timeout termination. Its
+CI witness is test-only and non-authorizing. The normative contract is
+[`windows_general_execution_v1.md`](windows_general_execution_v1.md).

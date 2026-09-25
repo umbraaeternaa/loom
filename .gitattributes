@@ -6,3 +6,5 @@ tools/loom-effectful-component-builder/Cargo.lock text eol=lf
 tools/loom-effectful-component-builder/src/main.rs text eol=lf
 tools/windows-host-security/host_security_probe.c text eol=lf
 tools/windows-bounded-execution/bounded_execution_adapter.c text eol=lf
+tools/windows-bounded-execution/general_execution_adapter.c text eol=lf
+tools/windows-bounded-execution/general_execution_target.c text eol=lf
