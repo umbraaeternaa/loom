@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import loom as _loom
 from loom_frontend import ASM_INTRINSICS
 import loom_provenance as _loom_provenance
+import loom_general_federation as _loom_general_federation
 from loom import parse, parse_spans, tokenize, tokenize_spans, check, run_call, compile_py, run_compiled, run_js, compile_js, compile_wasm, verify_wasm_trust_receipt, verify_wasm_trust_receipt_v2, verify_wasm_source_equivalence, verify_wasm_component_bridge_v0, build_wit_component_boundary_v0, verify_wit_component_boundary_v0, run_wasm, emit_wat, LoomError, _WASM_ABI_VERSION
 
 def _context_chain_source(depth=65):
@@ -7033,6 +7034,92 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             }, sort_keys=True))
         ok += action_result_v0_ok
         print(f"  {'ok  ' if action_result_v0_ok else 'FAIL'} gate: Action Capsule Result v0")
+        try:                                           # Federate real native terminal Results, not host-neutral simulations
+            platform_id = (
+                "aarch64-apple-darwin" if sys.platform == "darwin"
+                else "x86_64-unknown-linux-gnu" if sys.platform.startswith("linux")
+                else None
+            )
+            witness_output = os.environ.get("LOOM_GENERAL_EXECUTION_WITNESS_OUT")
+            posix_witness_validation = None
+            rejected_posix_witness = None
+            if execution_sandbox_available and action_result_v0_ok and platform_id is not None:
+                posix_witness_validation = _loom_general_federation.build_posix_witness(
+                    platform_id,
+                    os.environ.get("GITHUB_SHA", "0" * 40),
+                    {
+                        "provider": "github-actions", "workflow": "LOOM Citadel",
+                        "job": _loom_general_federation.POSIX_JOBS[platform_id],
+                        "runner": os.environ.get(
+                            "LOOM_GENERAL_EXECUTION_RUNNER",
+                            "macos-14" if platform_id.startswith("aarch64") else "ubuntu-latest",
+                        ),
+                        "run_id": int(os.environ.get("GITHUB_RUN_ID", "1")),
+                        "run_attempt": int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")),
+                    },
+                    test_key, action_result["result"],
+                    [{"id": item, "status": "pass"} for item in _loom_general_federation.POSIX_CHECKS],
+                )
+                if posix_witness_validation["valid"]:
+                    tampered_witness = json.loads(json.dumps(posix_witness_validation["witness"]))
+                    tampered_witness["action_result"]["execution"]["sandbox"]["profile"] = (
+                        "darwin-seatbelt-network-deny/v0"
+                        if platform_id.startswith("x86_64")
+                        else "linux-user-network-namespace/v0"
+                    )
+                    tampered_witness["witness_sha256"] = _loom_general_federation.sha256_json({
+                        key: value for key, value in tampered_witness.items()
+                        if key != "witness_sha256"
+                    })
+                    rejected_posix_witness = _loom_general_federation.validate_posix_witness(
+                        tampered_witness, os.environ.get("GITHUB_SHA", "0" * 40),
+                    )
+                    if witness_output:
+                        output_path = Path(witness_output)
+                        output_path.parent.mkdir(parents=True, exist_ok=True)
+                        output_path.write_bytes(
+                            _loom_general_federation.canonical_json(posix_witness_validation["witness"])
+                            + b"\n"
+                        )
+            elif witness_output:
+                raise RuntimeError(
+                    "certifying POSIX general-execution witness requires a supported native sandbox"
+                )
+            semantic_contract = _loom_general_federation.semantic_contract()
+            federation_workflow = Path(__file__).with_name(".github").joinpath(
+                "workflows", "ci.yml",
+            ).read_text()
+            general_federation_contract_ok = (
+                semantic_contract["controls"] == list(_loom_general_federation.SEMANTIC_CONTROLS)
+                and semantic_contract["native_mechanisms_equal"] is False
+                and semantic_contract["target_bytes_equal"] is False
+                and semantic_contract["contract_sha256"]
+                == _loom_general_federation.sha256_json({
+                    key: value for key, value in semantic_contract.items()
+                    if key != "contract_sha256"
+                })
+                and Path(__file__).with_name("tools").joinpath(
+                    "verify_general_execution_federation_ci.py",
+                ).is_file()
+                and "federate-general-execution-evidence:" in federation_workflow
+                and "needs: [verify, verify-macos-component, verify-windows-general-execution]" in federation_workflow
+                and "--expected-commit \"$GITHUB_SHA\"" in federation_workflow
+                and "cross-platform-general-execution-federation-v0" in federation_workflow
+                and (
+                    not execution_sandbox_available
+                    or (
+                        posix_witness_validation is not None
+                        and posix_witness_validation["valid"] is True
+                        and rejected_posix_witness is not None
+                        and rejected_posix_witness["valid"] is False
+                    )
+                )
+            )
+        except Exception as error:
+            general_federation_contract_ok = False
+            print("       federation diagnostics:", error)
+        ok += general_federation_contract_ok
+        print(f"  {'ok  ' if general_federation_contract_ok else 'FAIL'} portability: Cross-Platform General Execution Federation v0")
         multi_action_receipt_ok = not execution_sandbox_available
         multi_action_receipt_diagnostics = {}
         if execution_sandbox_available and action_result_v0_ok:
@@ -8581,7 +8668,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == (501 if is_browser_bundle else 526)
+            and about_json["citadel_checks"] == (501 if is_browser_bundle else 527)
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["wasm_abi_versions"] == ([1] if is_browser_bundle else [1, 2])
             and about_json["i31_bits"] == 31
@@ -9111,7 +9198,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 526/526 citadel checks" in quick
+            and "PASS -- 527/527 citadel checks" in quick
             and "tools/windows_core_conformance.py --self-test" in quick
             and "tools/windows_component_conformance.py --self-test" in quick
             and "tools/windows_host_security_conformance.py --self-test" in quick
@@ -9225,7 +9312,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "526-windows-general-adapter-execution-v1")' in play
+            and 'bundleUrl.searchParams.set("v", "527-cross-platform-general-execution-federation-v0")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -10174,7 +10261,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 526/526 citadel checks" in rdoc
+            and "PASS -- 527/527 citadel checks" in rdoc
             and "Windows Core Conformance v0 adds a native `windows-2025` proof lane" in rdoc
             and "does not yet certify Windows" in rdoc_words
             and "Dogfooding v1 evaluates one bounded first-order Pure LOOM policy" in rdoc
@@ -10245,7 +10332,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 173   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, Portable Execution Evidence Bundle v0, Dogfooding v1, Evidence-fed Dogfooding v2, Multi-Action Plan v0, aggregate receipt v0, replayed execution state machine v0, Evidence Dataflow v0, detached Byte Delivery Evidence v0, Windows Core Conformance v0, Windows Component Conformance v0, Windows Host Security Substrate v0, Windows Bounded Execution Integration v0, Windows General Adapter Execution v1, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, WASM direct/applyN type parity, and the WASM seam/resource frontier
+    total = len(CASES) + 174   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, Portable Execution Evidence Bundle v0, Dogfooding v1, Evidence-fed Dogfooding v2, Multi-Action Plan v0, aggregate receipt v0, replayed execution state machine v0, Evidence Dataflow v0, detached Byte Delivery Evidence v0, Windows Core Conformance v0, Windows Component Conformance v0, Windows Host Security Substrate v0, Windows Bounded Execution Integration v0, Windows General Adapter Execution v1, Cross-Platform General Execution Federation v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, WASM direct/applyN type parity, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

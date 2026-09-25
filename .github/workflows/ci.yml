@@ -43,10 +43,12 @@ jobs:
           echo "LOOM_RUSTC=$(rustup which --toolchain 1.93.0 rustc)" >> "$GITHUB_ENV"
           echo "LOOM_COMPONENT_CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}" >> "$GITHUB_ENV"
           echo "LOOM_FEDERATION_WITNESS_OUT=${GITHUB_WORKSPACE}/.federation-witness/x86_64-unknown-linux-gnu.json" >> "$GITHUB_ENV"
+          echo "LOOM_GENERAL_EXECUTION_WITNESS_OUT=${GITHUB_WORKSPACE}/.general-execution-witness/x86_64-unknown-linux-gnu.json" >> "$GITHUB_ENV"
+          echo "LOOM_GENERAL_EXECUTION_RUNNER=ubuntu-latest" >> "$GITHUB_ENV"
       - name: Install package build tooling
         run: python -m pip install "setuptools>=61" wheel
       - name: Compile Python sources
-        run: python -m py_compile loom.py loom_parse.py loom_checker.py loom_bounds.py loom_frontend.py loom_recursion.py loom_runtime.py loom_cli.py loom_gate.py loom_observer.py loom_evidence.py loom_approval.py loom_codegen.py loom_wasm.py loom_component.py loom_wasi_capabilities.py loom_component_adapter.py loom_effectful_execution.py loom_effectful_host.py loom_effectful_result.py loom_effectful_attestation.py loom_execution_bundle.py loom_component_release.py loom_provenance.py verify_docs_parity.py docs/loom.py run_tests.py fuzz_tests.py tools/verify_component_federation_ci.py
+        run: python -m py_compile loom.py loom_parse.py loom_checker.py loom_bounds.py loom_frontend.py loom_recursion.py loom_runtime.py loom_cli.py loom_gate.py loom_observer.py loom_evidence.py loom_approval.py loom_codegen.py loom_wasm.py loom_component.py loom_wasi_capabilities.py loom_component_adapter.py loom_effectful_execution.py loom_effectful_host.py loom_effectful_result.py loom_effectful_attestation.py loom_execution_bundle.py loom_component_release.py loom_provenance.py loom_windows_execution.py loom_windows_general.py loom_general_federation.py verify_docs_parity.py docs/loom.py run_tests.py fuzz_tests.py tools/verify_component_federation_ci.py tools/verify_general_execution_federation_ci.py
       - name: Run citadel
         run: python run_tests.py
       - name: Upload Linux Component witness
@@ -54,6 +56,12 @@ jobs:
         with:
           name: component-platform-linux
           path: .federation-witness/x86_64-unknown-linux-gnu.json
+          if-no-files-found: error
+      - name: Upload Linux General Execution witness
+        uses: actions/upload-artifact@v4
+        with:
+          name: general-execution-platform-linux
+          path: .general-execution-witness/x86_64-unknown-linux-gnu.json
           if-no-files-found: error
       - name: Verify published docs parity
         run: python verify_docs_parity.py
@@ -98,10 +106,12 @@ jobs:
           echo "LOOM_RUSTC=$(rustup which --toolchain 1.93.0 rustc)" >> "$GITHUB_ENV"
           echo "LOOM_COMPONENT_CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}" >> "$GITHUB_ENV"
           echo "LOOM_FEDERATION_WITNESS_OUT=${GITHUB_WORKSPACE}/.federation-witness/aarch64-apple-darwin.json" >> "$GITHUB_ENV"
+          echo "LOOM_GENERAL_EXECUTION_WITNESS_OUT=${GITHUB_WORKSPACE}/.general-execution-witness/aarch64-apple-darwin.json" >> "$GITHUB_ENV"
+          echo "LOOM_GENERAL_EXECUTION_RUNNER=macos-14" >> "$GITHUB_ENV"
       - name: Install package build tooling
         run: python -m pip install "setuptools>=61" wheel
       - name: Compile federation surfaces
-        run: python -m py_compile loom.py loom_wasi_capabilities.py loom_component_adapter.py loom_effectful_execution.py loom_effectful_host.py loom_effectful_result.py loom_effectful_attestation.py loom_execution_bundle.py loom_component_release.py run_tests.py tools/verify_component_federation_ci.py
+        run: python -m py_compile loom.py loom_wasi_capabilities.py loom_component_adapter.py loom_effectful_execution.py loom_effectful_host.py loom_effectful_result.py loom_effectful_attestation.py loom_execution_bundle.py loom_component_release.py loom_windows_execution.py loom_windows_general.py loom_general_federation.py run_tests.py tools/verify_component_federation_ci.py tools/verify_general_execution_federation_ci.py
       - name: Run macOS Component citadel
         run: python run_tests.py
       - name: Upload macOS Component witness
@@ -109,6 +119,12 @@ jobs:
         with:
           name: component-platform-macos
           path: .federation-witness/aarch64-apple-darwin.json
+          if-no-files-found: error
+      - name: Upload macOS General Execution witness
+        uses: actions/upload-artifact@v4
+        with:
+          name: general-execution-platform-macos
+          path: .general-execution-witness/aarch64-apple-darwin.json
           if-no-files-found: error
 
   verify-windows-core:
@@ -281,6 +297,12 @@ jobs:
           name: windows-general-adapter-execution-v1
           path: .windows-general-execution-witness/x86_64-pc-windows-msvc.json
           if-no-files-found: error
+      - name: Upload Windows General Execution federation input
+        uses: actions/upload-artifact@v4
+        with:
+          name: general-execution-platform-windows
+          path: .windows-general-execution-witness/x86_64-pc-windows-msvc.json
+          if-no-files-found: error
 
   federate-component-evidence:
     needs: [verify, verify-macos-component]
@@ -304,4 +326,28 @@ jobs:
         with:
           name: component-federation-v0
           path: .federation-result/federation.json
+          if-no-files-found: error
+
+  federate-general-execution-evidence:
+    needs: [verify, verify-macos-component, verify-windows-general-execution]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Download native general-execution witnesses
+        uses: actions/download-artifact@v4
+        with:
+          pattern: general-execution-platform-*
+          path: .general-execution-witness
+          merge-multiple: true
+      - name: Aggregate macOS, Linux, and Windows native evidence
+        run: python tools/verify_general_execution_federation_ci.py .general-execution-witness --expected-commit "$GITHUB_SHA" --output .general-execution-federation/federation.json
+      - name: Upload test-only general-execution federation
+        uses: actions/upload-artifact@v4
+        with:
+          name: cross-platform-general-execution-federation-v0
+          path: .general-execution-federation/federation.json
           if-no-files-found: error

@@ -64,4 +64,5 @@ py-modules = [
   "loom_windows_host",
   "loom_windows_execution",
   "loom_windows_general",
+  "loom_general_federation",
 ]

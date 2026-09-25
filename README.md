@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 526 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 527 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 526/526 citadel checks
+PASS — 527/527 citadel checks
 ```
 
 ## The idea in one screen
@@ -414,6 +414,16 @@ parent-environment isolation, live network access, child spawning, output
 flooding, timeout, and replay. The revision-bound witness remains test-only and
 non-authorizing. See
 [`docs/windows_general_execution_v1.md`](docs/windows_general_execution_v1.md).
+
+### Cross-Platform General Execution Federation v0
+
+Native macOS arm64, Linux x86_64, and Windows x86_64 CI witnesses are now
+aggregated only when all three bind the same revision and independently prove
+the shared exact-invocation, isolation, replay, timeout, output, and terminal
+result controls. Native sandbox mechanisms and executable bytes remain
+explicitly unequal; the claim is semantic concordance, not host equivalence.
+The federation is test-only and non-authorizing. See
+[`docs/cross_platform_general_execution_federation_v0.md`](docs/cross_platform_general_execution_federation_v0.md).
 
 ## Published docs parity
 

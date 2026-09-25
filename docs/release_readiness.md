@@ -6,7 +6,7 @@ experimental, and what LOOM does not claim yet.
 
 ## Current public baseline
 
-- Canonical self-verification: `PASS -- 526/526 citadel checks`.
+- Canonical self-verification: `PASS -- 527/527 citadel checks`.
 - Published browser bundle parity is required before release:
   `python3 verify_docs_parity.py`.
 - The public compatibility surface is `loom.py`; module boundaries are pinned in
@@ -244,12 +244,18 @@ experimental, and what LOOM does not claim yet.
   network, child-spawn, output-flood, and timeout adversarial checks. The
   profile remains test-only, Windows x86_64 PE-only, non-authorizing, and does
   not claim native operator presence or general production sandboxing.
+- Cross-Platform General Execution Federation v0 aggregates native macOS
+  arm64, Linux x86_64, and Windows x86_64 witnesses only when they bind one
+  exact revision and three distinct CI jobs. It proves concordance of the
+  signed exact-invocation, target-hash, network-isolation, replay, timeout,
+  output, and terminal-result controls. It explicitly does not claim identical
+  sandbox mechanisms, target bytes, toolchains, operator presence, or
+  production authority.
 - Multi-Action Plan, Execution State, Evidence Dataflow, and Byte Delivery
   Evidence v0 are evidence composition and replay contracts; live executable
   scheduling, byte-counted process delivery, transport, rollback/compensation, and dynamic
-  graph mutation remain future contracts. Cross-platform sandbox
-  providers beyond macOS Seatbelt and Linux
-  user/network namespaces also remain future work. Compiler
+  graph mutation remain future contracts. Production-grade sandbox providers,
+  native operator presence, and deployable policy remain future work. Compiler
   Receipt v4 is already stable evidence and is not embedded in the
   pre-execution Capsule because no execution observation exists yet.
 - The Gate is a verification and lifecycle layer; it does not magically confine
@@ -311,10 +317,10 @@ python3 loom.py about --format json
 
 Expected public markers:
 
-- `run_tests.py` prints `PASS -- 526/526 citadel checks`.
+- `run_tests.py` prints `PASS -- 527/527 citadel checks`.
 - `verify_docs_parity.py` prints that the published bundle is standalone and
   citadel-green.
-- `loom.py about --format json` reports `citadel_checks: 526`, the default
+- `loom.py about --format json` reports `citadel_checks: 527`, the default
   WASM ABI version, all supported WASM ABI versions, and the backend list.
 - An installed checkout exposes `loom` as the same CLI surface as
   `python3 loom.py`.

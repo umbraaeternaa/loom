@@ -51,6 +51,8 @@ Current stable boundaries:
 | `tools/windows_general_execution_conformance.py` | pinned native general-execution runner with adversarial revision-bound witness |
 | `tools/windows-bounded-execution/general_execution_adapter.c` | zero-capability hash-pinned PE snapshot executor with bounded streaming I/O |
 | `tools/windows-bounded-execution/general_execution_target.c` | repository-owned adversarial target used only by the native CI profile |
+| `loom_general_federation.py` | closed macOS/Linux/Windows native execution witness and semantic-concordance federation contracts |
+| `tools/verify_general_execution_federation_ci.py` | fail-closed three-platform general-execution evidence aggregator |
 
 ## Gate boundary rule
 
