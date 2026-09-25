@@ -237,7 +237,10 @@ def _expect_native(adapter, request, stdin_bytes, status):
         raise AssertionError("native adapter failed: " + result.stderr.decode("utf-8", "replace")[-2000:])
     observation, stdout_bytes, stderr_bytes = contract.parse_response(result.stdout, request)
     if observation["status"] != status:
-        raise AssertionError(f"expected native status {status!r}, got {observation['status']!r}")
+        raise AssertionError(
+            f"expected native status {status!r}, got {observation['status']!r}; "
+            f"observation={observation!r}; stderr={stderr_bytes.decode('utf-8', 'replace')!r}"
+        )
     return observation, stdout_bytes, stderr_bytes, duration_ms
 
 
