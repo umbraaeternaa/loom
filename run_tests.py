@@ -10099,6 +10099,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "target-hash-tamper-refusal" in runner_source
             and "target-reparse-refusal" in runner_source
             and "live-loopback-network-denial" in runner_source
+            and 'os.environ.get("SystemRoot")' in runner_source
             and "child-process-denial" in runner_source
             and "streaming-output-limit-termination" in runner_source
             and "wall-clock-timeout-termination" in runner_source

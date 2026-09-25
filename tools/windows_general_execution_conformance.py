@@ -381,8 +381,16 @@ def _native(output_path):
         checks.append({"id": "target-reparse-refusal", "status": "pass"})
 
         listener = _live_listener()
+        system_root = os.environ.get("SystemRoot")
+        if not system_root:
+            raise AssertionError("Windows runner does not expose SystemRoot for Winsock initialization")
         network_request = _variant(
-            general, argv=["network"], environment={"LOOM_TEST_PORT": str(listener.getsockname()[1])},
+            general,
+            argv=["network"],
+            environment={
+                "LOOM_TEST_PORT": str(listener.getsockname()[1]),
+                "SystemRoot": system_root,
+            },
         )
         network_observation, _, _, _ = _expect_native(adapter, network_request, b"", "exited")
         listener.close()
