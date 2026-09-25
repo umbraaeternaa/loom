@@ -272,6 +272,8 @@ jobs:
       - name: Compile Windows General Execution surfaces
         run: python -m py_compile loom.py loom_provenance.py loom_windows_host.py loom_windows_execution.py loom_windows_general.py tools/windows_bounded_execution_conformance.py tools/windows_general_execution_conformance.py
       - name: Run Windows General Adapter Execution v1
+        env:
+          LOOM_WINDOWS_RUNNER: windows-2025
         run: python tools/windows_general_execution_conformance.py --output .windows-general-execution-witness/x86_64-pc-windows-msvc.json
       - name: Upload Windows General Execution witness
         uses: actions/upload-artifact@v4

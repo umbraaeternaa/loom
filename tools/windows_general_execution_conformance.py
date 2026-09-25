@@ -315,7 +315,7 @@ def _portable_self_test():
 def _native(output_path):
     if os.name != "nt" or platform.machine().lower() not in {"amd64", "x86_64"}:
         raise AssertionError("native certification requires Windows x86_64")
-    if os.environ.get("RUNNER_NAME") != EXPECTED_RUNNER or sys.version_info[:2] != EXPECTED_PYTHON:
+    if os.environ.get("LOOM_WINDOWS_RUNNER") != EXPECTED_RUNNER or sys.version_info[:2] != EXPECTED_PYTHON:
         raise AssertionError("native certification requires windows-2025 and Python 3.12")
     cl, cl_identity = _compiler()
     with tempfile.TemporaryDirectory() as temporary:

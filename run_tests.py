@@ -9878,6 +9878,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             conformance.is_file()
             and 'SCHEMA = "loom-windows-component-ci-witness/v0"' in runner_source
             and 'EXPECTED_RUNNER = "windows-2025"' in runner_source
+            and 'os.environ.get("LOOM_WINDOWS_RUNNER") != EXPECTED_RUNNER' in runner_source
             and 'EXPECTED_HOST = "x86_64-pc-windows-msvc"' in runner_source
             and "_pure_fixture(tools)" in runner_source
             and "_effectful_fixture(tools)" in runner_source
@@ -10108,6 +10109,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "LOOM_PARENT_SECRET" in target_source
             and "CreateSymbolicLinkW" in target_source
             and "verify-windows-general-execution:" in workflow
+            and "LOOM_WINDOWS_RUNNER: windows-2025" in workflow
             and workflow.count("runs-on: windows-2025") >= 5
             and "python tools/windows_general_execution_conformance.py --output .windows-general-execution-witness/x86_64-pc-windows-msvc.json" in workflow
             and "name: windows-general-adapter-execution-v1" in workflow
