@@ -5817,7 +5817,8 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                 "entrypoint": "process",
             }
             effectful_invocation["argv"] = [
-                "run", "--invoke", f"{selected_wit_export}({wave})", str(component_path),
+                "run", "-C", "cache=n", "--invoke",
+                f"{selected_wit_export}({wave})", str(component_path),
             ]
             effectful_invocation["working_directory_uri"] = (effectful_root / "workspace").as_uri()
             effectful_invocation["environment"] = [
@@ -6021,33 +6022,6 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                 effectful_host_record = effectful_host_execution["execution"]
                 if effectful_host_record["status"] != "completed":
                     attempt = effectful_host_record["action_execution"]["attempt"]
-                    probe_home = effectful_root / "probe-home"
-                    probe_home.mkdir(mode=0o700)
-                    probe_cases = {
-                        "minimal": (effectful_invocation["argv"], effectful_environment),
-                        "controlled-home": (
-                            effectful_invocation["argv"],
-                            {**effectful_environment, "HOME": str(probe_home)},
-                        ),
-                        "cache-disabled": (
-                            ["run", "-C", "cache=n"] + effectful_invocation["argv"][1:],
-                            effectful_environment,
-                        ),
-                    }
-                    probe_results = {}
-                    for probe_name, (probe_argv, probe_environment) in probe_cases.items():
-                        probe = subprocess.run(
-                            effectful_host_prefix + [fixture["wasmtime"]] + probe_argv,
-                            input=canonical(semantics_input).encode("utf-8"),
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            cwd=effectful_root / "workspace", env=probe_environment,
-                            shell=False, close_fds=True, timeout=5,
-                        )
-                        probe_results[probe_name] = {
-                            "exit_code": probe.returncode,
-                            "stderr_sha256": hashlib.sha256(probe.stderr).hexdigest(),
-                            "stderr_size_bytes": len(probe.stderr),
-                        }
                     raise ValueError(
                         "Effectful Component host execution did not complete: "
                         + json.dumps({
@@ -6055,7 +6029,6 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                             "exit_code": attempt["exit_code"],
                             "terminating_signal": attempt["terminating_signal"],
                             "stderr_size_bytes": attempt["stderr"]["size_bytes"],
-                            "non_sensitive_probe_results": probe_results,
                         }, sort_keys=True)
                     )
                 validated_effectful_host = _loom.validate_effectful_component_host_execution_v0(

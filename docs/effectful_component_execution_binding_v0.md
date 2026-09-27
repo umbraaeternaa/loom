@@ -49,9 +49,11 @@ environment commitments:
 
 The supplied trusted-host values must reproduce every commitment exactly. The
 adapter digest must equal the pinned Wasmtime executable independently accepted
-by Effectful Component Adapter verification. `argv` must name the exact WIT
-export, canonical JSON request bytes, and literal Component path. Shell and
-network remain denied.
+by Effectful Component Adapter verification. `argv` must disable Wasmtime's
+host cache with `-C cache=n`, then name the exact WIT export, canonical JSON
+request bytes, and literal Component path. This removes any implicit `HOME` or
+host cache dependency from the closed execution environment. Shell and network
+remain denied.
 
 ## Host and ledger proof
 

@@ -349,7 +349,8 @@ def build_effectful_component_execution_binding_v0(
         )
         wave = "[" + ",".join(str(byte) for byte in request_bytes) + "]"
         expected_argv = [
-            "run", "--invoke", f"{selected['wit_name']}({wave})", component_path,
+            "run", "-C", "cache=n", "--invoke",
+            f"{selected['wit_name']}({wave})", component_path,
         ]
         if invocation.get("argv") != expected_argv:
             raise ValueError("Invocation argv does not name the exact WIT export, request, and Component URI")

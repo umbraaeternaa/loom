@@ -50,8 +50,9 @@ The transition is fail-closed and ordered:
 6. Atomically reserve the ready mediation once in `action_executions_v0`.
 7. Launch the private runtime snapshot with the signed argv prefix and only the
    final signed Component path replaced by the private Component snapshot.
-   Shell and network remain denied; timeout and output limits are inherited
-   unchanged from Bounded Execution v0.
+   The signed prefix disables Wasmtime's host cache, so execution needs no
+   ambient `HOME` or writable cache path. Shell and network remain denied;
+   timeout and output limits are inherited unchanged from Bounded Execution v0.
 8. Finalize the ordinary Action execution ledger row and emit a self-contained,
    content-addressed host execution record. Temporary snapshots are removed by
    the host cleanup path.
