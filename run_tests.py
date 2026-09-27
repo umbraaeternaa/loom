@@ -6019,6 +6019,17 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             )
             if effectful_host_sandbox_available and effectful_host_execution["valid"]:
                 effectful_host_record = effectful_host_execution["execution"]
+                if effectful_host_record["status"] != "completed":
+                    attempt = effectful_host_record["action_execution"]["attempt"]
+                    raise ValueError(
+                        "Effectful Component host execution did not complete: "
+                        + json.dumps({
+                            "status": effectful_host_record["status"],
+                            "exit_code": attempt["exit_code"],
+                            "terminating_signal": attempt["terminating_signal"],
+                            "stderr_size_bytes": attempt["stderr"]["size_bytes"],
+                        }, sort_keys=True)
+                    )
                 validated_effectful_host = _loom.validate_effectful_component_host_execution_v0(
                     effectful_host_record,
                 )
@@ -6093,6 +6104,11 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                     semantics_wasm, running_surface, compiler_components,
                     compiler_components, test_key, test_key, effectful_attested_at,
                 )
+                if not prepared_effectful_attestation["valid"]:
+                    raise ValueError(
+                        "Effectful Component Action Result Attestation fixture rejected: "
+                        + repr(prepared_effectful_attestation["findings"])
+                    )
                 effectful_attestation_signature = base64.b64encode(sign_bytes(
                     base64.b64decode(prepared_effectful_attestation["signing_bytes"]),
                 )).decode("ascii")
