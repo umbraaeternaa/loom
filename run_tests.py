@@ -8836,7 +8836,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == (501 if is_browser_bundle else 529)
+            and about_json["citadel_checks"] == (501 if is_browser_bundle else 531)
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["wasm_abi_versions"] == ([1] if is_browser_bundle else [1, 2])
             and about_json["i31_bits"] == 31
@@ -9366,7 +9366,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 529/529 citadel checks" in quick
+            and "PASS -- 531/531 citadel checks" in quick
             and "tools/windows_core_conformance.py --self-test" in quick
             and "tools/windows_component_conformance.py --self-test" in quick
             and "tools/windows_host_security_conformance.py --self-test" in quick
@@ -9480,7 +9480,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "529-process-input-receipt-v0")' in play
+            and 'bundleUrl.searchParams.set("v", "531-windows-process-input-receipt-v0")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -10269,11 +10269,19 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         )
         with tempfile.TemporaryDirectory(prefix="loom-windows-bounded-refusal-") as temporary:
             witness = Path(temporary).joinpath("forbidden.json")
+            input_witness = Path(temporary).joinpath("forbidden-input.json")
             refusal = subprocess.run(
-                [sys.executable, str(conformance), "--output", str(witness)],
+                [
+                    sys.executable, str(conformance), "--output", str(witness),
+                    "--input-receipt-output", str(input_witness),
+                ],
                 capture_output=True, text=True,
             )
-            refusal_ok = refusal.returncode == 1 and not witness.exists()
+            refusal_ok = (
+                refusal.returncode == 1
+                and not witness.exists()
+                and not input_witness.exists()
+            )
         windows_bounded_execution_ok = (
             contract_path.is_file() and conformance.is_file() and adapter.is_file()
             and integration_doc.is_file()
@@ -10297,7 +10305,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and '#include "../windows-host-security/host_security_probe.c"' in adapter_source
             and "verify-windows-bounded-execution:" in workflow
             and workflow.count("runs-on: windows-2025") >= 4
-            and "python tools/windows_bounded_execution_conformance.py --output .windows-bounded-execution-witness/x86_64-pc-windows-msvc.json" in workflow
+            and "python tools/windows_bounded_execution_conformance.py --output .windows-bounded-execution-witness/x86_64-pc-windows-msvc.json --input-receipt-output .windows-process-input-receipt-witness/x86_64-pc-windows-msvc.json" in workflow
             and "name: windows-bounded-execution-integration-v0" in workflow
             and "loom_windows_execution" in pyproject["tool"]["setuptools"]["py-modules"]
             and "tools/windows-bounded-execution/bounded_execution_adapter.c text eol=lf" in attributes
@@ -10308,6 +10316,61 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         print(f"  {'ok  ' if windows_bounded_execution_ok else 'FAIL'} portability: Windows Bounded Execution Integration v0")
     except Exception as e:
         print(f"  FAIL Windows Bounded Execution Integration v0 pin: {e}")
+    try:                                               # Windows Native Process Input Receipt proves actual positive pipe writes
+        root = Path(__file__).resolve().parent
+        contract_path = root.joinpath("loom_windows_execution.py")
+        conformance = root.joinpath("tools", "windows_bounded_execution_conformance.py")
+        adapter = root.joinpath("tools", "windows-bounded-execution", "bounded_execution_adapter.c")
+        receipt_doc = root.joinpath("docs", "windows_process_input_receipt_v0.md")
+        workflow = root.joinpath(".github", "workflows", "ci.yml").read_text()
+        contract_source = contract_path.read_text()
+        runner_source = conformance.read_text()
+        adapter_source = adapter.read_text()
+        receipt_words = " ".join(receipt_doc.read_text().split()) if receipt_doc.is_file() else ""
+        receipt_self_test = subprocess.run(
+            [sys.executable, str(conformance), "--self-test"],
+            capture_output=True, text=True,
+        )
+        windows_input_receipt_contract_ok = (
+            receipt_doc.is_file()
+            and receipt_self_test.returncode == 0
+            and "PASS Windows Native Process Input Receipt v0 portable self-test (non-certifying)" in receipt_self_test.stdout
+            and 'PROCESS_INPUT_RECEIPT_SCHEMA = "loom-windows-process-input-receipt/v0"' in contract_source
+            and 'PROCESS_INPUT_WITNESS_SCHEMA = "loom-windows-process-input-receipt-ci-witness/v0"' in contract_source
+            and "def build_process_input_receipt(" in contract_source
+            and "def validate_process_input_receipt(" in contract_source
+            and "def validate_process_input_witness(" in contract_source
+            and len(__import__("loom_windows_execution").PROCESS_INPUT_EXPECTED_CHECKS) == 3
+            and "windows-cpython-unbuffered-anonymous-pipe/v0" in contract_source
+            and '"native_api": "WriteFile"' in contract_source
+            and 'name: windows-native-process-input-receipt-v0' in workflow
+            and "--input-receipt-output .windows-process-input-receipt-witness/x86_64-pc-windows-msvc.json" in workflow
+            and "parent-side native Windows pipe acceptance" in receipt_words
+            and "does not prove process consumption" in receipt_words
+        )
+        windows_input_receipt_adversarial_ok = (
+            "def _run_byte_counted(" in runner_source
+            and "def _windows_write_file(" in runner_source
+            and 'ctypes.WinDLL("kernel32", use_last_error=True).WriteFile' in runner_source
+            and "msvcrt.get_osfhandle(stream.fileno())" in runner_source
+            and 'bufsize=0' in runner_source
+            and 'writer["written_size_bytes"] += written' in runner_source
+            and 'writer["written_sha256"].update' in runner_source
+            and 'writer["write_status"] = "broken-pipe"' in runner_source
+            and 'writer["write_status"] = "zero-progress"' in runner_source
+            and 'L"--close-stdin"' in adapter_source
+            and "early-close native child accepted a false complete stdin write" in runner_source
+            and "rehashed Windows process input size tamper was accepted" in runner_source
+            and 'extended["payload"] = "forbidden"' in runner_source
+            and '"process_consumption_proven": False' in contract_source
+            and "spawn-failed execution cannot carry Windows process input delivery evidence" in contract_source
+        )
+        ok += windows_input_receipt_contract_ok
+        ok += windows_input_receipt_adversarial_ok
+        print(f"  {'ok  ' if windows_input_receipt_contract_ok else 'FAIL'} portability: Windows Native Process Input Receipt v0")
+        print(f"  {'ok  ' if windows_input_receipt_adversarial_ok else 'FAIL'} adversarial: Windows partial-input and receipt tamper refusal")
+    except Exception as e:
+        print(f"  FAIL Windows Native Process Input Receipt v0 pin: {e}")
     try:                                               # Windows General Adapter executes one exact approved PE under adversarial native proof
         root = Path(__file__).resolve().parent
         contract_path = root.joinpath("loom_windows_general.py")
@@ -10429,7 +10492,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 529/529 citadel checks" in rdoc
+            and "PASS -- 531/531 citadel checks" in rdoc
             and "Windows Core Conformance v0 adds a native `windows-2025` proof lane" in rdoc
             and "does not yet certify Windows" in rdoc_words
             and "Dogfooding v1 evaluates one bounded first-order Pure LOOM policy" in rdoc
@@ -10448,7 +10511,8 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "Multi-Action Evidence Dataflow v0 declares direct Result-to-stdin digest edges" in stable_words
             and "Multi-Action Byte Delivery Evidence v0 binds a detached byte witness" in stable_words
             and "Byte-Counted Process Input Receipt v0 preserves that Execution schema" in stable_words
-            and "live executable scheduling, cross-platform native input receipts, transport" in bounded_words
+            and "Windows Native Process Input Receipt v0 adds a separate content-addressed receipt" in bounded_words
+            and "live executable scheduling, cross-platform input-receipt federation, transport" in bounded_words
             and "terminal Action Capsule Result v0 remain future contracts" not in rdoc_words
             and "Receipt v4 remain future contracts" not in rdoc_words
             and "does not magically confine arbitrary external tools" in rdoc_words
@@ -10501,7 +10565,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 176   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, Portable Execution Evidence Bundle v0, Dogfooding v1, Evidence-fed Dogfooding v2, Multi-Action Plan v0, aggregate receipt v0, replayed execution state machine v0, Evidence Dataflow v0, detached Byte Delivery Evidence v0, Byte-Counted Process Input Receipt v0, partial-write refusal, Windows Core Conformance v0, Windows Component Conformance v0, Windows Host Security Substrate v0, Windows Bounded Execution Integration v0, Windows General Adapter Execution v1, Cross-Platform General Execution Federation v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, WASM direct/applyN type parity, and the WASM seam/resource frontier
+    total = len(CASES) + 178   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, Portable Execution Evidence Bundle v0, Dogfooding v1, Evidence-fed Dogfooding v2, Multi-Action Plan v0, aggregate receipt v0, replayed execution state machine v0, Evidence Dataflow v0, detached Byte Delivery Evidence v0, Byte-Counted Process Input Receipt v0, partial-write refusal, Windows Native Process Input Receipt v0, Windows partial-input/tamper refusal, Windows Core Conformance v0, Windows Component Conformance v0, Windows Host Security Substrate v0, Windows Bounded Execution Integration v0, Windows General Adapter Execution v1, Cross-Platform General Execution Federation v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, WASM direct/applyN type parity, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

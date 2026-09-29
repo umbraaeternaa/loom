@@ -269,12 +269,18 @@ jobs:
       - name: Run Windows Bounded Execution Integration v0
         env:
           LOOM_WINDOWS_RUNNER: windows-2025
-        run: python tools/windows_bounded_execution_conformance.py --output .windows-bounded-execution-witness/x86_64-pc-windows-msvc.json
+        run: python tools/windows_bounded_execution_conformance.py --output .windows-bounded-execution-witness/x86_64-pc-windows-msvc.json --input-receipt-output .windows-process-input-receipt-witness/x86_64-pc-windows-msvc.json
       - name: Upload Windows Bounded Execution witness
         uses: actions/upload-artifact@v4
         with:
           name: windows-bounded-execution-integration-v0
           path: .windows-bounded-execution-witness/x86_64-pc-windows-msvc.json
+          if-no-files-found: error
+      - name: Upload Windows Native Process Input Receipt witness
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-native-process-input-receipt-v0
+          path: .windows-process-input-receipt-witness/x86_64-pc-windows-msvc.json
           if-no-files-found: error
 
   verify-windows-general-execution:

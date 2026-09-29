@@ -10,5 +10,11 @@
 #undef wmain
 
 int wmain(int argc, wchar_t **argv) {
+    if (argc == 2 && wcscmp(argv[1], L"--close-stdin") == 0) {
+        HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
+        if (input != NULL && input != INVALID_HANDLE_VALUE) CloseHandle(input);
+        Sleep(100);
+        return 0;
+    }
     return loom_windows_host_security_main(argc, argv);
 }

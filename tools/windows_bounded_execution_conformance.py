@@ -14,6 +14,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 
@@ -67,6 +68,115 @@ def _run(argv, *, cwd=ROOT, timeout=180, input_bytes=None, env=None):
         [str(item) for item in argv], cwd=cwd, input=input_bytes,
         capture_output=True, timeout=timeout, env=env,
     )
+
+
+def _windows_write_file(stream, data):
+    """Return the exact positive byte count from one synchronous WriteFile."""
+    if sys.platform != "win32":
+        raise OSError("native WriteFile is available only on Windows")
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+
+    write_file = ctypes.WinDLL("kernel32", use_last_error=True).WriteFile
+    write_file.argtypes = (
+        wintypes.HANDLE, wintypes.LPCVOID, wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID,
+    )
+    write_file.restype = wintypes.BOOL
+    chunk = bytes(data[:65536])
+    buffer = ctypes.create_string_buffer(chunk)
+    written = wintypes.DWORD(0)
+    handle = wintypes.HANDLE(msvcrt.get_osfhandle(stream.fileno()))
+    if not write_file(handle, buffer, len(chunk), ctypes.byref(written), None):
+        error = ctypes.get_last_error()
+        if error in {109, 232}:
+            raise BrokenPipeError(error, "Windows stdin pipe was closed")
+        raise OSError(error, "WriteFile failed for Windows stdin pipe")
+    return written.value
+
+
+def _run_byte_counted(argv, *, cwd, timeout, input_bytes, env):
+    """Run one Windows child and count only positive unbuffered pipe writes."""
+    process = subprocess.Popen(
+        [str(item) for item in argv], cwd=cwd, stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0, env=env,
+    )
+    stdout_chunks = []
+    stderr_chunks = []
+    writer = {
+        "written_size_bytes": 0,
+        "written_sha256": hashlib.sha256(),
+        "positive_write_calls": 0,
+        "write_status": "pending",
+        "writer_end_closed": False,
+    }
+
+    def read_stream(stream, chunks):
+        while True:
+            chunk = stream.read(65536)
+            if not chunk:
+                return
+            chunks.append(chunk)
+
+    def write_stdin():
+        view = memoryview(input_bytes)
+        try:
+            while writer["written_size_bytes"] < len(view):
+                offset = writer["written_size_bytes"]
+                written = _windows_write_file(process.stdin, view[offset:])
+                if type(written) is not int or written <= 0:
+                    writer["write_status"] = "zero-progress"
+                    return
+                writer["written_sha256"].update(view[offset:offset + written])
+                writer["written_size_bytes"] += written
+                writer["positive_write_calls"] += 1
+            writer["write_status"] = "complete"
+        except BrokenPipeError:
+            writer["write_status"] = "broken-pipe"
+        except OSError:
+            writer["write_status"] = "write-failed"
+        finally:
+            try:
+                process.stdin.close()
+            except OSError:
+                pass
+            writer["writer_end_closed"] = process.stdin.closed
+
+    stdout_thread = threading.Thread(target=read_stream, args=(process.stdout, stdout_chunks), daemon=True)
+    stderr_thread = threading.Thread(target=read_stream, args=(process.stderr, stderr_chunks), daemon=True)
+    writer_thread = threading.Thread(target=write_stdin, daemon=True)
+    stdout_thread.start()
+    stderr_thread.start()
+    writer_thread.start()
+    timed_out = False
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        process.kill()
+        process.wait(timeout=10)
+    writer_thread.join(timeout=10)
+    if writer_thread.is_alive():
+        writer["write_status"] = "writer-timeout"
+    stdout_thread.join(timeout=10)
+    stderr_thread.join(timeout=10)
+    observation = {
+        "expected_sha256": _sha256_bytes(input_bytes),
+        "expected_size_bytes": len(input_bytes),
+        "written_sha256": writer["written_sha256"].hexdigest(),
+        "written_size_bytes": writer["written_size_bytes"],
+        "positive_write_calls": writer["positive_write_calls"],
+        "write_status": writer["write_status"],
+        "writer_end_closed": writer["writer_end_closed"],
+    }
+    return {
+        "returncode": process.returncode,
+        "stdout": b"".join(stdout_chunks),
+        "stderr": b"".join(stderr_chunks),
+        "timed_out": timed_out,
+        "input_observation": observation,
+    }
 
 
 def _compiler():
@@ -214,25 +324,29 @@ def _approval_fixture(adapter, environment, stdin_bytes, issued_at_unix_ms):
 
 def _native_execute(adapter, environment, stdin_bytes, mediation):
     started = time.monotonic_ns()
-    result = _run(
+    result = _run_byte_counted(
         [adapter, "--json"], cwd=adapter.parent,
         timeout=(mediation["timeout_ms"] / 1000), input_bytes=stdin_bytes,
         env=environment,
     )
     duration_ms = max(0, (time.monotonic_ns() - started) // 1_000_000)
-    total_output = len(result.stdout) + len(result.stderr)
+    total_output = len(result["stdout"]) + len(result["stderr"])
     if total_output > MAXIMUM_OUTPUT_BYTES:
         process_result = "output-limit-exceeded"
-    elif result.returncode == 0:
+    elif result["timed_out"]:
+        process_result = "timed-out"
+    elif result["input_observation"]["write_status"] != "complete":
+        process_result = "failed"
+    elif result["returncode"] == 0:
         process_result = "completed"
     else:
         process_result = "failed"
     if process_result != "completed":
         raise AssertionError(
-            "fixed native adapter failed: " + result.stderr.decode("utf-8", "replace")[-2000:]
+            "fixed native adapter failed: " + result["stderr"].decode("utf-8", "replace")[-2000:]
         )
     try:
-        probe = json.loads(result.stdout.decode("utf-8", "strict"))
+        probe = json.loads(result["stdout"].decode("utf-8", "strict"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise AssertionError("fixed native adapter did not emit one JSON probe") from exc
     probe_findings = loom_windows_host.validate_native_probe(probe)
@@ -250,16 +364,16 @@ def _native_execute(adapter, environment, stdin_bytes, mediation):
             "maximum_output_bytes": MAXIMUM_OUTPUT_BYTES,
         },
         "output": {
-            "stdout_sha256": _sha256_bytes(result.stdout), "stdout_size_bytes": len(result.stdout),
-            "stderr_sha256": _sha256_bytes(result.stderr), "stderr_size_bytes": len(result.stderr),
+            "stdout_sha256": _sha256_bytes(result["stdout"]), "stdout_size_bytes": len(result["stdout"]),
+            "stderr_sha256": _sha256_bytes(result["stderr"]), "stderr_size_bytes": len(result["stderr"]),
         },
-        "process": {"result": process_result, "exit_code": result.returncode, "duration_ms": duration_ms},
+        "process": {"result": process_result, "exit_code": result["returncode"], "duration_ms": duration_ms},
     }
     receipt["native_receipt_sha256"] = contract.sha256_json(receipt)
     findings = contract.validate_native_receipt(receipt)
     if findings:
         raise AssertionError("constructed native receipt failed: " + "; ".join(findings))
-    return receipt
+    return receipt, result["input_observation"]
 
 
 def _environment_gate():
@@ -326,10 +440,15 @@ def _certify():
                     claim, request, adapter_sha256, environment, stdin_bytes, now + 4, ledger,
                 )
                 reservation = contract.reserve(mediation, now + 5, ledger)
-                native_receipt = _native_execute(first, environment, stdin_bytes, mediation)
+                native_receipt, input_observation = _native_execute(
+                    first, environment, stdin_bytes, mediation,
+                )
                 completed_at = int(time.time() * 1000)
                 execution, result = contract.complete(
                     mediation, reservation, native_receipt, completed_at, ledger,
+                )
+                process_input_receipt = contract.build_process_input_receipt(
+                    mediation, execution, input_observation,
                 )
                 terminal_replay_refused = False
                 try:
@@ -338,6 +457,15 @@ def _certify():
                     terminal_replay_refused = True
                 if not terminal_replay_refused:
                     raise AssertionError("Windows terminal result replay was accepted")
+            early_close = _run_byte_counted(
+                [first, "--close-stdin"], cwd=first.parent, timeout=10,
+                input_bytes=b"x" * (2 * 1024 * 1024), env=environment,
+            )["input_observation"]
+            if (
+                early_close["write_status"] == "complete"
+                or early_close["written_size_bytes"] == early_close["expected_size_bytes"]
+            ):
+                raise AssertionError("early-close native child accepted a false complete stdin write")
             source_sha256 = contract.sha256_json({
                 "adapter": _sha256_bytes(ADAPTER_SOURCE.read_bytes()),
                 "host_security": _sha256_bytes(HOST_SOURCE.read_bytes()),
@@ -398,7 +526,60 @@ def _certify():
     })
     if contract.validate_witness(tampered, commit)["valid"]:
         raise AssertionError("tampered Windows native evidence was accepted")
-    return witness
+    process_input_witness = {
+        "schema": contract.PROCESS_INPUT_WITNESS_SCHEMA,
+        "test_only": True,
+        "authorization": "none",
+        "certification_scope": "windows-native-process-input-receipt",
+        "source": {"repository": "umbraaeternaa/loom", "commit_sha": commit},
+        "ci": {
+            "provider": "github-actions", "workflow": "LOOM Citadel",
+            "job": "verify-windows-bounded-execution", "runner": EXPECTED_RUNNER,
+            "run_id": run_id, "run_attempt": run_attempt,
+        },
+        "platform": {
+            "os": "windows", "architecture": "x86_64",
+            "python": platform.python_version(), "windows_build": platform.version(),
+        },
+        "mediation": mediation,
+        "execution": execution,
+        "process_input_receipt": process_input_receipt,
+        "checks": [
+            {"id": item, "status": "pass"}
+            for item in contract.PROCESS_INPUT_EXPECTED_CHECKS
+        ],
+        "scope": {
+            "windows_native_pipe_delivery": True,
+            "process_consumption_proven": False,
+            "operator_presence": False,
+            "production_authority": False,
+        },
+        "limitations": [
+            "This test-only witness proves parent-side native Windows pipe acceptance only.",
+            "Generic process consumption is not proven by a successful pipe write.",
+            "The receipt grants no operator presence or production authority.",
+        ],
+        "result": "pass",
+    }
+    process_input_witness["witness_sha256"] = contract.sha256_json(process_input_witness)
+    process_checked = contract.validate_process_input_witness(process_input_witness, commit)
+    if not process_checked["valid"]:
+        raise AssertionError(
+            "constructed Windows process input witness failed: "
+            + repr(process_checked["findings"])
+        )
+    tampered_input = copy.deepcopy(process_input_witness)
+    tampered_input["process_input_receipt"]["stdin"]["written_size_bytes"] -= 1
+    tampered_input["process_input_receipt"]["receipt_sha256"] = contract.sha256_json({
+        key: tampered_input["process_input_receipt"][key]
+        for key in tampered_input["process_input_receipt"] if key != "receipt_sha256"
+    })
+    tampered_input["witness_sha256"] = contract.sha256_json({
+        key: tampered_input[key] for key in tampered_input if key != "witness_sha256"
+    })
+    if contract.validate_process_input_witness(tampered_input, commit)["valid"]:
+        raise AssertionError("rehashed Windows process input size tamper was accepted")
+    return witness, process_input_witness
 
 
 def _portable_self_test():
@@ -467,31 +648,111 @@ def _portable_self_test():
     tampered["native_receipt_sha256"] = contract.sha256_json({
         key: tampered[key] for key in tampered if key != "native_receipt_sha256"
     })
-    return bool(contract.validate_native_receipt(tampered))
+    if not contract.validate_native_receipt(tampered):
+        return False
+    mediation = {
+        "schema": contract.MEDIATION_SCHEMA,
+        "claim_sha256": "1" * 64,
+        "approval_sha256": "2" * 64,
+        "request_sha256": "3" * 64,
+        "binding_sha256": "4" * 64,
+        "adapter_sha256": "a" * 64,
+        "environment_sha256": "b" * 64,
+        "stdin_sha256": "c" * 64,
+        "stdin_size_bytes": 2,
+        "timeout_ms": 1000,
+        "shell": "denied",
+        "network": "denied",
+        "mediated_at_unix_ms": issued,
+        "approval_expires_at_unix_ms": issued + 300000,
+        "status": "ready",
+    }
+    mediation["mediation_sha256"] = contract.sha256_json(mediation)
+    execution = {
+        "schema": contract.EXECUTION_SCHEMA,
+        "mediation_sha256": mediation["mediation_sha256"],
+        "claim_sha256": mediation["claim_sha256"],
+        "binding_sha256": mediation["binding_sha256"],
+        "reservation_sha256": "5" * 64,
+        "native_receipt": receipt,
+        "native_receipt_sha256": receipt["native_receipt_sha256"],
+        "executed_at_unix_ms": issued + 1,
+        "approval_expires_at_unix_ms": issued + 300000,
+        "status": "completed",
+    }
+    execution["execution_sha256"] = contract.sha256_json(execution)
+    observation = {
+        "expected_sha256": "c" * 64,
+        "expected_size_bytes": 2,
+        "written_sha256": "c" * 64,
+        "written_size_bytes": 2,
+        "positive_write_calls": 1,
+        "write_status": "complete",
+        "writer_end_closed": True,
+    }
+    input_receipt = contract.build_process_input_receipt(
+        mediation, execution, observation,
+    )
+    checked = contract.validate_process_input_receipt(
+        input_receipt, execution, mediation,
+    )
+    if not checked["valid"] or checked["authorization"] != "none":
+        return False
+    partial = copy.deepcopy(observation)
+    partial["written_size_bytes"] = 1
+    refused_partial = False
+    try:
+        contract.build_process_input_receipt(mediation, execution, partial)
+    except ValueError:
+        refused_partial = True
+    if not refused_partial:
+        return False
+    rebound = copy.deepcopy(execution)
+    rebound["binding_sha256"] = "6" * 64
+    rebound["execution_sha256"] = contract.sha256_json({
+        key: rebound[key] for key in rebound if key != "execution_sha256"
+    })
+    if contract.validate_process_input_receipt(input_receipt, rebound, mediation)["valid"]:
+        return False
+    extended = copy.deepcopy(input_receipt)
+    extended["payload"] = "forbidden"
+    extended["receipt_sha256"] = contract.sha256_json({
+        key: extended[key] for key in extended if key != "receipt_sha256"
+    })
+    return not contract.validate_process_input_receipt(extended, execution, mediation)["valid"]
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--input-receipt-output", type=Path)
     args = parser.parse_args(argv)
-    if args.self_test and args.output is not None:
-        parser.error("--self-test does not emit --output")
-    if not args.self_test and args.output is None:
-        parser.error("certifying mode requires --output")
+    if args.self_test and (args.output is not None or args.input_receipt_output is not None):
+        parser.error("--self-test does not emit output artifacts")
+    if not args.self_test and (args.output is None or args.input_receipt_output is None):
+        parser.error("certifying mode requires --output and --input-receipt-output")
     if args.self_test:
         if not _portable_self_test():
             print("FAIL Windows Bounded Execution Integration v0 portable self-test", file=sys.stderr)
             return 1
         print("PASS Windows Bounded Execution Integration v0 portable self-test (non-certifying)")
+        print("PASS Windows Native Process Input Receipt v0 portable self-test (non-certifying)")
         return 0
     try:
-        witness = _certify()
+        witness, input_witness = _certify()
         args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.input_receipt_output.parent.mkdir(parents=True, exist_ok=True)
         temporary = args.output.with_name(args.output.name + ".tmp")
+        input_temporary = args.input_receipt_output.with_name(
+            args.input_receipt_output.name + ".tmp"
+        )
         temporary.write_bytes(contract.canonical_json(witness) + b"\n")
+        input_temporary.write_bytes(contract.canonical_json(input_witness) + b"\n")
         os.replace(temporary, args.output)
+        os.replace(input_temporary, args.input_receipt_output)
         print("PASS Windows Bounded Execution Integration v0: " + witness["witness_sha256"])
+        print("PASS Windows Native Process Input Receipt v0: " + input_witness["witness_sha256"])
         return 0
     except Exception as exc:
         print("FAIL Windows Bounded Execution Integration v0: " + str(exc), file=sys.stderr)

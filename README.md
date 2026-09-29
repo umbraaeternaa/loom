@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 529 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 531 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 529/529 citadel checks
+PASS — 531/531 citadel checks
 ```
 
 ## The idea in one screen
@@ -406,6 +406,18 @@ non-authorizing. The adapter is one fixed repository-owned integration action,
 not a general-purpose Windows executor; existing POSIX Bounded Execution v0 is
 unchanged. See
 [`docs/windows_bounded_execution_v0.md`](docs/windows_bounded_execution_v0.md).
+
+### Windows Native Process Input Receipt v0
+
+The native bounded-execution lane now counts and hashes only positive
+unbuffered Windows stdin-pipe writes, closes the parent writer end, and emits a
+separate receipt linked to the exact mediation, Execution, and existing native
+receipt. A `/Brepro` adversarial child closes stdin early so CI must observe a
+partial or broken write rather than claim false delivery. The receipt proves
+parent-side pipe acceptance only, not child consumption or production
+authority. Existing Windows Execution, Result, native receipt, and ledger
+schemas remain unchanged. See
+[`docs/windows_process_input_receipt_v0.md`](docs/windows_process_input_receipt_v0.md).
 
 ### Windows General Adapter Execution v1
 

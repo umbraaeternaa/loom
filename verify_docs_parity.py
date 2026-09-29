@@ -60,6 +60,7 @@ RELEASE_READINESS_DOC = ROOT / "docs" / "release_readiness.md"
 WINDOWS_CORE_DOC = ROOT / "docs" / "windows_core_conformance_v0.md"
 WINDOWS_COMPONENT_DOC = ROOT / "docs" / "windows_component_conformance_v0.md"
 WINDOWS_HOST_SECURITY_DOC = ROOT / "docs" / "windows_host_security_v0.md"
+WINDOWS_INPUT_RECEIPT_DOC = ROOT / "docs" / "windows_process_input_receipt_v0.md"
 GENERAL_EXECUTION_FEDERATION_DOC = ROOT / "docs" / "cross_platform_general_execution_federation_v0.md"
 WASM_ARTIFACT_DOC = ROOT / "docs" / "gate_wasm_artifact_v1.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
@@ -69,7 +70,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "529-process-input-receipt-v0")',
+        'bundleUrl.searchParams.set("v", "531-windows-process-input-receipt-v0")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -171,10 +172,12 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "529 self-verifying checks",
-        ">529</div>",
+        "531 self-verifying checks",
+        ">531</div>",
     )
     forbidden = (
+        "529 self-verifying checks",
+        ">529</div>",
         "523 self-verifying checks",
         ">523</div>",
         "521 self-verifying checks",
@@ -1118,7 +1121,7 @@ def _check_multi_action_plan_v0() -> None:
         if needle not in delivery_words:
             raise SystemExit("docs parity: Multi-Action byte-delivery contract lost marker: " + needle)
     readiness = RELEASE_READINESS_DOC.read_text()
-    if "`citadel_checks: 529`" not in readiness or "`citadel_checks: 527`" in readiness:
+    if "`citadel_checks: 531`" not in readiness or "`citadel_checks: 529`" in readiness:
         raise SystemExit("docs parity: release-readiness about count drift")
 
 
@@ -1189,6 +1192,26 @@ def _check_windows_host_security_doc() -> None:
     ):
         if needle not in words:
             raise SystemExit("docs parity: Windows Host Security contract lost marker: " + needle)
+
+
+def _check_windows_input_receipt_doc() -> None:
+    if not WINDOWS_INPUT_RECEIPT_DOC.is_file():
+        raise SystemExit("docs parity: Windows Native Process Input Receipt v0 contract is absent")
+    words = " ".join(WINDOWS_INPUT_RECEIPT_DOC.read_text().split())
+    for needle in (
+        "LOOM Windows Native Process Input Receipt v0",
+        "loom-windows-process-input-receipt/v0",
+        "loom-windows-process-input-receipt-ci-witness/v0",
+        "windows-native-process-input-receipt-v0",
+        "WriteFile",
+        "positive returned write count",
+        "--close-stdin",
+        "does not prove process consumption",
+        "grants no production authority",
+        "verify-windows-bounded-execution",
+    ):
+        if needle not in words:
+            raise SystemExit("docs parity: Windows process-input receipt contract lost marker: " + needle)
 
 
 def _check_general_execution_federation_doc() -> None:
@@ -2381,6 +2404,7 @@ def main() -> int:
     _check_windows_core_conformance_doc()
     _check_windows_component_conformance_doc()
     _check_windows_host_security_doc()
+    _check_windows_input_receipt_doc()
     _check_general_execution_federation_doc()
     _check_component_release_attestation()
     _check_compiler_provenance_doc()

@@ -17,6 +17,9 @@ NATIVE_RECEIPT_SCHEMA = "loom-windows-bounded-execution-native-receipt/v0"
 EXECUTION_SCHEMA = "loom-windows-action-bounded-execution/v0"
 RESULT_SCHEMA = "loom-windows-action-result/v0"
 WITNESS_SCHEMA = "loom-windows-bounded-execution-ci-witness/v0"
+PROCESS_INPUT_RECEIPT_SCHEMA = "loom-windows-process-input-receipt/v0"
+PROCESS_INPUT_RECEIPT_VALIDATION_SCHEMA = "loom-windows-process-input-receipt-validation/v0"
+PROCESS_INPUT_WITNESS_SCHEMA = "loom-windows-process-input-receipt-ci-witness/v0"
 
 EXPECTED_CHECKS = (
     "signed-action-approval-v2",
@@ -25,6 +28,12 @@ EXPECTED_CHECKS = (
     "native-appcontainer-job-object-execution",
     "bounded-terminal-result",
     "replay-and-tamper-refusal",
+)
+
+PROCESS_INPUT_EXPECTED_CHECKS = (
+    "byte-counted-windows-pipe-write",
+    "early-close-partial-write-refusal",
+    "receipt-tamper-and-rebinding-refusal",
 )
 
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
@@ -530,6 +539,271 @@ def validate_execution(execution):
         if execution.get("status") != receipt.get("process", {}).get("result"):
             findings.append("execution status does not match native process result")
     return findings
+
+
+def _process_input_receipt_findings(receipt, execution, mediation):
+    findings = []
+    receipt_keys = {
+        "schema", "mediation_sha256", "binding_sha256", "execution_sha256",
+        "native_receipt_sha256", "stdin", "pipe", "proof", "lifecycle",
+        "receipt_sha256",
+    }
+    if not _closed(receipt, receipt_keys, "process_input_receipt", findings):
+        return findings
+    _hashed_artifact(
+        receipt, PROCESS_INPUT_RECEIPT_SCHEMA, "receipt_sha256",
+        "process_input_receipt", findings,
+    )
+    for key in (
+        "mediation_sha256", "binding_sha256", "execution_sha256",
+        "native_receipt_sha256",
+    ):
+        _hash(receipt.get(key), f"process_input_receipt.{key}", findings)
+    findings.extend("execution: " + item for item in validate_execution(execution))
+    findings.extend("mediation: " + item for item in validate_mediation(mediation))
+    if not isinstance(execution, dict) or not isinstance(mediation, dict):
+        return findings
+    native_receipt = execution.get("native_receipt", {})
+    expected_links = {
+        "mediation_sha256": mediation.get("mediation_sha256"),
+        "binding_sha256": mediation.get("binding_sha256"),
+        "execution_sha256": execution.get("execution_sha256"),
+        "native_receipt_sha256": execution.get("native_receipt_sha256"),
+    }
+    for key, expected in expected_links.items():
+        if receipt.get(key) != expected:
+            findings.append(f"process_input_receipt.{key} does not match the Windows lifecycle")
+    if execution.get("mediation_sha256") != mediation.get("mediation_sha256"):
+        findings.append("execution mediation link does not match the supplied mediation")
+    if execution.get("binding_sha256") != mediation.get("binding_sha256"):
+        findings.append("execution binding link does not match the supplied mediation")
+    if execution.get("status") == "spawn-failed":
+        findings.append("spawn-failed execution cannot carry Windows process input delivery evidence")
+
+    stdin = receipt.get("stdin")
+    stdin_keys = {
+        "expected_sha256", "expected_size_bytes", "written_sha256",
+        "written_size_bytes",
+    }
+    if _closed(stdin, stdin_keys, "process_input_receipt.stdin", findings):
+        for key in ("expected_sha256", "written_sha256"):
+            _hash(stdin.get(key), f"process_input_receipt.stdin.{key}", findings)
+        for key in ("expected_size_bytes", "written_size_bytes"):
+            if type(stdin.get(key)) is not int or stdin[key] < 0:
+                findings.append(f"process_input_receipt.stdin.{key} must be non-negative")
+        expected_sha = mediation.get("stdin_sha256")
+        expected_size = mediation.get("stdin_size_bytes")
+        native_input = native_receipt.get("input", {}) if isinstance(native_receipt, dict) else {}
+        if stdin.get("expected_sha256") != expected_sha or stdin.get("expected_size_bytes") != expected_size:
+            findings.append("process input receipt does not match mediated stdin")
+        if native_input.get("stdin_sha256") != expected_sha or native_input.get("stdin_size_bytes") != expected_size:
+            findings.append("native receipt input does not match mediated stdin")
+        if stdin.get("written_sha256") != expected_sha:
+            findings.append("written stdin digest does not match mediated stdin")
+        if stdin.get("written_size_bytes") != expected_size:
+            findings.append("written stdin size does not match mediated stdin")
+
+    pipe = receipt.get("pipe")
+    expected_pipe = {
+        "writer": "windows-cpython-unbuffered-anonymous-pipe/v0",
+        "native_api": "WriteFile",
+        "write_status": "complete",
+        "writer_end_closed": True,
+    }
+    if _closed(pipe, set(expected_pipe) | {"positive_write_calls"}, "process_input_receipt.pipe", findings):
+        for key, expected in expected_pipe.items():
+            if pipe.get(key) != expected:
+                findings.append(f"process_input_receipt.pipe.{key} must equal {expected!r}")
+        if type(pipe.get("positive_write_calls")) is not int or pipe["positive_write_calls"] < 0:
+            findings.append("process_input_receipt.pipe.positive_write_calls must be non-negative")
+        if isinstance(stdin, dict) and stdin.get("expected_size_bytes", 0) > 0 and pipe.get("positive_write_calls", 0) < 1:
+            findings.append("non-empty stdin requires at least one positive native pipe write")
+
+    proof = receipt.get("proof")
+    expected_proof = {
+        "digest_match": True,
+        "size_match": True,
+        "payload_embedded": False,
+    }
+    if _closed(proof, set(expected_proof), "process_input_receipt.proof", findings):
+        for key, expected in expected_proof.items():
+            if proof.get(key) != expected:
+                findings.append(f"process_input_receipt.proof.{key} must equal {expected!r}")
+
+    lifecycle = receipt.get("lifecycle")
+    expected_lifecycle = {
+        "authorization": "none",
+        "host_action_executed": True,
+        "evidence_kind": "byte-counted-windows-stdin-pipe-write",
+        "process_input_pipe_delivery": True,
+        "process_consumption_proven": False,
+        "test_only": True,
+    }
+    if _closed(lifecycle, set(expected_lifecycle), "process_input_receipt.lifecycle", findings):
+        for key, expected in expected_lifecycle.items():
+            if lifecycle.get(key) != expected:
+                findings.append(f"process_input_receipt.lifecycle.{key} must equal {expected!r}")
+    return findings
+
+
+def build_process_input_receipt(mediation, execution, observation):
+    """Build non-authorizing Windows evidence from actual positive pipe writes."""
+    if not isinstance(observation, dict):
+        raise ValueError("Windows process input observation must be an object")
+    required = {
+        "expected_sha256", "expected_size_bytes", "written_sha256",
+        "written_size_bytes", "positive_write_calls", "write_status",
+        "writer_end_closed",
+    }
+    if set(observation) != required:
+        raise ValueError("Windows process input observation is not closed")
+    expected_sha = mediation.get("stdin_sha256") if isinstance(mediation, dict) else None
+    expected_size = mediation.get("stdin_size_bytes") if isinstance(mediation, dict) else None
+    complete = (
+        observation.get("expected_sha256") == expected_sha
+        and observation.get("expected_size_bytes") == expected_size
+        and observation.get("written_sha256") == expected_sha
+        and observation.get("written_size_bytes") == expected_size
+        and observation.get("write_status") == "complete"
+        and observation.get("writer_end_closed") is True
+        and (expected_size == 0 or observation.get("positive_write_calls", 0) > 0)
+    )
+    if not complete:
+        raise ValueError("Windows stdin pipe did not accept the complete exact mediated payload")
+    native_receipt = execution.get("native_receipt", {}) if isinstance(execution, dict) else {}
+    body = {
+        "schema": PROCESS_INPUT_RECEIPT_SCHEMA,
+        "mediation_sha256": mediation.get("mediation_sha256"),
+        "binding_sha256": mediation.get("binding_sha256"),
+        "execution_sha256": execution.get("execution_sha256"),
+        "native_receipt_sha256": execution.get("native_receipt_sha256"),
+        "stdin": {
+            "expected_sha256": expected_sha,
+            "expected_size_bytes": expected_size,
+            "written_sha256": observation["written_sha256"],
+            "written_size_bytes": observation["written_size_bytes"],
+        },
+        "pipe": {
+            "writer": "windows-cpython-unbuffered-anonymous-pipe/v0",
+            "native_api": "WriteFile",
+            "positive_write_calls": observation["positive_write_calls"],
+            "write_status": "complete",
+            "writer_end_closed": True,
+        },
+        "proof": {
+            "digest_match": observation["written_sha256"] == expected_sha,
+            "size_match": observation["written_size_bytes"] == expected_size,
+            "payload_embedded": False,
+        },
+        "lifecycle": {
+            "authorization": "none",
+            "host_action_executed": True,
+            "evidence_kind": "byte-counted-windows-stdin-pipe-write",
+            "process_input_pipe_delivery": True,
+            "process_consumption_proven": False,
+            "test_only": True,
+        },
+    }
+    if native_receipt.get("input", {}).get("stdin_sha256") != expected_sha:
+        raise ValueError("Windows native receipt does not match mediated stdin")
+    body["receipt_sha256"] = sha256_json(body)
+    findings = _process_input_receipt_findings(body, execution, mediation)
+    if findings:
+        raise ValueError("invalid Windows process input receipt: " + "; ".join(findings))
+    return body
+
+
+def validate_process_input_receipt(receipt, execution, mediation):
+    findings = _process_input_receipt_findings(receipt, execution, mediation)
+    return {
+        "schema": PROCESS_INPUT_RECEIPT_VALIDATION_SCHEMA,
+        "valid": not findings,
+        "authorization": "none",
+        "receipt": receipt if not findings else None,
+        "receipt_sha256": receipt.get("receipt_sha256") if not findings and isinstance(receipt, dict) else None,
+        "findings": findings,
+    }
+
+
+def validate_process_input_witness(witness, expected_commit=None):
+    findings = []
+    keys = {
+        "schema", "test_only", "authorization", "certification_scope", "source",
+        "ci", "platform", "mediation", "execution", "process_input_receipt",
+        "checks", "scope", "limitations", "result", "witness_sha256",
+    }
+    if not _closed(witness, keys, "process_input_witness", findings):
+        return {"valid": False, "findings": findings}
+    fixed = {
+        "schema": PROCESS_INPUT_WITNESS_SCHEMA,
+        "test_only": True,
+        "authorization": "none",
+        "certification_scope": "windows-native-process-input-receipt",
+        "result": "pass",
+    }
+    for key, expected in fixed.items():
+        if witness.get(key) != expected:
+            findings.append(f"process_input_witness.{key} must equal {expected!r}")
+    source = witness.get("source")
+    if _closed(source, {"repository", "commit_sha"}, "process_input_witness.source", findings):
+        if source.get("repository") != "umbraaeternaa/loom":
+            findings.append("process input witness repository is outside the closed contract")
+        if not isinstance(source.get("commit_sha"), str) or not _SHA40.fullmatch(source["commit_sha"]):
+            findings.append("process input witness commit must be lowercase 40-hex")
+        if expected_commit is not None and source.get("commit_sha") != expected_commit:
+            findings.append("process input witness commit does not match the expected revision")
+    ci = witness.get("ci")
+    expected_ci = {
+        "provider": "github-actions", "workflow": "LOOM Citadel",
+        "job": "verify-windows-bounded-execution", "runner": "windows-2025",
+    }
+    if _closed(ci, set(expected_ci) | {"run_id", "run_attempt"}, "process_input_witness.ci", findings):
+        for key, expected in expected_ci.items():
+            if ci.get(key) != expected:
+                findings.append(f"process_input_witness.ci.{key} must equal {expected!r}")
+        for key in ("run_id", "run_attempt"):
+            if type(ci.get(key)) is not int or ci[key] <= 0:
+                findings.append(f"process_input_witness.ci.{key} must be positive")
+    platform_value = witness.get("platform")
+    if _closed(platform_value, {"os", "architecture", "python", "windows_build"}, "process_input_witness.platform", findings):
+        if platform_value.get("os") != "windows" or platform_value.get("architecture") != "x86_64":
+            findings.append("process input witness platform must be Windows x86_64")
+    mediation = witness.get("mediation")
+    execution = witness.get("execution")
+    receipt_check = validate_process_input_receipt(
+        witness.get("process_input_receipt"), execution, mediation,
+    )
+    findings.extend("process_input_receipt: " + item for item in receipt_check["findings"])
+    checks = witness.get("checks")
+    if (
+        not isinstance(checks, list)
+        or [item.get("id") for item in checks if isinstance(item, dict)] != list(PROCESS_INPUT_EXPECTED_CHECKS)
+        or any(set(item) != {"id", "status"} or item.get("status") != "pass" for item in checks if isinstance(item, dict))
+    ):
+        findings.append("process input witness checks must contain the complete ordered passing set")
+    expected_scope = {
+        "windows_native_pipe_delivery": True,
+        "process_consumption_proven": False,
+        "operator_presence": False,
+        "production_authority": False,
+    }
+    scope = witness.get("scope")
+    if _closed(scope, set(expected_scope), "process_input_witness.scope", findings) and scope != expected_scope:
+        findings.append("process input witness scope differs from the closed profile")
+    limitations = witness.get("limitations")
+    if not isinstance(limitations, list) or len(limitations) < 3 or any(not isinstance(item, str) or not item for item in limitations):
+        findings.append("process input witness limitations must be a non-empty string list")
+    else:
+        words = " ".join(limitations)
+        for marker in ("test-only", "pipe acceptance", "process consumption", "production authority"):
+            if marker not in words:
+                findings.append(f"process input witness limitations omit {marker!r}")
+    _hash(witness.get("witness_sha256"), "process_input_witness.witness_sha256", findings)
+    if isinstance(witness.get("witness_sha256"), str):
+        body = {key: witness[key] for key in witness if key != "witness_sha256"}
+        if witness["witness_sha256"] != sha256_json(body):
+            findings.append("process input witness hash does not match canonical bytes")
+    return {"valid": not findings, "findings": findings}
 
 
 def validate_result(result):
