@@ -30,7 +30,27 @@ loom.execute_action_host_mediation_v0(
     now_unix_ms,
 )
 
+loom.execute_action_host_mediation_with_input_receipt_v0(
+    approval,
+    request,
+    claim,
+    mediation,
+    manifest,
+    tool_binding,
+    tool_input,
+    source,
+    wasm_bytes,
+    builder_surface,
+    builder_components,
+    verifier_components,
+    entrypoint,
+    invocation,
+    environment_values,
+    now_unix_ms,
+)
+
 loom.validate_action_bounded_execution_v0(execution)
+loom.validate_action_process_input_receipt_v0(receipt, execution)
 ~~~
 
 The public function reads the pinned operator public key and fixed private
@@ -110,6 +130,12 @@ The process receives:
 - the signed timeout;
 - the verified OS network sandbox.
 
+The stdin writer is an unbuffered counted loop rather than a single assumed
+full-buffer write. Partial writes advance the digest and byte count only over
+the accepted slice. Broken pipe, zero/invalid write progress, or an unclosed
+writer end cannot be reported as complete process input delivery and changes
+an otherwise successful attempt to `failed`.
+
 Timeout kills the complete process group. Stdout and stderr are drained
 concurrently, never embedded in the result, and each is limited to 1 MiB. An
 overflow kills the process group. The terminal statuses are `completed`,
@@ -134,6 +160,12 @@ The separately implemented Result v0 consumes this exact terminal handoff.
 closed execution, remeasurement, sandbox, path-custody, stream metadata, and
 attempt shapes; recomputes every nested and outer hash; checks all cross-links;
 and rejects non-canonical or tampered evidence without executing anything.
+
+The additive [Byte-Counted Process Input Receipt v0](process_input_receipt_v0.md)
+binds the unchanged Execution and Attempt hashes to the exact expected and
+written stdin digests and sizes. It proves complete parent-side kernel-pipe
+acceptance and writer-end closure. It does not claim that the child parsed or
+semantically consumed those bytes.
 
 The standalone browser bundle exposes the same Python API for parity, but a
 browser/Pyodide runtime has no supported OS sandbox provider and therefore

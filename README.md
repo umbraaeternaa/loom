@@ -15,13 +15,13 @@ declaration is honest before a single line runs.
 
 LOOM is a compact s-expression language: a parser, a **static effect checker**, an
 interpreter, and **backends that compile checked code to Python and JavaScript** (plus a tagged-value **WebAssembly** backend that runs in the browser, with a human-readable **WAT** view). It is a research
-kernel — small on purpose — and it is **self-verified by 527 checks** that the language can only ever
+kernel — small on purpose — and it is **self-verified by 529 checks** that the language can only ever
 grow *greener* (every new feature must keep them all passing).
 
 ```console
 $ python3 run_tests.py
 ...
-PASS — 527/527 citadel checks
+PASS — 529/529 citadel checks
 ```
 
 ## The idea in one screen
@@ -174,6 +174,12 @@ immutable macOS path, replaces the complete environment, supplies canonical
 stdin, enforces timeout/output bounds, and records only redacted terminal
 attempt hashes. Its pure validator closes every evidence shape, nested hash,
 and cross-link. It returns `terminal-result-required`.
+[`Byte-Counted Process Input Receipt v0`](docs/process_input_receipt_v0.md)
+adds a host-only proof over that unchanged Execution: the unbuffered stdin
+writer counts and hashes only bytes actually accepted by the kernel pipe,
+requires complete delivery and writer-end closure, and refuses partial or
+broken-pipe writes. It embeds no payload, grants no authority, and deliberately
+does not claim that the child semantically consumed the bytes.
 [`Action Capsule Result v0`](docs/action_capsule_result_v0.md) then verifies the
 complete signed lifecycle at the execution-time approval boundary, embeds the
 redacted chain in one content-addressed terminal artifact, atomically closes

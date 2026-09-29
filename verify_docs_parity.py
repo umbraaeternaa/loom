@@ -44,6 +44,7 @@ ACTION_APPROVAL_V2_DOC = ROOT / "docs" / "action_approval_v2.md"
 ACTION_CLAIM_V0_DOC = ROOT / "docs" / "action_claim_v0.md"
 ACTION_HOST_MEDIATION_V0_DOC = ROOT / "docs" / "action_host_mediation_v0.md"
 ACTION_BOUNDED_EXECUTION_V0_DOC = ROOT / "docs" / "action_bounded_execution_v0.md"
+PROCESS_INPUT_RECEIPT_V0_DOC = ROOT / "docs" / "process_input_receipt_v0.md"
 ACTION_CAPSULE_RESULT_V0_DOC = ROOT / "docs" / "action_capsule_result_v0.md"
 ACTION_RESULT_ATTESTATION_V0_DOC = ROOT / "docs" / "action_result_attestation_v0.md"
 EFFECTFUL_COMPONENT_RESULT_BINDING_DOC = ROOT / "docs" / "effectful_component_result_binding_v0.md"
@@ -68,7 +69,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "527-cross-platform-general-execution-federation-v0")',
+        'bundleUrl.searchParams.set("v", "529-process-input-receipt-v0")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -170,8 +171,8 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "527 self-verifying checks",
-        ">527</div>",
+        "529 self-verifying checks",
+        ">529</div>",
     )
     forbidden = (
         "523 self-verifying checks",
@@ -1117,7 +1118,7 @@ def _check_multi_action_plan_v0() -> None:
         if needle not in delivery_words:
             raise SystemExit("docs parity: Multi-Action byte-delivery contract lost marker: " + needle)
     readiness = RELEASE_READINESS_DOC.read_text()
-    if "`citadel_checks: 527`" not in readiness or "`citadel_checks: 526`" in readiness:
+    if "`citadel_checks: 529`" not in readiness or "`citadel_checks: 527`" in readiness:
         raise SystemExit("docs parity: release-readiness about count drift")
 
 
@@ -2214,6 +2215,31 @@ def _check_action_bounded_execution_v0_doc() -> None:
         raise SystemExit("docs parity: Bounded Execution v0 contract drift: missing " + ", ".join(missing))
 
 
+def _check_process_input_receipt_v0_doc() -> None:
+    if not PROCESS_INPUT_RECEIPT_V0_DOC.is_file():
+        raise SystemExit("docs parity: Process Input Receipt v0 contract is absent")
+    words = " ".join(PROCESS_INPUT_RECEIPT_V0_DOC.read_text().split())
+    required = (
+        "LOOM Byte-Counted Process Input Receipt v0",
+        "fail-closed on partial stdin writes",
+        "execute_action_host_mediation_with_input_receipt_v0(",
+        "validate_action_process_input_receipt_v0(receipt, execution)",
+        "loom-action-process-input-receipt/v0",
+        "loom-action-process-input-receipt-validation/v0",
+        "loops until every byte has been accepted by `write()`",
+        "writer_end_closed: true",
+        "process_input_pipe_delivery: true",
+        "process_consumption_proven: false",
+        "Raw stdin bytes and write errors are not persisted",
+        "does **not** claim that the child parsed",
+        "Windows native adapters and a live Multi-Action scheduler require separate additive contracts",
+        "standalone browser Playground does not invoke this host-only API",
+    )
+    missing = [needle for needle in required if needle not in words]
+    if missing:
+        raise SystemExit("docs parity: Process Input Receipt v0 contract drift: missing " + ", ".join(missing))
+
+
 def _check_action_capsule_result_v0_doc() -> None:
     words = " ".join(ACTION_CAPSULE_RESULT_V0_DOC.read_text().split())
     required = (
@@ -2376,6 +2402,7 @@ def main() -> int:
     _check_action_claim_v0_doc()
     _check_action_host_mediation_v0_doc()
     _check_action_bounded_execution_v0_doc()
+    _check_process_input_receipt_v0_doc()
     _check_action_capsule_result_v0_doc()
     _check_action_result_attestation_v0_doc()
     _check_wasm_artifact_doc()

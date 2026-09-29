@@ -101,9 +101,11 @@ V0 does not provide:
 - approval inheritance, ambient authority, private-key custody, or live host
   execution.
 
-The next honest frontier is a byte-counted process-input receipt emitted by the
-bounded host executor. Until that separate contract exists, callers must not
-reinterpret this artifact as process-ingestion evidence.
+The additive [Byte-Counted Process Input Receipt v0](process_input_receipt_v0.md)
+now closes the next host boundary: a separately approved target execution can
+bind its exact Execution and Attempt to the number and digest of bytes accepted
+by the parent-side stdin pipe. This detached v0 artifact remains unchanged and
+must not itself be reinterpreted as process-ingestion evidence.
 
 The API is host-only and modular-only. It is absent from the standalone browser
 Playground, which exposes neither the Action lifecycle nor operator signing.

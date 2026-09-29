@@ -979,7 +979,7 @@ _CLI_FRONTEND = _loom_cli.Frontend(
     emit_wat,
     LoomError,
     metadata={
-        "citadel_checks": 527,
+        "citadel_checks": 529,
         "wasm_abi_version": _WASM_ABI_VERSION,
         "wasm_abi_versions": [_WASM_ABI_VERSION, _WASM_ABI_V2_VERSION],
         "i31_bits": INT_BITS,
@@ -1606,6 +1606,9 @@ _ACTION_EXECUTION_RESULTS = (
 )
 _ACTION_EXECUTION_MAX_OUTPUT_BYTES = 1024 * 1024
 _ACTION_EXECUTION_DARWIN_PROFILE = "(version 1)(allow default)(deny network*)"
+_ACTION_INPUT_RECEIPT_SCHEMA = "loom-action-process-input-receipt/v0"
+_ACTION_INPUT_RECEIPT_VALIDATION_SCHEMA = "loom-action-process-input-receipt-validation/v0"
+_ACTION_INPUT_RECEIPT_LIFECYCLE_SCHEMA = "loom-action-process-input-receipt-lifecycle/v0"
 _ACTION_RESULT_SCHEMA = "loom-action-capsule-result/v0"
 _ACTION_RESULT_VALIDATION_SCHEMA = "loom-action-capsule-result-validation/v0"
 _ACTION_RESULT_OUTCOME_SCHEMA = "loom-action-terminal-outcome/v0"
@@ -2912,6 +2915,198 @@ def validate_action_bounded_execution_v0(execution):
     return _action_execution_validation(execution, findings)
 
 
+def _action_input_receipt_validation(receipt, execution, findings):
+    return {
+        "schema": _ACTION_INPUT_RECEIPT_VALIDATION_SCHEMA,
+        "valid": not findings,
+        "advisory": False,
+        "authorization": "terminal-result-required" if not findings else "none",
+        "execution": execution,
+        "input_receipt": receipt if not findings else None,
+        "findings": findings,
+    }
+
+
+def _action_input_receipt_structure_findings(receipt, execution):
+    findings = _action_execution_structure_findings(execution)
+    receipt_keys = {
+        "schema", "mediation_sha256", "binding_sha256", "execution_sha256",
+        "attempt_sha256", "stdin", "pipe", "proof", "lifecycle",
+        "receipt_sha256",
+    }
+    findings.extend(_action_invocation_closed_findings(receipt, "input_receipt", receipt_keys))
+    if not isinstance(receipt, dict) or not isinstance(execution, dict):
+        return findings
+    if receipt.get("schema") != _ACTION_INPUT_RECEIPT_SCHEMA:
+        findings.append({"path": "input_receipt.schema", "code": "schema-mismatch", "message": "unsupported process input receipt schema"})
+    for key in (
+        "mediation_sha256", "binding_sha256", "execution_sha256",
+        "attempt_sha256", "receipt_sha256",
+    ):
+        if not _binding_is_sha256(receipt.get(key)):
+            findings.append({"path": "input_receipt." + key, "code": "expected-sha256", "message": key + " must be lowercase SHA-256 hex"})
+
+    expected_links = {
+        "mediation_sha256": execution.get("mediation_sha256"),
+        "binding_sha256": execution.get("binding_sha256"),
+        "execution_sha256": execution.get("execution_sha256"),
+        "attempt_sha256": execution.get("attempt_sha256"),
+    }
+    for key, expected in expected_links.items():
+        if receipt.get(key) != expected:
+            findings.append({"path": "input_receipt." + key, "code": "execution-link-mismatch", "message": key + " does not match the bounded execution"})
+    if execution.get("status") == "spawn-failed":
+        findings.append({"path": "execution.status", "code": "input-delivery-without-process", "message": "a spawn-failed execution cannot have process input pipe delivery evidence"})
+
+    stdin = receipt.get("stdin")
+    stdin_keys = {
+        "expected_sha256", "expected_size_bytes", "written_sha256",
+        "written_size_bytes",
+    }
+    findings.extend(_action_invocation_closed_findings(stdin, "input_receipt.stdin", stdin_keys))
+    if isinstance(stdin, dict):
+        for key in ("expected_sha256", "written_sha256"):
+            if not _binding_is_sha256(stdin.get(key)):
+                findings.append({"path": "input_receipt.stdin." + key, "code": "expected-sha256", "message": key + " must be lowercase SHA-256 hex"})
+        for key in ("expected_size_bytes", "written_size_bytes"):
+            if type(stdin.get(key)) is not int or stdin.get(key, -1) < 0:
+                findings.append({"path": "input_receipt.stdin." + key, "code": "expected-size", "message": key + " must be a non-negative integer"})
+        remeasurement = execution.get("host_remeasurement", {})
+        expected_stdin = {
+            "expected_sha256": remeasurement.get("stdin_sha256"),
+            "expected_size_bytes": remeasurement.get("stdin_size_bytes"),
+        }
+        for key, expected in expected_stdin.items():
+            if stdin.get(key) != expected:
+                findings.append({"path": "input_receipt.stdin." + key, "code": "stdin-execution-mismatch", "message": key + " does not match host remeasurement"})
+        if stdin.get("written_sha256") != stdin.get("expected_sha256"):
+            findings.append({"path": "input_receipt.stdin.written_sha256", "code": "stdin-write-digest-mismatch", "message": "written stdin digest does not equal the exact mediated payload digest"})
+        if stdin.get("written_size_bytes") != stdin.get("expected_size_bytes"):
+            findings.append({"path": "input_receipt.stdin.written_size_bytes", "code": "stdin-write-size-mismatch", "message": "written stdin size does not equal the exact mediated payload size"})
+        attempt = execution.get("attempt", {})
+        if stdin.get("expected_sha256") != attempt.get("stdin_sha256"):
+            findings.append({"path": "input_receipt.stdin.expected_sha256", "code": "stdin-attempt-mismatch", "message": "receipt stdin does not match the process attempt"})
+
+    pipe = receipt.get("pipe")
+    expected_pipe = {
+        "writer": "parent-stdin-pipe/v0",
+        "write_status": "complete",
+        "writer_end_closed": True,
+    }
+    findings.extend(_action_invocation_closed_findings(pipe, "input_receipt.pipe", set(expected_pipe)))
+    if isinstance(pipe, dict) and pipe != expected_pipe:
+        findings.append({"path": "input_receipt.pipe", "code": "stdin-pipe-incomplete", "message": "stdin pipe must record a complete write and closed parent writer end"})
+
+    proof = receipt.get("proof")
+    expected_proof = {
+        "digest_equal": True,
+        "size_equal": True,
+        "process_input_pipe_delivery": True,
+    }
+    findings.extend(_action_invocation_closed_findings(proof, "input_receipt.proof", set(expected_proof)))
+    if isinstance(proof, dict) and proof != expected_proof:
+        findings.append({"path": "input_receipt.proof", "code": "input-delivery-proof-mismatch", "message": "input delivery proof must close the exact digest and size"})
+
+    lifecycle = receipt.get("lifecycle")
+    expected_lifecycle = {
+        "schema": _ACTION_INPUT_RECEIPT_LIFECYCLE_SCHEMA,
+        "authorization": "none",
+        "host_action_executed": True,
+        "evidence_kind": "byte-counted-stdin-pipe-write",
+        "payload_embedded": False,
+        "process_input_pipe_delivery": True,
+        "process_consumption_proven": False,
+        "required_next": "loom-action-capsule-result/v0",
+    }
+    findings.extend(_action_invocation_closed_findings(
+        lifecycle, "input_receipt.lifecycle", set(expected_lifecycle),
+    ))
+    if isinstance(lifecycle, dict) and lifecycle != expected_lifecycle:
+        findings.append({"path": "input_receipt.lifecycle", "code": "input-receipt-lifecycle-mismatch", "message": "process input receipt lifecycle does not match the closed non-authorizing profile"})
+
+    if set(receipt) >= receipt_keys:
+        try:
+            expected_hash = _binding_sha256({
+                key: receipt[key] for key in receipt_keys if key != "receipt_sha256"
+            })
+        except (TypeError, ValueError):
+            findings.append({"path": "input_receipt", "code": "non-canonical-input-receipt", "message": "process input receipt must contain canonical JSON values"})
+        else:
+            if receipt.get("receipt_sha256") != expected_hash:
+                findings.append({"path": "input_receipt.receipt_sha256", "code": "input-receipt-hash-mismatch", "message": "receipt_sha256 does not match the canonical process input receipt"})
+    return findings
+
+
+def _build_action_process_input_receipt_v0(execution, observation):
+    if not isinstance(observation, dict):
+        return _action_input_receipt_validation(None, execution, [{
+            "path": "input_delivery", "code": "missing-input-delivery-observation",
+            "message": "bounded execution did not produce a pipe-write observation",
+        }])
+    expected_hash = execution.get("host_remeasurement", {}).get("stdin_sha256")
+    expected_size = execution.get("host_remeasurement", {}).get("stdin_size_bytes")
+    observation_keys = {"written_sha256", "written_size_bytes", "write_status", "writer_end_closed"}
+    if set(observation) != observation_keys:
+        return _action_input_receipt_validation(None, execution, [{
+            "path": "input_delivery", "code": "invalid-input-delivery-observation",
+            "message": "pipe-write observation is not closed",
+        }])
+    if (
+        observation.get("write_status") != "complete"
+        or observation.get("writer_end_closed") is not True
+        or observation.get("written_sha256") != expected_hash
+        or observation.get("written_size_bytes") != expected_size
+    ):
+        return _action_input_receipt_validation(None, execution, [{
+            "path": "input_delivery", "code": "stdin-pipe-write-incomplete",
+            "message": "stdin pipe did not accept the complete exact mediated payload",
+        }])
+    body = {
+        "schema": _ACTION_INPUT_RECEIPT_SCHEMA,
+        "mediation_sha256": execution["mediation_sha256"],
+        "binding_sha256": execution["binding_sha256"],
+        "execution_sha256": execution["execution_sha256"],
+        "attempt_sha256": execution["attempt_sha256"],
+        "stdin": {
+            "expected_sha256": expected_hash,
+            "expected_size_bytes": expected_size,
+            "written_sha256": observation["written_sha256"],
+            "written_size_bytes": observation["written_size_bytes"],
+        },
+        "pipe": {
+            "writer": "parent-stdin-pipe/v0",
+            "write_status": "complete",
+            "writer_end_closed": True,
+        },
+        "proof": {
+            "digest_equal": True,
+            "size_equal": True,
+            "process_input_pipe_delivery": True,
+        },
+        "lifecycle": {
+            "schema": _ACTION_INPUT_RECEIPT_LIFECYCLE_SCHEMA,
+            "authorization": "none",
+            "host_action_executed": True,
+            "evidence_kind": "byte-counted-stdin-pipe-write",
+            "payload_embedded": False,
+            "process_input_pipe_delivery": True,
+            "process_consumption_proven": False,
+            "required_next": "loom-action-capsule-result/v0",
+        },
+    }
+    body["receipt_sha256"] = _binding_sha256(body)
+    return _action_input_receipt_validation(
+        body, execution, _action_input_receipt_structure_findings(body, execution),
+    )
+
+
+def validate_action_process_input_receipt_v0(receipt, execution):
+    """Validate byte-counted stdin pipe-write evidence without host IO."""
+    return _action_input_receipt_validation(
+        receipt, execution, _action_input_receipt_structure_findings(receipt, execution),
+    )
+
+
 def _action_approval_prefixed(path, findings):
     return [{
         "path": path + ("." + item["path"] if item.get("path") else ""),
@@ -4177,7 +4372,7 @@ def _action_execution_kill_group(process):
 
 
 def _action_execution_run(prefix, snapshot_path, argv, cwd_path, environment, stdin_bytes, timeout_ms,
-                          mediation, remeasurement, sandbox):
+                          mediation, remeasurement, sandbox, input_delivery=None):
     import subprocess
     import threading
     import time
@@ -4191,6 +4386,14 @@ def _action_execution_run(prefix, snapshot_path, argv, cwd_path, environment, st
             start_new_session=True, bufsize=0,
         )
     except OSError:
+        if isinstance(input_delivery, dict):
+            input_delivery.clear()
+            input_delivery.update({
+                "written_sha256": empty_sha256,
+                "written_size_bytes": 0,
+                "write_status": "process-not-started",
+                "writer_end_closed": False,
+            })
         attempt = {
             "schema": _ACTION_EXECUTION_ATTEMPT_SCHEMA,
             "result": "spawn-failed", "mediation_sha256": mediation["mediation_sha256"],
@@ -4209,6 +4412,7 @@ def _action_execution_run(prefix, snapshot_path, argv, cwd_path, environment, st
 
     overflow = threading.Event()
     streams = {}
+    delivery = {}
 
     def drain(name, stream):
         digest = hashlib.sha256()
@@ -4224,16 +4428,35 @@ def _action_execution_run(prefix, snapshot_path, argv, cwd_path, environment, st
         streams[name] = {"sha256": digest.hexdigest(), "size_bytes": total}
 
     def feed():
+        digest = hashlib.sha256()
+        total = 0
+        status = "complete"
+        writer_end_closed = False
         try:
-            process.stdin.write(stdin_bytes)
-            process.stdin.flush()
+            view = memoryview(stdin_bytes)
+            while total < len(view):
+                written = process.stdin.write(view[total:])
+                if type(written) is not int or written <= 0:
+                    status = "write-failed"
+                    break
+                digest.update(view[total:total + written])
+                total += written
         except (BrokenPipeError, OSError):
-            pass
+            status = "broken-pipe"
         finally:
             try:
                 process.stdin.close()
             except OSError:
                 pass
+            writer_end_closed = process.stdin.closed
+            if total != len(stdin_bytes) and status == "complete":
+                status = "partial"
+            delivery.update({
+                "written_sha256": digest.hexdigest(),
+                "written_size_bytes": total,
+                "write_status": status,
+                "writer_end_closed": writer_end_closed,
+            })
 
     workers = [
         threading.Thread(target=drain, args=("stdout", process.stdout), daemon=True),
@@ -4257,6 +4480,23 @@ def _action_execution_run(prefix, snapshot_path, argv, cwd_path, environment, st
     returncode = process.wait()
     for worker in workers:
         worker.join(timeout=5)
+    if not delivery:
+        delivery.update({
+            "written_sha256": empty_sha256,
+            "written_size_bytes": 0,
+            "write_status": "writer-timeout",
+            "writer_end_closed": False,
+        })
+    if (
+        delivery["write_status"] != "complete"
+        or delivery["writer_end_closed"] is not True
+        or delivery["written_size_bytes"] != len(stdin_bytes)
+        or delivery["written_sha256"] != hashlib.sha256(stdin_bytes).hexdigest()
+    ):
+        forced = forced or "failed"
+    if isinstance(input_delivery, dict):
+        input_delivery.clear()
+        input_delivery.update(delivery)
     if "stdout" not in streams or "stderr" not in streams:
         forced = forced or "failed"
         streams.setdefault("stdout", {"sha256": empty_sha256, "size_bytes": 0})
@@ -4363,25 +4603,32 @@ def _execute_action_host_mediation_v0(
     approval, request, claim, mediation, manifest, tool_binding, tool_input, program_src,
     wasm_bytes, builder_surface, builder_components, verifier_components,
     entrypoint, invocation, environment_values, now_unix_ms, public_key_value, ledger_path,
+    with_input_receipt=False,
 ):
     import os
+    def rejected(execution, findings):
+        if with_input_receipt:
+            return _action_input_receipt_validation(None, execution, findings)
+        return _action_execution_validation(execution, findings)
+
     approval_check = _verify_action_capsule_approval_v2(
         approval, request, manifest, tool_binding, tool_input, program_src,
         wasm_bytes, builder_surface, builder_components, verifier_components,
         entrypoint, invocation, now_unix_ms, public_key_value,
     )
     if not approval_check["valid"]:
-        return _action_execution_validation(None, approval_check["findings"])
+        return rejected(None, approval_check["findings"])
     claim_findings = _action_claim_findings(claim, approval_check, request, now_unix_ms)
     if claim_findings:
-        return _action_execution_validation(None, claim_findings)
+        return rejected(None, claim_findings)
     mediation_findings = _action_execution_mediation_findings(
         mediation, claim, approval_check, request, now_unix_ms,
     )
     if mediation_findings:
-        return _action_execution_validation(None, mediation_findings)
+        return rejected(None, mediation_findings)
     snapshot_directory = None
     execution = None
+    input_delivery = {} if with_input_receipt else None
     try:
         sandbox, prefix = _action_execution_sandbox_provider()
         _action_execution_probe_sandbox(prefix)
@@ -4392,7 +4639,7 @@ def _execute_action_host_mediation_v0(
         attempt = _action_execution_run(
             prefix, snapshot_path, request["binding"]["invocation"]["argv"], cwd_path,
             environment, stdin_bytes, request["binding"]["invocation"]["timeout_ms"],
-            mediation, remeasurement, sandbox,
+            mediation, remeasurement, sandbox, input_delivery,
         )
         body = {
             "schema": _ACTION_EXECUTION_SCHEMA,
@@ -4413,7 +4660,7 @@ def _execute_action_host_mediation_v0(
         execution = body
         _action_execution_finish(mediation, remeasurement, attempt, now_unix_ms, ledger_path)
     except (OSError, ValueError) as error:
-        return _action_execution_validation(execution, [{
+        return rejected(execution, [{
             "path": "host", "code": "action-bounded-execution-failed", "message": str(error),
         }])
     finally:
@@ -4426,6 +4673,8 @@ def _execute_action_host_mediation_v0(
                 os.rmdir(snapshot_directory)
             except OSError:
                 pass
+    if with_input_receipt:
+        return _build_action_process_input_receipt_v0(execution, input_delivery)
     return _action_execution_validation(execution, [])
 
 
@@ -4446,6 +4695,26 @@ def execute_action_host_mediation_v0(
         wasm_bytes, builder_surface, builder_components, verifier_components,
         entrypoint, invocation, environment_values, now_unix_ms, public_key,
         _action_claim_ledger_path(),
+    )
+
+
+def execute_action_host_mediation_with_input_receipt_v0(
+    approval, request, claim, mediation, manifest, tool_binding, tool_input, program_src,
+    wasm_bytes, builder_surface, builder_components, verifier_components,
+    entrypoint, invocation, environment_values, now_unix_ms,
+):
+    """Execute once and emit byte-counted stdin pipe-write evidence."""
+    try:
+        public_key = _action_approval_load_public_key()
+    except ValueError as error:
+        return _action_input_receipt_validation(None, None, [{
+            "path": "public_key", "code": "public-key-unavailable", "message": str(error),
+        }])
+    return _execute_action_host_mediation_v0(
+        approval, request, claim, mediation, manifest, tool_binding, tool_input, program_src,
+        wasm_bytes, builder_surface, builder_components, verifier_components,
+        entrypoint, invocation, environment_values, now_unix_ms, public_key,
+        _action_claim_ledger_path(), with_input_receipt=True,
     )
 
 

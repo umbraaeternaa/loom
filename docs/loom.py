@@ -6082,6 +6082,7 @@ def _action_execution_run(prefix, snapshot_path, argv, cwd_path, environment, st
 
     overflow = threading.Event()
     streams = {}
+    delivery = {}
 
     def drain(name, stream):
         digest = hashlib.sha256()
@@ -6097,16 +6098,33 @@ def _action_execution_run(prefix, snapshot_path, argv, cwd_path, environment, st
         streams[name] = {"sha256": digest.hexdigest(), "size_bytes": total}
 
     def feed():
+        digest = hashlib.sha256()
+        total = 0
+        status = "complete"
         try:
-            process.stdin.write(stdin_bytes)
-            process.stdin.flush()
+            view = memoryview(stdin_bytes)
+            while total < len(view):
+                written = process.stdin.write(view[total:])
+                if type(written) is not int or written <= 0:
+                    status = "write-failed"
+                    break
+                digest.update(view[total:total + written])
+                total += written
         except (BrokenPipeError, OSError):
-            pass
+            status = "broken-pipe"
         finally:
             try:
                 process.stdin.close()
             except OSError:
                 pass
+            if total != len(stdin_bytes) and status == "complete":
+                status = "partial"
+            delivery.update({
+                "written_sha256": digest.hexdigest(),
+                "written_size_bytes": total,
+                "write_status": status,
+                "writer_end_closed": process.stdin.closed,
+            })
 
     workers = [
         threading.Thread(target=drain, args=("stdout", process.stdout), daemon=True),
@@ -6130,6 +6148,20 @@ def _action_execution_run(prefix, snapshot_path, argv, cwd_path, environment, st
     returncode = process.wait()
     for worker in workers:
         worker.join(timeout=5)
+    if not delivery:
+        delivery.update({
+            "written_sha256": empty_sha256,
+            "written_size_bytes": 0,
+            "write_status": "writer-timeout",
+            "writer_end_closed": False,
+        })
+    if (
+        delivery["write_status"] != "complete"
+        or delivery["writer_end_closed"] is not True
+        or delivery["written_size_bytes"] != len(stdin_bytes)
+        or delivery["written_sha256"] != hashlib.sha256(stdin_bytes).hexdigest()
+    ):
+        forced = forced or "failed"
     if "stdout" not in streams or "stderr" not in streams:
         forced = forced or "failed"
         streams.setdefault("stdout", {"sha256": empty_sha256, "size_bytes": 0})

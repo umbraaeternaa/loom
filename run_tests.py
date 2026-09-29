@@ -6673,8 +6673,13 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         ok += effectful_execution_bundle_ok
         print(f"  {'ok  ' if effectful_execution_bundle_ok else 'FAIL'} gate/cli: Portable Execution Evidence Bundle v0")
 
+        input_receipt_api_available = hasattr(
+            _loom, "validate_action_process_input_receipt_v0",
+        )
+
         def execute_action_v0(ledger_path, candidate_approval, candidate_request, candidate_claim,
-                              candidate_mediation, candidate_invocation, now=action_issued + 3):
+                              candidate_mediation, candidate_invocation, now=action_issued + 3,
+                              with_input_receipt=False):
             return _loom._execute_action_host_mediation_v0(
                 candidate_approval, candidate_request, candidate_claim, candidate_mediation,
                 semantics_manifest, semantics_tool, semantics_input, semantics_src,
@@ -6682,6 +6687,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                 "main", candidate_invocation,
                 {"LOOM_MODE": "bounded", "API_TOKEN": "not-embedded-secret"},
                 now, test_key, ledger_path,
+                **({"with_input_receipt": True} if with_input_receipt else {}),
             )
 
         def finalize_result_v0(
@@ -6722,6 +6728,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             )["mediation"]
             cat_execution = execute_action_v0(
                 execution_ledger, cat_approval, cat_request, cat_claim, cat_mediation, cat_invocation,
+                with_input_receipt=input_receipt_api_available,
             )
             cat_execution_replay = execute_action_v0(
                 execution_ledger, cat_approval, cat_request, cat_claim, cat_mediation, cat_invocation,
@@ -6738,6 +6745,139 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
                     "FROM action_executions_v0",
                 ).fetchone() if execution_schema else None
             execution_residue = list(execution_ledger.parent.glob(".loom-exec-*"))
+
+            process_input_receipt_ok = not input_receipt_api_available
+            process_input_receipt_adversarial_ok = not input_receipt_api_available
+            input_receipt_diagnostics = {}
+            if input_receipt_api_available:
+                if execution_sandbox_available:
+                    input_receipt = cat_execution.get("input_receipt")
+                    validated_input_receipt = _loom.validate_action_process_input_receipt_v0(
+                        input_receipt, cat_execution.get("execution"),
+                    )
+                    tampered_input_receipt = json.loads(json.dumps(input_receipt))
+                    tampered_input_receipt["stdin"]["written_size_bytes"] -= 1
+                    tampered_input_receipt["receipt_sha256"] = _loom._binding_sha256({
+                        key: value for key, value in tampered_input_receipt.items()
+                        if key != "receipt_sha256"
+                    })
+                    rejected_tampered_input_receipt = _loom.validate_action_process_input_receipt_v0(
+                        tampered_input_receipt, cat_execution["execution"],
+                    )
+                    rebound_execution = json.loads(json.dumps(cat_execution["execution"]))
+                    rebound_execution["attempt"]["stdout"]["sha256"] = "0" * 64
+                    rebound_execution["attempt"]["attempt_sha256"] = _loom._binding_sha256({
+                        key: value for key, value in rebound_execution["attempt"].items()
+                        if key != "attempt_sha256"
+                    })
+                    rebound_execution["attempt_sha256"] = rebound_execution["attempt"]["attempt_sha256"]
+                    rebound_execution["execution_sha256"] = _loom._binding_sha256({
+                        key: value for key, value in rebound_execution.items()
+                        if key != "execution_sha256"
+                    })
+                    rejected_rebound_input_receipt = _loom.validate_action_process_input_receipt_v0(
+                        input_receipt, rebound_execution,
+                    )
+                    spawn_failed_execution = json.loads(json.dumps(cat_execution["execution"]))
+                    spawn_failed_execution["attempt"]["result"] = "spawn-failed"
+                    spawn_failed_execution["attempt"]["exit_code"] = None
+                    spawn_failed_execution["attempt"]["attempt_sha256"] = _loom._binding_sha256({
+                        key: value for key, value in spawn_failed_execution["attempt"].items()
+                        if key != "attempt_sha256"
+                    })
+                    spawn_failed_execution["attempt_sha256"] = spawn_failed_execution["attempt"]["attempt_sha256"]
+                    spawn_failed_execution["status"] = "spawn-failed"
+                    spawn_failed_execution["execution_sha256"] = _loom._binding_sha256({
+                        key: value for key, value in spawn_failed_execution.items()
+                        if key != "execution_sha256"
+                    })
+                    spawn_failed_receipt = json.loads(json.dumps(input_receipt))
+                    spawn_failed_receipt["execution_sha256"] = spawn_failed_execution["execution_sha256"]
+                    spawn_failed_receipt["attempt_sha256"] = spawn_failed_execution["attempt_sha256"]
+                    spawn_failed_receipt["receipt_sha256"] = _loom._binding_sha256({
+                        key: value for key, value in spawn_failed_receipt.items()
+                        if key != "receipt_sha256"
+                    })
+                    rejected_spawn_failed_receipt = _loom.validate_action_process_input_receipt_v0(
+                        spawn_failed_receipt, spawn_failed_execution,
+                    )
+                    extended_input_receipt = json.loads(json.dumps(input_receipt))
+                    extended_input_receipt["payload"] = canonical(semantics_input)
+                    rejected_extended_input_receipt = _loom.validate_action_process_input_receipt_v0(
+                        extended_input_receipt, cat_execution["execution"],
+                    )
+                    process_input_receipt_ok = (
+                        cat_execution["schema"]
+                        == "loom-action-process-input-receipt-validation/v0"
+                        and cat_execution["valid"] is True
+                        and cat_execution["authorization"] == "terminal-result-required"
+                        and input_receipt["schema"] == "loom-action-process-input-receipt/v0"
+                        and input_receipt["execution_sha256"]
+                        == cat_execution["execution"]["execution_sha256"]
+                        and input_receipt["attempt_sha256"]
+                        == cat_execution["execution"]["attempt_sha256"]
+                        and input_receipt["stdin"]["written_sha256"]
+                        == input_receipt["stdin"]["expected_sha256"]
+                        and input_receipt["stdin"]["written_size_bytes"]
+                        == input_receipt["stdin"]["expected_size_bytes"]
+                        and input_receipt["pipe"] == {
+                            "writer": "parent-stdin-pipe/v0",
+                            "write_status": "complete", "writer_end_closed": True,
+                        }
+                        and input_receipt["proof"]["process_input_pipe_delivery"] is True
+                        and input_receipt["lifecycle"]["process_consumption_proven"] is False
+                        and canonical(semantics_input) not in json.dumps(input_receipt, sort_keys=True)
+                        and validated_input_receipt == cat_execution
+                    )
+                    process_input_receipt_adversarial_ok = (
+                        rejected_tampered_input_receipt["valid"] is False
+                        and any(item["code"] == "stdin-write-size-mismatch" for item in rejected_tampered_input_receipt["findings"])
+                        and rejected_rebound_input_receipt["valid"] is False
+                        and any(item["code"] == "execution-link-mismatch" for item in rejected_rebound_input_receipt["findings"])
+                        and rejected_spawn_failed_receipt["valid"] is False
+                        and any(item["code"] == "input-delivery-without-process" for item in rejected_spawn_failed_receipt["findings"])
+                        and rejected_extended_input_receipt["valid"] is False
+                        and any(item["code"] == "unknown-field" for item in rejected_extended_input_receipt["findings"])
+                    )
+                    input_receipt_diagnostics.update({
+                        "receipt": cat_execution,
+                        "validated": validated_input_receipt,
+                        "tampered": rejected_tampered_input_receipt,
+                        "rebound": rejected_rebound_input_receipt,
+                        "spawn_failed": rejected_spawn_failed_receipt,
+                        "extended": rejected_extended_input_receipt,
+                    })
+                else:
+                    process_input_receipt_ok = (
+                        cat_execution["schema"]
+                        == "loom-action-process-input-receipt-validation/v0"
+                        and cat_execution["valid"] is False
+                        and cat_execution["input_receipt"] is None
+                        and any(item["code"] == "action-bounded-execution-failed" for item in cat_execution["findings"])
+                    )
+                    process_input_receipt_adversarial_ok = True
+
+                partial_delivery = {}
+                partial_attempt = _loom._action_execution_run(
+                    [], sys.executable,
+                    ["-c", "import os,time; os.close(0); time.sleep(0.05)"],
+                    str(execution_root), {}, b"x" * (1024 * 1024), 1000,
+                    {"mediation_sha256": "1" * 64},
+                    {"host_remeasurement_sha256": "2" * 64},
+                    {"sandbox_sha256": "3" * 64}, partial_delivery,
+                )
+                process_input_receipt_adversarial_ok = (
+                    process_input_receipt_adversarial_ok
+                    and partial_attempt["result"] == "failed"
+                    and partial_delivery["write_status"] != "complete"
+                    and partial_delivery["written_size_bytes"] < 1024 * 1024
+                    and partial_delivery["written_sha256"]
+                    != hashlib.sha256(b"x" * (1024 * 1024)).hexdigest()
+                )
+                input_receipt_diagnostics.update({
+                    "partial_attempt": partial_attempt,
+                    "partial_delivery": partial_delivery,
+                })
 
             timeout_ok = output_limit_ok = network_denied_ok = concurrency_ok = True
             sleep_execution = yes_execution = net_execution = net_mediated = None
@@ -7008,6 +7148,14 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             }, sort_keys=True))
         ok += execution_v0_ok
         print(f"  {'ok  ' if execution_v0_ok else 'FAIL'} gate: Bounded Execution v0")
+        if not (process_input_receipt_ok and process_input_receipt_adversarial_ok):
+            print("       process-input-receipt diagnostics:", json.dumps(
+                input_receipt_diagnostics, sort_keys=True,
+            ))
+        ok += process_input_receipt_ok
+        print(f"  {'ok  ' if process_input_receipt_ok else 'FAIL'} gate: Byte-Counted Process Input Receipt v0")
+        ok += process_input_receipt_adversarial_ok
+        print(f"  {'ok  ' if process_input_receipt_adversarial_ok else 'FAIL'} gate: Process Input Receipt adversarial partial-write refusal v0")
         if execution_sandbox_available:
             action_result_v0_ok = (
                 action_result["valid"] and action_result["authorization"] == "none"
@@ -8688,7 +8836,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == (501 if is_browser_bundle else 527)
+            and about_json["citadel_checks"] == (501 if is_browser_bundle else 529)
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["wasm_abi_versions"] == ([1] if is_browser_bundle else [1, 2])
             and about_json["i31_bits"] == 31
@@ -9218,7 +9366,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 527/527 citadel checks" in quick
+            and "PASS -- 529/529 citadel checks" in quick
             and "tools/windows_core_conformance.py --self-test" in quick
             and "tools/windows_component_conformance.py --self-test" in quick
             and "tools/windows_host_security_conformance.py --self-test" in quick
@@ -9332,7 +9480,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "527-cross-platform-general-execution-federation-v0")' in play
+            and 'bundleUrl.searchParams.set("v", "529-process-input-receipt-v0")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -10281,7 +10429,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 527/527 citadel checks" in rdoc
+            and "PASS -- 529/529 citadel checks" in rdoc
             and "Windows Core Conformance v0 adds a native `windows-2025` proof lane" in rdoc
             and "does not yet certify Windows" in rdoc_words
             and "Dogfooding v1 evaluates one bounded first-order Pure LOOM policy" in rdoc
@@ -10299,7 +10447,8 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "Action Result Attestation v0 composes that terminal Result" in stable_words
             and "Multi-Action Evidence Dataflow v0 declares direct Result-to-stdin digest edges" in stable_words
             and "Multi-Action Byte Delivery Evidence v0 binds a detached byte witness" in stable_words
-            and "live executable scheduling, byte-counted process delivery, transport" in bounded_words
+            and "Byte-Counted Process Input Receipt v0 preserves that Execution schema" in stable_words
+            and "live executable scheduling, cross-platform native input receipts, transport" in bounded_words
             and "terminal Action Capsule Result v0 remain future contracts" not in rdoc_words
             and "Receipt v4 remain future contracts" not in rdoc_words
             and "does not magically confine arbitrary external tools" in rdoc_words
@@ -10352,7 +10501,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 174   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, Portable Execution Evidence Bundle v0, Dogfooding v1, Evidence-fed Dogfooding v2, Multi-Action Plan v0, aggregate receipt v0, replayed execution state machine v0, Evidence Dataflow v0, detached Byte Delivery Evidence v0, Windows Core Conformance v0, Windows Component Conformance v0, Windows Host Security Substrate v0, Windows Bounded Execution Integration v0, Windows General Adapter Execution v1, Cross-Platform General Execution Federation v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, WASM direct/applyN type parity, and the WASM seam/resource frontier
+    total = len(CASES) + 176   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, Portable Execution Evidence Bundle v0, Dogfooding v1, Evidence-fed Dogfooding v2, Multi-Action Plan v0, aggregate receipt v0, replayed execution state machine v0, Evidence Dataflow v0, detached Byte Delivery Evidence v0, Byte-Counted Process Input Receipt v0, partial-write refusal, Windows Core Conformance v0, Windows Component Conformance v0, Windows Host Security Substrate v0, Windows Bounded Execution Integration v0, Windows General Adapter Execution v1, Cross-Platform General Execution Federation v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, WASM direct/applyN type parity, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 
