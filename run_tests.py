@@ -19,6 +19,7 @@ import loom as _loom
 from loom_frontend import ASM_INTRINSICS
 import loom_provenance as _loom_provenance
 import loom_general_federation as _loom_general_federation
+import loom_process_input_federation as _loom_process_input_federation
 from loom import parse, parse_spans, tokenize, tokenize_spans, check, run_call, compile_py, run_compiled, run_js, compile_js, compile_wasm, verify_wasm_trust_receipt, verify_wasm_trust_receipt_v2, verify_wasm_source_equivalence, verify_wasm_component_bridge_v0, build_wit_component_boundary_v0, verify_wit_component_boundary_v0, run_wasm, emit_wat, LoomError, _WASM_ABI_VERSION
 
 def _context_chain_source(depth=65):
@@ -7288,6 +7289,127 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             print("       federation diagnostics:", error)
         ok += general_federation_contract_ok
         print(f"  {'ok  ' if general_federation_contract_ok else 'FAIL'} portability: Cross-Platform General Execution Federation v0")
+        try:                                           # Federate exact native pipe-delivery semantics without claiming child consumption
+            platform_id = (
+                "aarch64-apple-darwin" if sys.platform == "darwin"
+                else "x86_64-unknown-linux-gnu" if sys.platform.startswith("linux")
+                else None
+            )
+            expected_commit = os.environ.get("GITHUB_SHA", "0" * 40)
+            process_witness_output = os.environ.get("LOOM_PROCESS_INPUT_WITNESS_OUT")
+            is_browser_bundle = Path(_loom.__file__).parent.name == "docs"
+            posix_process_witness = None
+            rejected_process_witness = None
+            rejected_wrong_revision = None
+            rejected_duplicate_platforms = None
+            if (
+                not is_browser_bundle
+                and execution_sandbox_available and process_input_receipt_ok
+                and process_input_receipt_adversarial_ok and platform_id is not None
+            ):
+                posix_process_witness = _loom_process_input_federation.build_posix_witness(
+                    platform_id,
+                    expected_commit,
+                    {
+                        "provider": "github-actions", "workflow": "LOOM Citadel",
+                        "job": _loom_process_input_federation.POSIX_JOBS[platform_id],
+                        "runner": _loom_process_input_federation.POSIX_RUNNERS[platform_id],
+                        "run_id": int(os.environ.get("GITHUB_RUN_ID", "1")),
+                        "run_attempt": int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")),
+                    },
+                    cat_execution["execution"], input_receipt,
+                    [
+                        {"id": item, "status": "pass"}
+                        for item in _loom_process_input_federation.POSIX_CHECKS
+                    ],
+                )
+                if posix_process_witness["valid"]:
+                    tampered = json.loads(json.dumps(posix_process_witness["witness"]))
+                    tampered["process_input_receipt"]["stdin"]["written_size_bytes"] -= 1
+                    tampered["process_input_receipt"]["receipt_sha256"] = _loom._binding_sha256({
+                        key: value
+                        for key, value in tampered["process_input_receipt"].items()
+                        if key != "receipt_sha256"
+                    })
+                    tampered["witness_sha256"] = _loom_process_input_federation.sha256_json({
+                        key: value for key, value in tampered.items()
+                        if key != "witness_sha256"
+                    })
+                    rejected_process_witness = _loom_process_input_federation.validate_posix_witness(
+                        tampered, expected_commit,
+                    )
+                    rejected_wrong_revision = _loom_process_input_federation.validate_posix_witness(
+                        posix_process_witness["witness"], "f" * 40,
+                    )
+                    rejected_duplicate_platforms = _loom_process_input_federation.build_federation(
+                        [posix_process_witness["witness"]] * 3, expected_commit,
+                    )
+                    if process_witness_output:
+                        output_path = Path(process_witness_output)
+                        output_path.parent.mkdir(parents=True, exist_ok=True)
+                        output_path.write_bytes(
+                            _loom_process_input_federation.canonical_json(
+                                posix_process_witness["witness"],
+                            ) + b"\n"
+                        )
+            elif process_witness_output and not is_browser_bundle:
+                raise RuntimeError(
+                    "certifying POSIX process-input witness requires native complete and adversarial receipt proof"
+                )
+            process_contract = _loom_process_input_federation.semantic_contract()
+            process_workflow = Path(__file__).with_name(".github").joinpath(
+                "workflows", "ci.yml",
+            ).read_text()
+            process_input_federation_ok = (
+                process_contract["controls"]
+                == list(_loom_process_input_federation.SEMANTIC_CONTROLS)
+                and process_contract["native_pipe_mechanisms_equal"] is False
+                and process_contract["payload_bytes_equal"] is False
+                and process_contract["process_consumption_proven"] is False
+                and process_contract["contract_sha256"]
+                == _loom_process_input_federation.sha256_json({
+                    key: value for key, value in process_contract.items()
+                    if key != "contract_sha256"
+                })
+                and Path(__file__).with_name("tools").joinpath(
+                    "verify_process_input_federation_ci.py",
+                ).is_file()
+                and Path(__file__).with_name("docs").joinpath(
+                    "cross_platform_process_input_receipt_federation_v0.md",
+                ).is_file()
+                and "federate-process-input-evidence:" in process_workflow
+                and "needs: [verify, verify-macos-component, verify-windows-bounded-execution]" in process_workflow
+                and "pattern: process-input-platform-*" in process_workflow
+                and "--expected-commit \"$GITHUB_SHA\"" in process_workflow
+                and "cross-platform-process-input-receipt-federation-v0" in process_workflow
+                and (
+                    (
+                        is_browser_bundle
+                        and not input_receipt_api_available
+                    )
+                    or (
+                        not is_browser_bundle
+                        and (
+                            not execution_sandbox_available
+                            or (
+                                posix_process_witness is not None
+                                and posix_process_witness["valid"] is True
+                                and rejected_process_witness is not None
+                                and rejected_process_witness["valid"] is False
+                                and rejected_wrong_revision is not None
+                                and rejected_wrong_revision["valid"] is False
+                                and rejected_duplicate_platforms is not None
+                                and rejected_duplicate_platforms["valid"] is False
+                            )
+                        )
+                    )
+                )
+            )
+        except Exception as error:
+            process_input_federation_ok = False
+            print("       process-input federation diagnostics:", error)
+        ok += process_input_federation_ok
+        print(f"  {'ok  ' if process_input_federation_ok else 'FAIL'} portability: Cross-Platform Process Input Receipt Federation v0")
         multi_action_receipt_ok = not execution_sandbox_available
         multi_action_receipt_diagnostics = {}
         if execution_sandbox_available and action_result_v0_ok:
@@ -8836,7 +8958,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and about_json == about_api
             and about_json["schema"] == "loom-about/v1"
             and about_json["language"] == "LOOM"
-            and about_json["citadel_checks"] == (501 if is_browser_bundle else 531)
+            and about_json["citadel_checks"] == (501 if is_browser_bundle else 532)
             and about_json["wasm_abi_version"] == _WASM_ABI_VERSION
             and about_json["wasm_abi_versions"] == ([1] if is_browser_bundle else [1, 2])
             and about_json["i31_bits"] == 31
@@ -9366,7 +9488,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "python3 -m loom run examples/first.loom" in quick
             and "loom check examples/first.loom" in quick
             and "loom release-check" in quick
-            and "PASS -- 531/531 citadel checks" in quick
+            and "PASS -- 532/532 citadel checks" in quick
             and "tools/windows_core_conformance.py --self-test" in quick
             and "tools/windows_component_conformance.py --self-test" in quick
             and "tools/windows_host_security_conformance.py --self-test" in quick
@@ -9480,7 +9602,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         workflow = Path(__file__).with_name("docs").joinpath("published_bundle_workflow.md").read_text()
         docs_discipline_ok = (
             'new URL("./loom.py", location.href)' in play
-            and 'bundleUrl.searchParams.set("v", "531-windows-process-input-receipt-v0")' in play
+            and 'bundleUrl.searchParams.set("v", "532-process-input-federation-v0")' in play
             and 'fetch(bundleUrl, {cache: "no-store"})' in play
             and 'if (!response.ok)' in play
             and 'fetch("./loom.py")' not in play
@@ -10492,7 +10614,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         release_readiness_ok = (
             "LOOM release readiness" in rdoc
             and "Status: public release-readiness contract" in rdoc
-            and "PASS -- 531/531 citadel checks" in rdoc
+            and "PASS -- 532/532 citadel checks" in rdoc
             and "Windows Core Conformance v0 adds a native `windows-2025` proof lane" in rdoc
             and "does not yet certify Windows" in rdoc_words
             and "Dogfooding v1 evaluates one bounded first-order Pure LOOM policy" in rdoc
@@ -10512,7 +10634,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
             and "Multi-Action Byte Delivery Evidence v0 binds a detached byte witness" in stable_words
             and "Byte-Counted Process Input Receipt v0 preserves that Execution schema" in stable_words
             and "Windows Native Process Input Receipt v0 adds a separate content-addressed receipt" in bounded_words
-            and "live executable scheduling, cross-platform input-receipt federation, transport" in bounded_words
+            and "live executable scheduling, transport" in bounded_words
             and "terminal Action Capsule Result v0 remain future contracts" not in rdoc_words
             and "Receipt v4 remain future contracts" not in rdoc_words
             and "does not magically confine arbitrary external tools" in rdoc_words
@@ -10565,7 +10687,7 @@ if (!replayTrapped || exactLimitPtr !== 65536 || oversizedView.getInt32(0, true)
         if not fuzz_ok: print("       " + (fr.stdout.strip() or fr.stderr.strip())[:500])
     except Exception as e:
         print(f"  FAIL property fuzz: {e}")
-    total = len(CASES) + 178   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, Portable Execution Evidence Bundle v0, Dogfooding v1, Evidence-fed Dogfooding v2, Multi-Action Plan v0, aggregate receipt v0, replayed execution state machine v0, Evidence Dataflow v0, detached Byte Delivery Evidence v0, Byte-Counted Process Input Receipt v0, partial-write refusal, Windows Native Process Input Receipt v0, Windows partial-input/tamper refusal, Windows Core Conformance v0, Windows Component Conformance v0, Windows Host Security Substrate v0, Windows Bounded Execution Integration v0, Windows General Adapter Execution v1, Cross-Platform General Execution Federation v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, WASM direct/applyN type parity, and the WASM seam/resource frontier
+    total = len(CASES) + 179   # runtime/backend smokes, including parser/source-span/checker/runtime/backend isolation, full-body sequence parity, nested seam-restore guards, seamN/depthN/asm diagnostics and execution parity, trust/provenance receipt metadata, Component Bridge v0, evidence-carrying WIT component boundary v0, Typed WASI Capability Mapping v0, Tagged Value ABI v2, exact Component Adapter Artifact v0, Effectful Component Adapter v1, Effectful Component Execution Binding v0, Effectful Component Host Execution v0, Effectful Component Result Binding v0, Effectful Component Execution Attestation v0, Portable Execution Evidence Bundle v0, Dogfooding v1, Evidence-fed Dogfooding v2, Multi-Action Plan v0, aggregate receipt v0, replayed execution state machine v0, Evidence Dataflow v0, detached Byte Delivery Evidence v0, Byte-Counted Process Input Receipt v0, partial-write refusal, Windows Native Process Input Receipt v0, Windows partial-input/tamper refusal, Cross-Platform Process Input Receipt Federation v0, Windows Core Conformance v0, Windows Component Conformance v0, Windows Host Security Substrate v0, Windows Bounded Execution Integration v0, Windows General Adapter Execution v1, Cross-Platform General Execution Federation v0, signed reproducible Component Release Attestation v0, cross-platform Component Release Evidence Federation v0, Gate verdict/manifest/policy/receipt/observer/evidence/approval-request/consumption/claimed-execution/claimed-host-executor/Gate-workflow/Action-Capsule/Exact-Invocation-Binding/Action-Approval-v2/Action-Claim-v0/Action-Host-Mediation-v0/Bounded-Execution-v0/Action-Result-v0/Action-Result-Attestation-v0/example-fixture/operator-text/secret-access-claimed-lifecycle/secret-path/secret-access-v2/secret-receipt/redacted-diagnostics contracts, cli proof-surface/source-map/json/about/release-check/help/examples/doctor contracts, packaging/install metadata, first-run quickstart, string-literal/heap-policy/heap-diagnostics/WAT-allocation-label/source-map/source-line/Gate-diagnostics/Gate-workflow/approval-request/off-browser-boundary/approval-json-copy/approval-json-download/native-issuer-handoff/real-operator-workflow/operator-key-storage/macos-native-issuer-contract/native-issuer-doc/native-issuer-example/operator-public-key-pinning/operator-handoff-transcript/seamN-static backend guards, runtime/cli/Gate facades, docs workflow/source-map/quantity-roadmap/secret-policy/process-cli-lifecycle/i31-semantics/module-boundary/release-readiness pins, fail-closed runner exit pin, shared backend contracts, deterministic property fuzz, WASM direct/applyN type parity, and the WASM seam/resource frontier
     return _finish(ok, total)
 
 

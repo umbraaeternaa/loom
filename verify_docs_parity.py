@@ -62,6 +62,7 @@ WINDOWS_COMPONENT_DOC = ROOT / "docs" / "windows_component_conformance_v0.md"
 WINDOWS_HOST_SECURITY_DOC = ROOT / "docs" / "windows_host_security_v0.md"
 WINDOWS_INPUT_RECEIPT_DOC = ROOT / "docs" / "windows_process_input_receipt_v0.md"
 GENERAL_EXECUTION_FEDERATION_DOC = ROOT / "docs" / "cross_platform_general_execution_federation_v0.md"
+PROCESS_INPUT_FEDERATION_DOC = ROOT / "docs" / "cross_platform_process_input_receipt_federation_v0.md"
 WASM_ARTIFACT_DOC = ROOT / "docs" / "gate_wasm_artifact_v1.md"
 SECRET_POLICY_DOC = ROOT / "docs" / "secret_credential_policy.md"
 
@@ -70,7 +71,7 @@ def _check_playground_loader() -> None:
     text = PLAY_HTML.read_text()
     loader_contract = (
         'new URL("./loom.py", location.href)',
-        'bundleUrl.searchParams.set("v", "531-windows-process-input-receipt-v0")',
+        'bundleUrl.searchParams.set("v", "532-process-input-federation-v0")',
         'fetch(bundleUrl, {cache: "no-store"})',
         'if (!response.ok)',
     )
@@ -172,10 +173,12 @@ def _check_playground_loader() -> None:
 def _check_landing_page_count() -> None:
     text = INDEX_HTML.read_text()
     required = (
-        "531 self-verifying checks",
-        ">531</div>",
+        "532 self-verifying checks",
+        ">532</div>",
     )
     forbidden = (
+        "531 self-verifying checks",
+        ">531</div>",
         "529 self-verifying checks",
         ">529</div>",
         "523 self-verifying checks",
@@ -1121,7 +1124,7 @@ def _check_multi_action_plan_v0() -> None:
         if needle not in delivery_words:
             raise SystemExit("docs parity: Multi-Action byte-delivery contract lost marker: " + needle)
     readiness = RELEASE_READINESS_DOC.read_text()
-    if "`citadel_checks: 531`" not in readiness or "`citadel_checks: 529`" in readiness:
+    if "`citadel_checks: 532`" not in readiness or "`citadel_checks: 531`" in readiness:
         raise SystemExit("docs parity: release-readiness about count drift")
 
 
@@ -1228,6 +1231,24 @@ def _check_general_execution_federation_doc() -> None:
     ):
         if needle not in words:
             raise SystemExit("docs parity: general-execution federation contract lost marker: " + needle)
+
+
+def _check_process_input_federation_doc() -> None:
+    if not PROCESS_INPUT_FEDERATION_DOC.is_file():
+        raise SystemExit("docs parity: Cross-Platform Process Input Receipt Federation v0 contract is absent")
+    words = " ".join(PROCESS_INPUT_FEDERATION_DOC.read_text().split())
+    for needle in (
+        "Cross-Platform Process Input Receipt Federation v0",
+        "parent-side pipe-delivery semantic concordance",
+        "loom-posix-process-input-receipt-ci-witness/v0",
+        "loom-cross-platform-process-input-receipt-federation/v0",
+        "tools/verify_process_input_federation_ci.py",
+        "process-input-platform-*",
+        "test-only and non-authorizing",
+        "does not prove process consumption",
+    ):
+        if needle not in words:
+            raise SystemExit("docs parity: process-input federation contract lost marker: " + needle)
 
 
 def _check_component_release_attestation() -> None:
@@ -2406,6 +2427,7 @@ def main() -> int:
     _check_windows_host_security_doc()
     _check_windows_input_receipt_doc()
     _check_general_execution_federation_doc()
+    _check_process_input_federation_doc()
     _check_component_release_attestation()
     _check_compiler_provenance_doc()
     _check_compiler_evidence_doc()

@@ -60,7 +60,7 @@ python3 loom.py about --format json
 The expected public baseline is:
 
 ```console
-PASS -- 531/531 citadel checks
+PASS -- 532/532 citadel checks
 ```
 
 The portable Windows core harness can also be exercised without making a

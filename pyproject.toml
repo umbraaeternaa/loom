@@ -65,4 +65,5 @@ py-modules = [
   "loom_windows_execution",
   "loom_windows_general",
   "loom_general_federation",
+  "loom_process_input_federation",
 ]

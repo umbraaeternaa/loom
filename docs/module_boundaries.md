@@ -53,6 +53,8 @@ Current stable boundaries:
 | `tools/windows-bounded-execution/general_execution_target.c` | repository-owned adversarial target used only by the native CI profile |
 | `loom_general_federation.py` | closed macOS/Linux/Windows native execution witness and semantic-concordance federation contracts |
 | `tools/verify_general_execution_federation_ci.py` | fail-closed three-platform general-execution evidence aggregator |
+| `loom_process_input_federation.py` | closed POSIX/Windows process-input witness and parent-side pipe-delivery federation contracts |
+| `tools/verify_process_input_federation_ci.py` | fail-closed three-platform process-input evidence aggregator |
 
 ## Gate boundary rule
 
